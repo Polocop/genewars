@@ -1,0 +1,87 @@
+# Generated build directories
+/build/
+/builds/
+/debug/
+/release/
+/out/
+**/.deps/
+**/.dirstamp
+
+# Compiled outputs
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.dll
+*.so
+*.class
+
+# Logs, dumps, and local captures
+*.log
+*.dmp
+*.mdmp
+*.core
+/core
+/captures/
+/snapshots/
+
+# Ghidra projects and caches
+*.gpr
+*.gpr.lock
+*.rep/
+**/.ghidra/
+**/.cache/
+
+# Autotools generated files; preserve Makefile.am and configure.ac
+/Makefile
+/Makefile.in
+/aclocal.m4
+/bio/test-driver
+/autom4te.cache/
+/configure
+/compile
+/install-sh
+/missing
+/config.log
+/config.status
+/**/Makefile
+/**/Makefile.in
+/**/config.log
+/**/config.status
+/**/config.h
+/**/stamp-h1
+/**/libtool
+
+# Original game data must stay local. Source files and documentation remain
+# visible; synthetic fixtures should be reviewed before adding them.
+/data/
+/levels/
+/original-media/
+/game-data/
+/GW.EXE
+/gw.exe
+*.iso
+*.cue
+*.bin
+*.dat
+*.DAT
+*.anb
+*.ANB
+*.b32
+*.B32
+*.pal
+*.PAL
+*.smk
+*.SMK
+*.sfx
+*.SFX
+*.raw
+*.RAW
+*.wav
+*.WAV
+*.mp3
+*.MP3
+*.avi
+*.AVI
+*.res
