@@ -2,6 +2,12 @@ ACLOCAL_AMFLAGS = --install -I m4
 
 bin_PROGRAMS = bio
 
+check_PROGRAMS = test_disk_scenario_v1
+TESTS = $(check_PROGRAMS)
+
+test_disk_scenario_v1_SOURCES = tests/test_disk_scenario_v1.cpp
+test_disk_scenario_v1_CPPFLAGS = $(bio_CPPFLAGS)
+
 bio_SOURCES = \
   src/bioeng.cpp \
   src/building.cpp \
