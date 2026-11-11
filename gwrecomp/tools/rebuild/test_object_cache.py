@@ -1,4 +1,8 @@
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[2])
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 
 import hashlib
 import importlib.util
@@ -25,7 +29,7 @@ from tools.rebuild.object_cache import (
 )
 
 
-CLANG = Path(r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\clang.exe")
+CLANG = Path(os.environ.get("GWRECOMP_CLANG_X64") or __import__("shutil").which("clang") or "clang.exe")
 REBUILD_PS1 = ROOT / "tools" / "rebuild" / "rebuild.ps1"
 POWERSHELL = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
 
@@ -149,7 +153,7 @@ class ObjectCacheTests(unittest.TestCase):
                 "-DRECOMP_TRACE_LOW_WRITES=1", "-DMSCDEX_AUDIO_BEGIN=101726u",
                 "-DMSCDEX_AUDIO_END=268260u", "-I", work / "runtime",
                 "-I", real_root / "third_party" / "pcrecomp" / "runtime" / "recomp32",
-                "-DGW_FUNC_COVERAGE_BUILD=1", "-I", Path(r"E:\msys64\mingw32\include\SDL2"),
+                "-DGW_FUNC_COVERAGE_BUILD=1", "-I", Path((_GW_MSYS2 + '\\mingw32\\include\\SDL2')),
             ]
 
         cache = self.base / "gw-camera-real-object-cache"
@@ -161,7 +165,7 @@ class ObjectCacheTests(unittest.TestCase):
             env["TMP"] = str(work / "tmp")
             env["TMPDIR"] = str(work / "tmp")
             env["PATH"] = (
-                r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + env.get("PATH", "")
+                (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + env.get("PATH", "")
             )
             Path(env["TEMP"]).mkdir(parents=True, exist_ok=True)
             flags = flags_for(work)
@@ -411,8 +415,8 @@ class ObjectCacheTests(unittest.TestCase):
 
     @unittest.skipUnless(POWERSHELL.is_file(), "Windows PowerShell is unavailable")
     def test_i_default_rebuild_dry_run_keeps_historical_cache_disabled(self) -> None:
-        work = Path(r"E:\GWRecomp\build\candidates") / f"cache-default-test-{time.time_ns()}"
-        cache = Path(r"E:\GWRecomp\build\reusable-object-cache") / f"default-test-{time.time_ns()}"
+        work = Path((_GW_ROOT + '\\build\\candidates')) / f"cache-default-test-{time.time_ns()}"
+        cache = Path((_GW_ROOT + '\\build\\reusable-object-cache')) / f"default-test-{time.time_ns()}"
         result = subprocess.run(
             [str(POWERSHELL), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(REBUILD_PS1),
              "-Work", str(work), "-DryRun"],

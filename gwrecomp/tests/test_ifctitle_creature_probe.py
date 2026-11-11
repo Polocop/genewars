@@ -1,5 +1,9 @@
 """Run original IFCTitle::PlugIn, Update, and Draw in bounded guest state."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import hashlib as _hashlib
 
 
@@ -49,12 +53,55 @@ import struct
 
 ROOT=Path(__file__).resolve().parents[1]
 PYTHON=Path(os.environ.get("GWRECOMP_PYTHON") or sys.executable)  # V19.1: explicit interpreter (was ROOT/.venv/Scripts/python.exe)
-CC=[Path(r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\clang.exe"),
-    "--target=i686-w64-windows-gnu"]
-LINK_CC=[Path(r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\bin\clang.exe"),
-         "--target=i686-w64-windows-gnu"]
-CLANGXX=[Path(r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\clang++.exe"),
-         "--target=i686-w64-windows-gnu"]
+def _toolchain_config()->dict:
+    """Locate the toolchain from the environment (see tools/rebuild/README_BUILD.md).
+
+    GWRECOMP_CLANG_X64  clang used to compile the large lifted C unit (64-bit host)
+    GWRECOMP_CLANG_X86  clang used to link (defaults to GWRECOMP_CLANG_X64)
+    MSYS2_ROOT          MSYS2 installation providing mingw32 (SDL2, crt, libstdc++)
+    """
+    import shutil
+    def first(*cands):
+        for c in cands:
+            if c and Path(str(c)).is_file(): return Path(str(c))
+        return None
+    clang64=first(os.environ.get("GWRECOMP_CLANG_X64"),os.environ.get("GWRECOMP_CLANG"),shutil.which("clang"))
+    if clang64 is None:
+        for base in (os.environ.get("ProgramFiles(x86)"),os.environ.get("ProgramFiles")):
+            if not base: continue
+            for edition in ("BuildTools","Community","Professional","Enterprise"):
+                cand=first(Path(base)/"Microsoft Visual Studio"/"2022"/edition/"VC"/"Tools"/"Llvm"/"x64"/"bin"/"clang.exe")
+                if cand: clang64=cand; break
+            if clang64: break
+    clang86=first(os.environ.get("GWRECOMP_CLANG_X86"),clang64)
+    msys=os.environ.get("MSYS2_ROOT")
+    if not msys:
+        gcc=shutil.which("gcc")
+        if gcc and Path(gcc).parent.name.lower()=="bin" and Path(gcc).parent.parent.name.lower()=="mingw32":
+            msys=str(Path(gcc).parent.parent.parent)
+    if not msys and Path(r"C:\msys64").is_dir(): msys=r"C:\msys64"
+    return {"clang64":clang64,"clang86":clang86,"msys":Path(msys) if msys else None}
+_TC=_toolchain_config()
+def _need(value,what:str):
+    if value is None:
+        raise SystemExit(f"{what} not found. Run scripts\\setup.ps1 or set the variable named in tools/rebuild/README_BUILD.md")
+    return value
+_CLANG64=_TC["clang64"] or Path("clang.exe")
+_CLANG86=_TC["clang86"] or Path("clang.exe")
+MINGW32=(_TC["msys"]/"mingw32") if _TC["msys"] else Path("<MSYS2_ROOT>")/"mingw32"
+MINGW32_BIN=MINGW32/"bin"
+MINGW32_LIB=MINGW32/"lib"
+MINGW32_INCLUDE=MINGW32/"include"
+SDL2_INCLUDE=MINGW32_INCLUDE/"SDL2"
+def _cxx_include_dirs()->list[Path]:
+    base=MINGW32_INCLUDE/"c++"
+    versions=sorted((d for d in base.iterdir() if d.is_dir()),reverse=True) if base.is_dir() else []
+    if not versions: return [MINGW32_INCLUDE]
+    v=versions[0]
+    return [v,v/"i686-w64-mingw32",MINGW32_INCLUDE]
+CC=[_CLANG64,"--target=i686-w64-windows-gnu"]
+LINK_CC=[_CLANG86,"--target=i686-w64-windows-gnu"]
+CLANGXX=[_CLANG64.with_name("clang++.exe"),"--target=i686-w64-windows-gnu"]
 TARGET=ROOT/"evidence"/"genewars-1_1.exe"
 EXPECTED_TARGET="2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
 HARNESS_IMAGE_BASE=0x000F0000
@@ -70,7 +117,7 @@ REA_OPTIONS_TRANSITION={
         "setup_game_0x94AC0":"ev_b5cdf5bb4a586ebdaf9611cd9b74a9eee37c3ebc3e2689284cf3f8f01666e484",
         "global_this_xrefs_0x114CA8":"ev_64c53b43f7e67e3810f3a54c03596d5181445093284c52af2cdec8d082fe6e81"},
     "limitation":"Ghidra read_bytes confirms 0x6A3D0 code but has no defined procedure entry there; semantics and boundaries are cross-checked against canonical LE with Capstone and native hooks."}
-INSTALL=Path(r"<GENEWARS_INSTALL_DIR>")
+INSTALL=Path(os.environ.get("GENEWARS_INSTALL_DIR") or "<set GENEWARS_INSTALL_DIR>")
 RESOURCE=INSTALL/"DATA"/"IFTITLE.ANB"
 EXPECTED_RESOURCE="c7d2dfc5d774c69337436249ec74e4d0fa6ae1d06bd5ae785f9f73ee2ac0f707"
 TITLE_SCREEN=INSTALL/"DATA"/"TITLESCR.DAT"
@@ -79,7 +126,7 @@ CONFIG_INI=INSTALL/"CONFIG.INI"
 EXPECTED_CONFIG_INI="e7a4728ff07332c2f04320fda202ac5521818a47453e670f9f2842767ef36798"
 BIOINTRO=INSTALL/"INTRO"/"BIOINTRO.SMK"
 EXPECTED_BIOINTRO="fcd3dcddb1ace394b882f240f8cec3625a57d471be5cd66f1db75e543688a4ef"
-GENEWARS_CUE=Path(r"E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+GENEWARS_CUE=Path(os.environ.get("GENEWARS_CUE") or "<set GENEWARS_CUE>")
 EXPECTED_GENEWARS_CUE="1d417e3aed625d4f054b51054a1211562a19cd4f712b08e7846613517228a5b5"
 TITLE_RESOURCES={
     "DATA/TITLESCR.DAT":"2548b024fede333b49fc4011541939fc8ce294cb95b48cdb41ed7d0cec54a0b9",
@@ -99,7 +146,7 @@ INTERFACE_RESOURCES={
 }
 REBASES={1:0x1EB000,3:0x1DA000}
 ENV={**os.environ,"PYTHONDONTWRITEBYTECODE":"1",
-     "PATH":r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;"+os.environ.get("PATH",""),
+     "PATH":str(MINGW32_BIN)+";"+str(MINGW32.parent/"usr"/"bin")+";"+os.environ.get("PATH",""),
      "GW_ENABLE_WIDE_RASTER_PROBES":"1"}
 
 def sha(path:Path)->str: return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -673,22 +720,18 @@ def main()->None:
     from tools.pe.pe_analyze import Section
     from tools.lift.lift32 import Lifter
 
-    # Reuse the exact original W3-140 environment bytes and the existing W2-114
-    # DOS boot contract. Only the low conventional-memory prefix is passed to
-    # this bounded title harness; its rebased LE image remains the closure image.
-    env_evidence=json.loads((ROOT/"evidence"/"w3_140_original_setenvp_environment.json").read_text(encoding="utf-8"))
-    env_contract=json.loads((ROOT/"evidence"/"w2_114_authenticated_environment_fixture.json").read_text(encoding="utf-8"))
-    env_hex=env_evidence.get("capture",{}).get("dfe04",{}).get("w3_140_env_sample_hex")
-    if (env_evidence.get("schema")!="w3-140-setenvp-environment/v1" or
-            env_evidence.get("source",{}).get("target_sha256","").lower()!=EXPECTED_TARGET or
-            env_contract.get("task")!="W2-114" or
-            env_contract.get("original_environment",{}).get("sha256")!="65c4d22c258efbf93a93cfcaa8d9d8c489e510cb2be76530646c36e0250ee895"):
-        raise SystemExit("authenticated W3-140/W2-114 environment evidence is unavailable or mismatched")
+    # DOS environment block of the original capture (DOSBox defaults plus BLASTER),
+    # published as a small fixture; it contains no game data.
+    env_fixture=json.loads((ROOT/"tools"/"rebuild"/"fixtures"/"dos_environment.json").read_text(encoding="utf-8"))
+    env_hex=env_fixture.get("environment_hex")
+    if (env_fixture.get("schema")!="gwrecomp-dos-environment/v1" or
+            env_fixture.get("target_sha256","").lower()!=EXPECTED_TARGET):
+        raise SystemExit("DOS environment fixture is unavailable or does not match the target")
     original_environment=bytes.fromhex(env_hex)
     env_sha256=hashlib.sha256(original_environment).hexdigest()
     if (len(original_environment)!=86 or env_sha256!="65c4d22c258efbf93a93cfcaa8d9d8c489e510cb2be76530646c36e0250ee895" or
-            env_contract["original_environment"].get("sample_hex")!=env_hex):
-        raise SystemExit("W3-140 environment payload failed the authenticated hash/length check")
+            env_fixture.get("sha256")!=env_sha256):
+        raise SystemExit("DOS environment payload failed the hash/length check")
     boot=guest_boot.prepare_native_lift_guest(TARGET,command_tail=b"-k 38928",
         environment_block=original_environment)
     psp_selector,env_selector=0x0024,0x1100
@@ -6317,7 +6360,7 @@ def main()->None:
         # Opt-in function-entry counter (GWRECOMP_FUNC_COVERAGE=1). runtime/recomp_types.h
         # routes RECOMP_ENTER to a flag-guarded counter only when this define is present.
         "-DGW_FUNC_COVERAGE_BUILD=1",
-        "-I",r"E:\msys64\mingw32\include\SDL2"]
+        "-I",SDL2_INCLUDE]
     if os.environ.get("GW_FULL_TRACE") == "1":
         compile_flags.append("-DGW_FULL_TRACE_BUILD=1")
     # The expanded, instruction-level closure includes one ~4 MiB lifted
@@ -6330,18 +6373,16 @@ def main()->None:
         if os.environ.get("GWRECOMP_OBJECT_CACHE_LOCKED")!="1":
             raise SystemExit("object-cache mode requires rebuild.ps1's exclusive workspace lock")
         object_dir=Path(object_cache).resolve()
-        allowed_cache=Path(r"E:\GWRecomp\build\reusable-object-cache").resolve()
+        allowed_cache=Path(os.environ.get("GWRECOMP_OBJECT_CACHE_ROOT") or ROOT/"build"/"reusable-object-cache").resolve()
         try:
             object_dir.relative_to(allowed_cache)
         except ValueError:
-            raise SystemExit(f"object cache escaped the approved E: root: {object_dir}")
-        if object_dir.drive.casefold()!="e:":
-            raise SystemExit(f"object cache must remain on E:: {object_dir}")
+            raise SystemExit(f"object cache escaped the approved cache root: {object_dir}")
     else:
         object_dir=ROOT/"work"/"native_ifctitle_plugin_load_at_objs"
     project_headers=[ROOT/"runtime",
         ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32",
-        Path(r"E:\msys64\mingw32\include\SDL2"),
+        SDL2_INCLUDE,
         ROOT/"tools"/"terrain_renderer"]
     sources=[("harness",ROOT/"tests"/"test_ifctitle_creature_probe.c"),
         ("lifted-closure",generated),("resource-callback",callback),
@@ -6366,9 +6407,7 @@ def main()->None:
     terrain_source=ROOT/"tools"/"terrain_renderer"/"gw_terrain_renderer.cpp"
     terrain_obj=object_dir/"gw_terrain_renderer.obj"
     terrain_flags=[*CLANGXX,"-std=c++17","-m32","-O2","-fno-exceptions","-fno-rtti",
-        "-isystem",Path(r"E:\msys64\mingw32\include\c++\16.2.0"),
-        "-isystem",Path(r"E:\msys64\mingw32\include\c++\16.2.0\i686-w64-mingw32"),
-        "-isystem",Path(r"E:\msys64\mingw32\include"),
+        *[x for d in _cxx_include_dirs() for x in ("-isystem",d)],
         "-I",ROOT/"tools"/"terrain_renderer"]
     terrain_obj=compile_cached(terrain_source,terrain_obj,terrain_flags,"modern-terrain-renderer",
         [ROOT/"tools"/"terrain_renderer"],timeout=180)
@@ -6394,8 +6433,10 @@ def main()->None:
     # The x64-host Clang handles the large lifted C translation unit; use the
     # existing 32-bit-host Clang driver for linking because its configured
     # MinGW search path resolves the project's crt2.o and SDL libraries.
-    link_command=[*LINK_CC,"-m32","-o",exe,*objects,
-        "-L",r"E:\msys64\mingw32\lib","-lSDL2","-lbcrypt","-lwinmm","-lm"]
+    # "-B <mingw32>/lib": a 64-bit-host clang (e.g. a plain LLVM install) does not find crt2.o on its own;
+    # the 32-bit-host clang of Visual Studio does. -B makes the link independent of that difference.
+    link_command=[*LINK_CC,"-m32","-B",MINGW32_LIB,"-o",exe,*objects,
+        "-L",MINGW32_LIB,"-lSDL2","-lbcrypt","-lwinmm","-lm"]
     # Opt-in only: a link map lets a host_rip from the GWRECOMP_WATCH_BYTE
     # hardware watch be resolved to a lifted or runtime symbol. It does not
     # change the generated code.
@@ -8778,7 +8819,7 @@ def main()->None:
             "output_sha256":output_hash,"independent_rnc1_reference_sha256":expected_decoded,
             "manager_loaded_iftitle_sha256":manager_record_hash,
             "independent_reference":{"kind":"read-only Python RNC1 decoder and CRC check from GeneWarsFX evidence tree",
-                "script":"E:/GeneWarsFX/work/phase2v_rnc1_probe.py","input_sha256":EXPECTED_RESOURCE,
+                "script":(_GW_FX.replace("\\","/") + '/work/phase2v_rnc1_probe.py'),"input_sha256":EXPECTED_RESOURCE,
                 "output_sha256":sha(independent_reference) if independent_reference.exists() else None,
                 "header_unpacked_crc":"0x31de","decoder_unpacked_crc":"0x31de"},
                 "relocated_payload_matches_original":payload_matches,

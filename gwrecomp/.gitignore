@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 build/
 cache/
+/gwrecomp.local.json
+gwrecomp.local.json
+third_party/
+.venv/
+work/
+evidence/

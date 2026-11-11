@@ -1,26 +1,20 @@
 {
-  "schema": "gwrecomp-v191-evidence-inputs/1",
+  "schema": "gwrecomp-evidence-inputs/2",
+  "note": "Files the build reads from evidence/. They are user supplied and never distributed; rebuild.ps1 copies each from the location you configured and verifies its SHA-256.",
   "files": [
     {
       "path": "evidence/genewars-1_1.exe",
       "sha256": "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f",
-      "source": "E:\\GWRecomp\\evidence\\genewars-1_1.exe"
-    },
-    {
-      "path": "evidence/w3_140_original_setenvp_environment.json",
-      "sha256": "0ccd830de8208eba28e05e3886fc6108faac3cd9cd69336ce23ad3b24d52cc93",
-      "source": "E:\\GWRecomp\\evidence\\w3_140_original_setenvp_environment.json"
-    },
-    {
-      "path": "evidence/w2_114_authenticated_environment_fixture.json",
-      "sha256": "581d04b58527a0973adfd2a5b8b05b4b27277e30d037f1df8bcf05ed1ec5ac0f",
-      "source": "E:\\GWRecomp\\evidence\\w2_114_authenticated_environment_fixture.json"
+      "source": "GW.EXE inside GENEWARS_INSTALL_DIR",
+      "source_env": "GENEWARS_INSTALL_DIR",
+      "source_relative": "GW.EXE"
     },
     {
       "path": "evidence/genewars-1_1.map",
       "sha256": "30e06c203154904740c4ff3f1fcc4971fb6c0ef10ace2f4f9dc63367d45b99b3",
-      "source": "E:\\GWRecomp\\evidence\\genewars-1_1.map"
+      "source": "file named by GENEWARS_MAP (symbol map; not part of the game install)",
+      "source_env": "GENEWARS_MAP",
+      "source_relative": ""
     }
-  ],
-  "git_tracked_required": []
+  ]
 }
