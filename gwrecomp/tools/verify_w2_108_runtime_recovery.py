@@ -1,5 +1,8 @@
 """Verify W2-108 recovery copies and restore them only into a temporary directory."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 import hashlib
 import json
 import os
@@ -77,7 +80,7 @@ def verify_and_restore(manifest_path: Path = MANIFEST) -> dict:
         "verified_at_utc": datetime.now(timezone.utc).isoformat(),
         "manifest": str(manifest_path.relative_to(ROOT)).replace("\\", "/"),
         "manifest_sha256": _sha256(manifest_path),
-        "restoration_target": "unique temporary directory under E:/GWRecomp/cache",
+        "restoration_target": ('unique temporary directory under ' + _GW_ROOT.replace("\\","/") + '/cache'),
         "restored_files": restored,
         "all_match": len(restored) == len(ALLOWED) and all(item["matches"] for item in restored),
         "live_sources_modified": False,

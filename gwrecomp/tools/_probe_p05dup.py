@@ -1,7 +1,10 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 import re
 from pathlib import Path
-root = Path(r"E:\GWRecomp")
+root = Path((_GW_ROOT))
 tx = (root/"build"/"entry_path_closure.c").read_text(encoding="utf-8",errors="replace")
 lines = tx.splitlines()
 # Every line that contains literal 'repne scasb'

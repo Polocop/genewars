@@ -1,4 +1,7 @@
 """Build and run the bounded C callback regression for DPMI AX=0200."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import json
 import os
 import pathlib
@@ -8,7 +11,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
 EXE = BUILD / "test_w2_112_native_dpmi_0200.exe"
-GCC = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 
 
 class NativeDpmi0200Tests(unittest.TestCase):
@@ -20,7 +23,7 @@ class NativeDpmi0200Tests(unittest.TestCase):
             "TMP": str(ROOT / "cache"),
             "TMPDIR": str(ROOT / "cache"),
             "PYTHONDONTWRITEBYTECODE": "1",
-            "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+            "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
         }
         command = [
             str(GCC), "-std=gnu11", "-m32", "-O0",

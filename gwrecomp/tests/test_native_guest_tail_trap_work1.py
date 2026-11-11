@@ -1,4 +1,7 @@
 """Compile and run the indirect-tail guest interrupt stop fixture."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -6,14 +9,14 @@ import pathlib
 import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-GCC = r"E:\msys64\mingw32\bin\gcc.exe"
+GCC = (_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe')
 EXE = ROOT / "build" / "test_native_guest_trap_wrappers.exe"
 SOURCE = ROOT / "tests" / "test_native_guest_trap_wrappers.c"
 OUT = ROOT / "evidence" / "native_guest_tail_trap_work1.json"
 
 
 def main():
-    env = {**os.environ, "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
+    env = {**os.environ, "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
     compile_cmd = [GCC, "-std=gnu11", "-m32", "-O0", "-I", str(ROOT / "runtime"),
                    "-I", str(ROOT / "third_party" / "pcrecomp" / "runtime" / "recomp32"),
                    "-o", str(EXE), str(SOURCE), str(ROOT / "runtime" / "recomp_context.c"),

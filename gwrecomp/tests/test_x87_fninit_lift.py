@@ -1,5 +1,8 @@
 """Exercise FNINIT's modeled state reset and Watcom's FNSTCW-visible CW."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 
 import os
 from pathlib import Path
@@ -44,7 +47,7 @@ assert "c->fpu_cw" in cpu_fnstcw and "0x027F" not in cpu_fnstcw, cpu_fnstcw
 
 fixture = ROOT / "build" / "x87_fninit_fixture.c"
 exe = ROOT / "build" / "test_x87_fninit.exe"
-env = {**os.environ, "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
+env = {**os.environ, "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
 fixture.write_text(
     '#define RECOMP_GENERATED_CODE\n'
     '#include "recomp_types.h"\n'
@@ -61,7 +64,7 @@ fixture.write_text(
     '  if (g_fpu_cw!=0x037Fu || g_fp_top!=0) return 1;\n'
     '  for (int i=0;i<8;i++) if (g_st[i]!=0.0 || g_st_i64[i]!=0) return 2;\n'
     '  return 0;\n}\n', encoding="utf-8")
-cmd = [r"E:\msys64\mingw32\bin\gcc.exe", "-std=gnu11", "-m32", "-O0",
+cmd = [(_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'), "-std=gnu11", "-m32", "-O0",
        "-I", str(ROOT / "third_party" / "pcrecomp" / "runtime" / "recomp32"),
        "-o", str(exe), str(fixture)]
 p = subprocess.run(cmd, cwd=ROOT, env=env, text=True, capture_output=True)

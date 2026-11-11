@@ -1,4 +1,7 @@
 """Exercise nested trap wrappers and the current native -k interrupt frontier."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import json
 import os
 import pathlib
@@ -7,7 +10,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PYTHON = sys.executable
-GCC = r"E:\msys64\mingw32\bin\gcc.exe"
+GCC = (_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe')
 EXE = ROOT / "build" / "test_native_guest_trap_wrappers.exe"
 EVIDENCE = ROOT / "evidence" / "native_entry_after_trap_propagation_work1.json"
 
@@ -21,7 +24,7 @@ def run(argv, env=None):
 
 
 def main():
-    env = {**os.environ, "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
+    env = {**os.environ, "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
     run([GCC, "-std=gnu11", "-m32", "-O0", "-I", str(ROOT / "runtime"),
          "-I", str(ROOT / "third_party" / "pcrecomp" / "runtime" / "recomp32"),
          "-o", str(EXE), str(ROOT / "tests" / "test_native_guest_trap_wrappers.c"),

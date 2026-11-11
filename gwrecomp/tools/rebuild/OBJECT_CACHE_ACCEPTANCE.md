@@ -1,7 +1,7 @@
 # GWRecomp — Diagnóstico y corrección de 0 cache hits
 
 Fecha: 2026-11-02
-Rama/worktree: `storage/reusable-object-cache` / `E:\GWRecomp\worktrees\storage-reuse-obj-cache`
+Rama/worktree: `storage/reusable-object-cache` / `<worktree>`
 HEAD de `main` y del worktree: `b4ebf1acab37912182182b5eade49760f3a0c6d9`
 
 ## Resultado
@@ -14,7 +14,7 @@ El hit dirigido y las regresiones pequeñas quedaron validados en esa etapa. La 
 
 ## Diagnóstico previo a la aceptación final
 
-Los manifiestos de `cache-acceptance-cold2` y `cache-acceptance-warm` identifican el mismo espacio (`cache-accept1`, `E:\GWRecomp\build\reusable-object-cache\cache-accept1`). Para los 12 objetos:
+Los manifiestos de `cache-acceptance-cold2` y `cache-acceptance-warm` identifican el mismo espacio (`cache-accept1`, `<GWRECOMP_WORK>\reusable-object-cache\cache-accept1`). Para los 12 objetos:
 
 - Las dos claves históricas difieren.
 - Las 12 entradas del primer build aún existen; sus sellos y hashes de contenido son válidos.
@@ -94,9 +94,9 @@ Los cuatro bypasses siguen reproduciéndose. El total de entrada del cache legac
 ### Precondiciones e identidad
 
 - Commit base/HEAD exacto en ambos: `b4ebf1acab37912182182b5eade49760f3a0c6d9`. `main` mantuvo ese mismo HEAD y limpio; no se hicieron commit ni merge.
-- La rama sigue en `E:\GWRecomp\worktrees\storage-reuse-obj-cache` con cambios locales de infraestructura de caché solamente (driver de build, módulo/pruebas de caché y documentación). Sin cambios de gameplay/audio ni en otros worktrees.
+- La rama sigue en `<worktree>` con cambios locales de infraestructura de caché solamente (driver de build, módulo/pruebas de caché y documentación). Sin cambios de gameplay/audio ni en otros worktrees.
 - Overlay semántico idéntico en A/B: `tests/test_ifctitle_creature_probe.py` SHA-256 `d15b530f466b0a3211c4b75cef5401291ee0836a9fe664a79dcc448326d8587b`; `tools/rebuild/object_cache.py` SHA-256 `6313e13db522432701f74e0984cf94bb8485cf93f5883c4c9807969c229b4f97`.
-- Script rebuild registrado en ambos: SHA-256 `953ca29c27f8cef3cb38ab813b19628ef8cdcaf47ddd22145c7ff0190020446d`. Toolchain igual en ambos; Clang x64 SHA-256 `c5d3d309c036d1666d50500e87be514dc9916adc427e7aec267c95178bec14ff`. Cache ID/ruta iguales: `cache-accept1` / `E:\GWRecomp\build\reusable-object-cache\cache-accept1`.
+- Script rebuild registrado en ambos: SHA-256 `953ca29c27f8cef3cb38ab813b19628ef8cdcaf47ddd22145c7ff0190020446d`. Toolchain igual en ambos; Clang x64 SHA-256 `c5d3d309c036d1666d50500e87be514dc9916adc427e7aec267c95178bec14ff`. Cache ID/ruta iguales: `cache-accept1` / `<GWRECOMP_WORK>\reusable-object-cache\cache-accept1`.
 - El Build A tuvo 12 misses para las claves probadas: las nuevas entradas reutilizables estaban ausentes al inicio. `CODEX_TOOL_CALL_ID` no aparece en ninguno de los 12 diagnósticos/key componentes; excluirlo no cambió argumentos, opciones, fuentes, dependencias o entorno semántico de compilación. En B las mismas 12 claves se usaron desde otro Work y los objetos restaurados fueron idénticos byte a byte al A.
 
 ### Builds, resultados y almacenamiento

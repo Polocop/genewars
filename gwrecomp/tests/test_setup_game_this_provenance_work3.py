@@ -1,3 +1,7 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import hashlib as _hashlib
 
 
@@ -46,7 +50,7 @@ EXIT_CLASS=ROOT/'evidence'/'local_process_exit_classification.json'
 OPTION=ROOT/'evidence'/'startup_option_gate_work3.json'
 MAP=ROOT/'evidence'/'genewars-1_1.map'
 CLOSURE=ROOT/'build'/'entry_path_closure.c'
-CUE=pathlib.Path(r'E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue')
+CUE=pathlib.Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
 TARGET_SHA='2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f'
 CUE_SHA='1d417e3aed625d4f054b51054a1211562a19cd4f712b08e7846613517228a5b5'
 

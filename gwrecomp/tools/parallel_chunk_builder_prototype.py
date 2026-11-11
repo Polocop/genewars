@@ -1,3 +1,6 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 import os
 import sys
 import re
@@ -5,7 +8,7 @@ import hashlib
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-ROOT = Path("E:/GWRecomp")
+ROOT = Path((_GW_ROOT.replace("\\","/")))
 CLOSURE_C = ROOT / "work" / "ifctitle_creature_probe_closure.c"
 OUT_DIR = ROOT / "work" / "parallel_chunks"
 

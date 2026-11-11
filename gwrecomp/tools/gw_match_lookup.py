@@ -16,6 +16,10 @@ Usage:
   python gw_match_lookup.py --list            # show every indexed function
   python gw_match_lookup.py --symbol X --json # machine-readable single row
 """
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import sys, json, argparse, pathlib, bisect
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
@@ -23,7 +27,7 @@ MATCH_JSON = HERE / "evidence" / "local_bflib_match_results.json"
 AUDIT_JSON = HERE / "evidence" / "local_bflib_int_audit.json"
 
 # Reference source for each BFLIB function (public reconstructed source in
-# E:/GeneWarsFX, read-only) + a one-line role.  This is the "reference file /
+# <GENEWARSFX_ROOT>, read-only) + a one-line role.  This is the "reference file /
 # reference project" the deliverable asks for.
 REFERENCE = {
     "LbScreenSetupAnyMode_":   ("bflibrary/src/x86-dos-watcom/sscreen.cpp (stub, beta2-derived)",
@@ -94,7 +98,7 @@ def build_row(name, m, a):
     row = {
         "symbol": name,
         "reference_file": REFERENCE.get(name, ("(no public BFLIB stub)", ""))[0],
-        "reference_project": "Open Watcom BFLIB (x86-dos-watcom) via E:/GeneWarsFX/upstream/genewars",
+        "reference_project": ('Open Watcom BFLIB (x86-dos-watcom) via ' + _GW_FX.replace("\\","/") + '/upstream/genewars'),
         "role": REFERENCE.get(name, ("", ""))[1],
         "relevance": RELEVANCE.get(name, "(no W1/W2 annotation yet)"),
         "match": None, "audit": None, "confidence": None,

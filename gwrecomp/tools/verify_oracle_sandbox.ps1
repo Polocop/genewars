@@ -1,12 +1,15 @@
 [CmdletBinding()]
 param(
-    [string]$Path = 'E:\GWRecomp\build\dosboxx_oracle\C',
+    [string]$Path = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..')).Path 'build\dosboxx_oracle\C'),
     [switch]$Json,
     [switch]$AllowEmptyGuestStaging
 )
+$GwRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Msys2 = if ($env:MSYS2_ROOT) { $env:MSYS2_ROOT } else { 'C:\msys64' }
+
 $ErrorActionPreference = 'Stop'
-$expectedPath = 'E:\GWRecomp\build\dosboxx_oracle\C'
-$vhdx = 'E:\GWRecomp\build\dosboxx_oracle\oracle_c.vhdx'
+$expectedPath = "$GwRoot\build\dosboxx_oracle\C"
+$vhdx = "$GwRoot\build\dosboxx_oracle\oracle_c.vhdx"
 $result = [ordered]@{ verified=$false; reason='unverified'; mount_path=$null; label=$null; capacity_bytes=$null; host_free_bytes=$null; host_floor_bytes=(100L * 1GB); vhdx=$vhdx }
 try {
     $want = [IO.Path]::GetFullPath($expectedPath).TrimEnd('\')

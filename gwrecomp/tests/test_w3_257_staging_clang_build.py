@@ -1,4 +1,7 @@
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 import json
 import unittest
@@ -22,7 +25,7 @@ class StagingClangBuildEvidenceTests(unittest.TestCase):
 
     def test_rejects_wrong_source_mapping(self) -> None:
         data = json.loads(json.dumps(self.data))
-        data["configure"]["source_directory"] = r"E:\GWRecomp\third_party\dosbox-staging"
+        data["configure"]["source_directory"] = (_GW_ROOT + '\\third_party\\dosbox-staging')
         self.assertIn("CMake cache points to wrong source directory", validate(data))
 
     def test_rejects_game_or_oracle_execution(self) -> None:

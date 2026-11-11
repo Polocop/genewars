@@ -17,7 +17,7 @@ Outputs:
   - reports/LOCAL_MSCDEX_RESPONSE_CONTRACT.md
 
 This task does NOT implement the runtime handler (that is W2-MSCDEXRESP/WORK2)
-and does NOT touch E:/GeneWarsFX (read-only reference only).
+and does NOT touch <GENEWARSFX_ROOT> (read-only reference only).
 """
 import json, hashlib, os, re
 

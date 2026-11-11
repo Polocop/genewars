@@ -1,4 +1,7 @@
 """Check call history survives branch-heavy guest cleanup paths."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 from pathlib import Path
 import os
 import re
@@ -7,9 +10,9 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-GCC = Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 ENV = {**os.environ,
-       "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
+       "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
 
 
 class RecompTraceTests(unittest.TestCase):

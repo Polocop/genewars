@@ -1,4 +1,7 @@
 """Anti-bypass guardrails for supported local DOSBox oracle launch paths."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 from pathlib import Path
 import json
 import re
@@ -41,8 +44,8 @@ class OracleLaunchPolicy(unittest.TestCase):
             encoding="utf-8")
 
     def test_official_oracle_configs_use_only_legacy_guest_c_mount_path(self):
-        expected = r"E:\GWRecomp\build\dosboxx_oracle\C"
-        disabled = r"E:\GWRecomp\build\dosboxx_oracle\__VHDX_REQUIRED__"
+        expected = (_GW_ROOT + '\\build\\dosboxx_oracle\\C')
+        disabled = (_GW_ROOT + '\\build\\dosboxx_oracle\\__VHDX_REQUIRED__')
         confs = list((ROOT / "build" / "dosboxx_oracle").glob("*.conf"))
         self.assertTrue(confs, "No official oracle configs found")
         violations = []

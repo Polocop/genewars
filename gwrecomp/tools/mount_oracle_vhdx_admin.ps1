@@ -1,11 +1,14 @@
 [CmdletBinding()]
 param()
+$GwRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Msys2 = if ($env:MSYS2_ROOT) { $env:MSYS2_ROOT } else { 'C:\msys64' }
+
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'oracle_sandbox_helpers.ps1')
 $verifyScript = Join-Path $PSScriptRoot 'verify_oracle_sandbox.ps1'
-$vhdx = 'E:\GWRecomp\build\dosboxx_oracle\oracle_c.vhdx'
-$stage = 'E:\GWRecomp\build\dosboxx_oracle\C'
-if ($vhdx -ne 'E:\GWRecomp\build\dosboxx_oracle\oracle_c.vhdx' -or $stage -ne 'E:\GWRecomp\build\dosboxx_oracle\C') { throw 'Unexpected oracle sandbox path.' }
+$vhdx = "$GwRoot\build\dosboxx_oracle\oracle_c.vhdx"
+$stage = "$GwRoot\build\dosboxx_oracle\C"
+if ($vhdx -ne "$GwRoot\build\dosboxx_oracle\oracle_c.vhdx" -or $stage -ne "$GwRoot\build\dosboxx_oracle\C") { throw 'Unexpected oracle sandbox path.' }
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not ([Security.Principal.WindowsPrincipal]::new($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run from elevated PowerShell.' }
 if (-not (Test-Path -LiteralPath $vhdx)) { throw "VHDX missing: $vhdx" }

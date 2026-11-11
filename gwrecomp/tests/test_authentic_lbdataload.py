@@ -1,5 +1,12 @@
 """Run the original GeneWars 1.1 LbDataLoad_ with the bounded DOS/VFS fixture."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
+_GW_INSTALL=_gw_os.environ.get("GENEWARS_INSTALL_DIR","<set GENEWARS_INSTALL_DIR>")
+_GW_INSTALL_PARENT=str(_GwPath(_GW_INSTALL).parent)
 import hashlib
 import json
 import os
@@ -9,17 +16,17 @@ import sys
 
 ROOT=Path(__file__).resolve().parents[1]
 PYTHON=ROOT/".venv"/"Scripts"/"python.exe"
-GCC=Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC=Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 TARGET=ROOT/"evidence"/"genewars-1_1.exe"
 EXPECTED_TARGET="2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
-INSTALL=Path(r"<GENEWARS_INSTALL_DIR>")
+INSTALL=Path((_GW_INSTALL))
 RESOURCE=INSTALL/"DATA"/"IFTITLE.ANB"
 EXPECTED_RESOURCE="c7d2dfc5d774c69337436249ec74e4d0fa6ae1d06bd5ae785f9f73ee2ac0f707"
 REBASES={1:0x1EB000,3:0x1DA000}
 TEMP_DIR=ROOT/"work"
 ENV={**os.environ,"TEMP":str(TEMP_DIR),"TMP":str(TEMP_DIR),"TMPDIR":str(TEMP_DIR),
      "PYTHONDONTWRITEBYTECODE":"1",
-     "PATH":r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;"+os.environ.get("PATH","")}
+     "PATH":(_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;')+os.environ.get("PATH","")}
 
 def sha(path:Path)->str: return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -145,7 +152,7 @@ def main()->None:
         "rnc":{"original_function":"UnpackM1_ 0xB9CFC","args":{"eax":"0x01001030","ecx":"0x01001030","edx":"0x01001030"},
             "output_sha256":output_hash,"independent_rnc1_reference_sha256":expected_decoded,
             "independent_reference":{"kind":"read-only Python RNC1 decoder and CRC check from GeneWarsFX evidence tree",
-                "script":"E:/GeneWarsFX/work/phase2v_rnc1_probe.py","input_sha256":EXPECTED_RESOURCE,
+                "script":(_GW_FX.replace("\\","/") + '/work/phase2v_rnc1_probe.py'),"input_sha256":EXPECTED_RESOURCE,
                 "output_sha256":sha(independent_reference) if independent_reference.exists() else None,
                 "header_unpacked_crc":"0x31de","decoder_unpacked_crc":"0x31de"},
                 "relocated_payload_matches_original":payload_matches,

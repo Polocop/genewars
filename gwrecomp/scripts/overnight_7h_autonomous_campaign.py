@@ -8,6 +8,11 @@ whose evidence contract is not implemented remain explicitly partial while
 independent validation stages continue.
 """
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
+_GW_INSTALL=_gw_os.environ.get("GENEWARS_INSTALL_DIR","<set GENEWARS_INSTALL_DIR>")
+_GW_INSTALL_PARENT=str(_GwPath(_GW_INSTALL).parent)
 
 import argparse
 import hashlib
@@ -398,7 +403,7 @@ def stage8() -> dict:
             "GW_DEMO_PACING": "native",
             "GW_DEMO_MAX_INTERACTIVE_FRAMES": "300",
             "GW_FULL_TRACE": "0",
-            "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+            "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
         }
         interactive_report = EVIDENCE / "interactive_demo_last_run.json"
         if interactive_report.exists():
@@ -407,7 +412,7 @@ def stage8() -> dict:
         benchmark = run_command("stage8_sdl2_300_frames", [
             str(ROOT / "bin" / "gw_demo_sdl2.exe"),
             "work/ifctitle_creature_probe_guest.bin",
-            r"<GENEWARS_INSTALL_DIR>",
+            (_GW_INSTALL),
             "work/genewars_1_1_install_manifest_creature_probe.tsv",
         ], env_updates=env, timeout=900)
         benchmark["report"] = None

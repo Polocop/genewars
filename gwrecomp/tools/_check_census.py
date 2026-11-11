@@ -1,6 +1,9 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 import json
-d = json.load(open(r"E:\GWRecomp\evidence\lifter_hazard_census.json"))
+d = json.load(open((_GW_ROOT + '\\evidence\\lifter_hazard_census.json')))
 print("pattern_counts:", d.get("pattern_counts"))
 print("findings_total:", d.get("findings_total"))
 note = d.get("note","")

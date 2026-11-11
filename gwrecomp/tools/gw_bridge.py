@@ -319,7 +319,7 @@ def cmd_replay_original(a) -> int:
     # semantics are unchanged -- only the launch is contained. If the guard is
     # absent we fall back to the legacy direct launch (never a silent bypass: the
     # fallback is logged and flagged). The pinned control-plane dispatcher
-    # (E:\GWRecomp-control) is immutable and is covered by the 16 GiB VHDX physical
+    # (<control-dir>) is immutable and is covered by the 16 GiB VHDX physical
     # hard cap on the guest C: volume instead.
     mcp = ROOT / "tools" / "dosboxx_oracle" / "mcp_capture.py"
     conf = ROOT / "build" / "dosboxx_oracle" / "dosbox-x.debug.conf"

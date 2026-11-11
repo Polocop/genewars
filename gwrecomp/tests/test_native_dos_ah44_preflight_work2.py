@@ -1,9 +1,12 @@
 """Compile the fast fail-closed AH=44 frontier harness and save evidence."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib,json,os,pathlib,subprocess
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-GCC=pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC=pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 EXE=ROOT/"build"/"test_native_dos_ah44_preflight.exe"
-env={**os.environ,"PYTHONDONTWRITEBYTECODE":"1","TEMP":os.environ.get("TEMP",str(ROOT/"cache")),"TMP":os.environ.get("TEMP",str(ROOT/"cache")),"TMPDIR":os.environ.get("TEMP",str(ROOT/"cache")),"PATH":r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;"+os.environ.get("PATH","")}
+env={**os.environ,"PYTHONDONTWRITEBYTECODE":"1","TEMP":os.environ.get("TEMP",str(ROOT/"cache")),"TMP":os.environ.get("TEMP",str(ROOT/"cache")),"TMPDIR":os.environ.get("TEMP",str(ROOT/"cache")),"PATH":(_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;')+os.environ.get("PATH","")}
 cmd=[str(GCC),"-std=gnu11","-m32","-O0","-I",str(ROOT/"runtime"),"-I",str(ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32"),"-o",str(EXE),str(ROOT/"tests"/"test_native_dos_ah44_preflight.c"),str(ROOT/"runtime"/"gw_segments.c"),str(ROOT/"runtime"/"gw_interrupts.c"),str(ROOT/"runtime"/"gw_dos_services.c")]
 p=subprocess.run(cmd,cwd=ROOT,env=env,text=True,capture_output=True)
 if p.returncode: raise SystemExit(p.stdout+p.stderr)

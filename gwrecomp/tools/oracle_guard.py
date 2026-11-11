@@ -42,6 +42,10 @@ This module NEVER reads or writes E:\\GeneWarsFX (read-only reference library) a
 never launches an oracle directly -- callers pass the already-decided argv.
 """
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 
 import argparse
 import base64
@@ -65,7 +69,7 @@ from pathlib import Path
 from typing import Optional
 
 ROOT = Path(__file__).resolve().parents[1]
-GENEWARSFX = Path(os.environ.get("GWRECOMP_GENEWARSFX", r"E:\GeneWarsFX"))
+GENEWARSFX = Path(os.environ.get("GWRECOMP_GENEWARSFX", (_GW_FX)))
 SANDBOX_VERIFY = ROOT / "tools" / "verify_oracle_sandbox.ps1"
 SANDBOX_REQUIRED = True  # production policy; no CLI/environment opt-out
 

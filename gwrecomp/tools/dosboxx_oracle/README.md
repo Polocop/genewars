@@ -1,6 +1,6 @@
 # DOSBox-X heavy-debug oracle probe
 
-The DOSBox-X clone/build is isolated under `third_party/dosbox-x` and `build/dosboxx-heavy`; do not copy or modify game files under `E:\GeneWarsFX`.
+The DOSBox-X clone/build is isolated under `third_party/dosbox-x` and `build/dosboxx-heavy`; do not copy or modify game files under `<GENEWARSFX_ROOT>`.
 
 The source debugger supports `CPU`, `GDT`, `LDT`, protected-mode `BPM`, selector-relative memory-change `BPPM`, linear `BPLM`, `BPINT`, `BPLIST`, `MEMDUMP`, and the optional MCP TCP control channel (`mcp_server=58991`). The confirmed debugger command forms come from upstream `README.debugger` and the checked out source.
 

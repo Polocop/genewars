@@ -1,4 +1,7 @@
 """Synthetic native callback-to-PIT ABI and fail-closed regressions for W2-123."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -19,7 +22,7 @@ PIT_C = ROOT / "runtime/gw_pit8254.c"
 PIT_H = ROOT / "runtime/gw_pit8254.h"
 EVIDENCE = ROOT / "evidence/native_port_io_runtime_w2_123.json"
 REPORT = ROOT / "reports/coordination/native_port_io_runtime_w2_123.md"
-GCC = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 
 
 def sha(path):
@@ -33,7 +36,7 @@ def runtime_env():
         **os.environ,
         "TEMP": str(cache), "TMP": str(cache), "TMPDIR": str(cache),
         "PYTHONDONTWRITEBYTECODE": "1",
-        "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+        "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
     }
 
 

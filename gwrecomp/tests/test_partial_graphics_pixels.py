@@ -1,4 +1,8 @@
 """Run the original 1.1 graphics-window clear over a guarded guest surface."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -9,12 +13,12 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
-GCC = Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 TARGET = ROOT / "evidence" / "genewars-1_1.exe"
 REA = ROOT / "evidence" / "rea_partial_graphics_pixel_analysis.json"
 ENV = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "TEMP": str(ROOT / "cache"),
        "TMP": str(ROOT / "cache"), "TMPDIR": str(ROOT / "cache"),
-       "PATH": r"E:\GWRecomp\build\staging-w3-253-exec\Debug;E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
+       "PATH": (_GW_ROOT + '\\build\\staging-w3-253-exec\\Debug;' + _GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
 EXPECTED_SHA256 = "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
 FB = 0x390000
 VIDEO_FB = 0x000A0000
@@ -169,12 +173,12 @@ def main():
 
     exe = ROOT / "build" / "test_partial_graphics_pixels.exe"
     run([GCC, "-std=gnu11", "-m32", "-O0", "-DRECOMP_TRACE", "-I", ROOT / "runtime",
-         "-I", r"E:\msys64\mingw32\include\SDL2",
+         "-I", (_GW_MSYS2 + '\\mingw32\\include\\SDL2'),
          "-I", ROOT / "third_party/pcrecomp/runtime/recomp32", "-o", exe,
          ROOT / "tests/test_partial_graphics_pixels.c", ROOT / "build/partial_entry_path.c",
          ROOT / "runtime/recomp_context.c", ROOT / "runtime/gw_interrupts.c",
          ROOT / "runtime/gw_segments.c", ROOT / "runtime/gw_pit8254.c",
-         "-L", r"E:\msys64\mingw32\lib", "-lSDL2"])
+         "-L", (_GW_MSYS2 + '\\mingw32\\lib'), "-lSDL2"])
     process = run([exe])
     swap_access_line = next((line for line in process.stdout.splitlines()
                              if line.startswith("SWAP_ACCESS ")), None)

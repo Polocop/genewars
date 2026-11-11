@@ -1,13 +1,19 @@
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_VS=_gw_os.path.join(_gw_os.environ.get("ProgramFiles(x86)",r"C:\Program Files (x86)"),"Microsoft Visual Studio","2022","BuildTools")
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 import hashlib
 import json
 import subprocess
 from pathlib import Path
 
-ROOT = Path(r"E:\GWRecomp")
+ROOT = Path((_GW_ROOT))
 PINNED_REVISION = "81835b01c54dcb1510bc2d09d0b9aa5a3f9a989f"
-CLANG = Path(r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\clang-cl.exe")
+CLANG = Path((_GW_VS + '\\VC\\Tools\\Llvm\\x64\\bin\\clang-cl.exe'))
 SOURCE = ROOT / "third_party/dosbox-staging-w3-059-instrumented"
 BUILD = ROOT / "build/staging-w3-059-clang-base"
 CACHE = BUILD / "CMakeCache.txt"

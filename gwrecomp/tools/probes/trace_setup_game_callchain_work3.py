@@ -1,4 +1,8 @@
 """Non-mutating original-byte call-chain capture for setup_game."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[2])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import hashlib,importlib.util,json,pathlib,sys
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'.venv'/'Lib'/'site-packages'))
@@ -8,7 +12,7 @@ from dos_filesystem import DosFileSystem
 from dos_cdrom import CueImage
 from unicorn import UC_HOOK_CODE
 from unicorn.x86_const import UC_X86_REG_CS,UC_X86_REG_DS,UC_X86_REG_ES,UC_X86_REG_SS,UC_X86_REG_FS,UC_X86_REG_GS,UC_X86_REG_GDTR,UC_X86_REG_LDTR
-TARGET=ROOT/'evidence/genewars-1_1.exe'; CUE=pathlib.Path(r'E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue')
+TARGET=ROOT/'evidence/genewars-1_1.exe'; CUE=pathlib.Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
 STAGE=ROOT/'build/dos_c_reference_20261006'; PROFILE=ROOT/'build/dos_user_profile_w2_036'; CONFIG=PROFILE/'GENEWARS/config.ini'
 if not CONFIG.exists() or CONFIG.stat().st_size!=0:raise SystemExit('Expected existing empty config; refusing to mutate it')
 sha=hashlib.sha256(TARGET.read_bytes()).hexdigest()

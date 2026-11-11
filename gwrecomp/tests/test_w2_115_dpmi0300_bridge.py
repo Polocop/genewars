@@ -1,4 +1,7 @@
 """Synthetic C regression for provider-backed DPMI AX=0300 frames."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -15,7 +18,7 @@ RUNTIME_H = ROOT / "runtime" / "gw_dos_services.h"
 W3_EVIDENCE = ROOT / "evidence" / "w3_187_post_dpmi_screen_path.json"
 TRACE = ROOT / "build" / "dosboxx_oracle" / "C" / "W3_184_ORIGINAL_AX0300_WINDOW_20261009_01.jsonl"
 EVIDENCE = ROOT / "evidence" / "w2_115_dpmi0300_bridge.json"
-GCC = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 
 
 def sha(path):
@@ -27,7 +30,7 @@ def env():
     cache.mkdir(exist_ok=True)
     return {**os.environ, "TEMP": str(cache), "TMP": str(cache),
             "TMPDIR": str(cache), "PYTHONDONTWRITEBYTECODE": "1",
-            "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
+            "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
 
 
 class Dpmi0300BridgeTests(unittest.TestCase):

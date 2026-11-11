@@ -1,3 +1,7 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 
 import sys, re
 def find_strings(path, maxs=40):
@@ -13,16 +17,16 @@ def find_strings(path, maxs=40):
     return out
 
 samples_head = {
- "ADDRESS": r"E:\GWRecomp\evidence\space_recovery_20261007\ADDRESS_head.bin",
- "GW.ERR":  r"E:\GWRecomp\evidence\space_recovery_20261007\GW_ERR_head.bin",
+ "ADDRESS": (_GW_ROOT + '\\evidence\\space_recovery_20261007\\ADDRESS_head.bin'),
+ "GW.ERR":  (_GW_ROOT + '\\evidence\\space_recovery_20261007\\GW_ERR_head.bin'),
 }
-host_exe = r"E:\GWRecomp\build\dosboxx-heavy\src\dosbox-x.exe"
-guest = r"E:\GeneWarsFX\game\MAIN.EXE"  # try common path; will fallback
+host_exe = (_GW_ROOT + '\\build\\dosboxx-heavy\\src\\dosbox-x.exe')
+guest = (_GW_FX + '\\game\\MAIN.EXE')  # try common path; will fallback
 
 # locate guest exe
 import glob, os
 guest_candidates = []
-for base in [r"E:\GeneWarsFX"]:
+for base in [(_GW_FX)]:
     for root,_,files in os.walk(base):
         for f in files:
             if f.upper() in ("MAIN.EXE","GW.EXE") :

@@ -44,9 +44,9 @@ Known services:
   DPMI real-mode gate: INT 31h or ``int 0`` via a far-call thunk.
 
 Run under the venv python (has dos_re + capstone):
-  E:/GWRecomp/.venv/Scripts/python.exe tools/gw_int_audit.py \
-      --exe E:/GWRecomp/evidence/genewars-1_1.exe \
-      --map E:/GWRecomp/evidence/genewars-1_1.map \
+  python tools/gw_int_audit.py \
+      --exe evidence/genewars-1_1.exe \
+      --map evidence/genewars-1_1.map \
       --funcs LbScreenSetupAnyMode_,LbVesaSetMode_,LbVesaSetPage_,LbScreenSwap_,LbVesaGetInfo_ \
       --json evidence/local_int_audit.json
 """

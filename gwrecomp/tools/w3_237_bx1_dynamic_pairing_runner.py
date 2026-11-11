@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """One guarded, bounded W3-237 original BX=1 caller-pairing capture."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
+_GW_INSTALL=_gw_os.environ.get("GENEWARS_INSTALL_DIR","<set GENEWARS_INSTALL_DIR>")
+_GW_INSTALL_PARENT=str(_GwPath(_GW_INSTALL).parent)
 
 import datetime as dt
 import hashlib
@@ -30,9 +36,9 @@ REVISION = "81835b01c54dcb1510bc2d09d0b9aa5a3f9a989f"
 GW_SHA256 = "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
 GW_SIZE = 1_251_658
 CONFIG_SHA256 = "b2bac63096aa97a808abb8ea09486db79559b12a25a1410ea930be0e5eeffff1"
-CUE = Path(r"E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+CUE = Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
 CUE_SHA256 = "1d417e3aed625d4f054b51054a1211562a19cd4f712b08e7846613517228a5b5"
-SOURCE_ADDRESS = Path(r"<GENEWARS_HDD_ROOT>\ADDRESS.TXT")
+SOURCE_ADDRESS = Path((_GW_INSTALL_PARENT + '\\ADDRESS.TXT'))
 ADDRESS_SHA256 = "7b1c5391160e1d95393d3abe980dde978b8a79ecb2814e144ee032d9710ba6ee"
 RUN_ID = "w3-237-bx1-dynamic-pairing-20261009-01"
 TASK_ID = "W3-237"

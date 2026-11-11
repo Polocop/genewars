@@ -1,8 +1,11 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 # _probe_cross_tab.py — cross-tab bare-mnemonic vs rep_prefix on the REAL closure
 import sys, re
 from pathlib import Path
-root = Path(r"E:\GWRecomp")
+root = Path((_GW_ROOT))
 sys.path.insert(0, str(root/"src"))
 sys.path.insert(0, str(root/"third_party"/"pcrecomp"))
 from le_loader import load_le

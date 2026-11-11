@@ -1,4 +1,7 @@
 """Test measured AH=49 freeing and preserve the current native ES divergence."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import json
 import os
 import pathlib
@@ -11,7 +14,7 @@ EVIDENCE = ROOT / "evidence" / "native_dos_ah49_frontier_work2.json"
 
 def main():
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
-           "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
+           "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
     command = [sys.executable, str(ROOT / "tests" / "test_native_guest_image.py"),
                "--command-tail=-k", "--continue-known-services",
                "--continue-selector-query", "--continue-time-query",

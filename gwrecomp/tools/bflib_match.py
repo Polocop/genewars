@@ -42,6 +42,10 @@ Usage
 """
 
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import argparse
 import dataclasses
 import json
@@ -50,7 +54,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 # --- reuse existing, tested infrastructure (no new x86 parser) ---------------
-sys.path.insert(0, r"E:/GeneWarsFX/experiments/dos-re-gw10")
+sys.path.insert(0, (_GW_FX.replace("\\","/") + '/experiments/dos-re-gw10'))
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 

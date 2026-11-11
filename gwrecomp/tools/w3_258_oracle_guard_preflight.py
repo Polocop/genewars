@@ -1,4 +1,7 @@
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 import hashlib
 import json
@@ -6,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(r"E:\GWRecomp")
+ROOT = Path((_GW_ROOT))
 REVISION = "81835b01c54dcb1510bc2d09d0b9aa5a3f9a989f"
 SOURCE = ROOT / "third_party/dosbox-staging-w3-059-instrumented"
 BUILD_EVIDENCE = ROOT / "evidence/w3_257_staging_clang_build.json"

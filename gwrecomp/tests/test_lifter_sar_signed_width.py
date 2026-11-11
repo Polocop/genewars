@@ -1,5 +1,8 @@
 """Exercise the lifter's signed shift/extension emitters on x86 edge cases."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_CLANG_X64=_gw_os.environ.get("GWRECOMP_CLANG_X64") or _gw_os.environ.get("GWRECOMP_CLANG") or __import__("shutil").which("clang") or "clang.exe"
 
 from pathlib import Path
 import subprocess
@@ -149,7 +152,7 @@ static uint32_t recomp_pf(uint32_t value,unsigned shift) {
         )
     source_text = runtime + "\n".join(emitted_functions) + \
         "int main(void) {\n" + "\n".join(checks) + "\nreturn 0;\n}\n"
-    clang = Path(r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\clang.exe")
+    clang = Path((_GW_CLANG_X64))
     with tempfile.TemporaryDirectory(prefix="gw-sar-width-") as temp:
         source = Path(temp) / "sar_width.c"
         exe = Path(temp) / "sar_width.exe"

@@ -1,4 +1,7 @@
 """Compile the focused link-VA/guest-linear indirect-call regression."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import os
 import hashlib
 import json
@@ -7,7 +10,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-GCC = Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 EXE = ROOT / "build" / "test_rebased_guest_icall_dispatch.exe"
 
 def main():
@@ -28,7 +31,7 @@ def main():
         raise SystemExit("stack callback fixup target map changed")
     print("PASS canonical LE callback slots and stack callback targets match verified object deltas")
     env = {**os.environ,
-           "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
+           "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
     command = [str(GCC), "-std=gnu11", "-m32", "-O0",
                "-I", str(ROOT / "runtime"),
                "-I", str(ROOT / "third_party" / "pcrecomp" / "runtime" / "recomp32"),

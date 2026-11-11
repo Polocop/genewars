@@ -1,3 +1,7 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import hashlib
 import json
 import pathlib
@@ -10,9 +14,9 @@ from dos_filesystem import DosFsError
 from dos_services import DosHost
 from guest_boot import prepare_guest
 
-cue = pathlib.Path(r"E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+cue = pathlib.Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
 target = ROOT / "evidence" / "genewars-1_1.exe"
-source_text = pathlib.Path(r"E:\GeneWarsFX\work\disc_extracted\GAME\DATA\TEXT\ENG\TEXT.DAT")
+source_text = pathlib.Path((_GW_FX + '\\work\\disc_extracted\\GAME\\DATA\\TEXT\\ENG\\TEXT.DAT'))
 cue_hash_before = hashlib.sha256(cue.read_bytes()).hexdigest()
 image = CueImage.from_cue(cue)
 host = DosHost(prepare_guest(target), cdrom_drives=("D",), cdrom_images=(image,))

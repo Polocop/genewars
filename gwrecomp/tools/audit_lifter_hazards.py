@@ -33,7 +33,7 @@ Outputs:
   reports/LOCAL_LIFTERHAZARDS.md
 
 Reproduce:
-  E:/GWRecomp/.venv/Scripts/python.exe tools/audit_lifter_hazards.py
+  python tools/audit_lifter_hazards.py
   (any python with capstone + the repo's le_loader/disasm on the path)
 """
 import sys, json, re, time, bisect

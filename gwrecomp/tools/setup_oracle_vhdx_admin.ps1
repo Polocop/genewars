@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param()
+$GwRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Msys2 = if ($env:MSYS2_ROOT) { $env:MSYS2_ROOT } else { 'C:\msys64' }
+
 $ErrorActionPreference = 'Stop'
-$root = 'E:\GWRecomp'
+$root = "$GwRoot"
 $oracle = Join-Path $root 'build\dosboxx_oracle'
 $stage = Join-Path $oracle 'C'
 $vhdx = Join-Path $oracle 'oracle_c.vhdx'
@@ -10,7 +13,7 @@ $verifyScript = Join-Path $PSScriptRoot 'verify_oracle_sandbox.ps1'
 $verifyBlock = { param($Path) & $verifyScript -Path $Path }.GetNewClosure()
 $verifyAllowEmptyBlock = { param($Path) & $verifyScript -Path $Path -AllowEmptyGuestStaging }.GetNewClosure()
 $size = 16L * 1GB
-if ($root -ne 'E:\GWRecomp' -or $stage -ne 'E:\GWRecomp\build\dosboxx_oracle\C') { throw 'Refusing unexpected project/staging path' }
+if ($root -ne "$GwRoot" -or $stage -ne "$GwRoot\build\dosboxx_oracle\C") { throw 'Refusing unexpected project/staging path' }
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($id)
 $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)

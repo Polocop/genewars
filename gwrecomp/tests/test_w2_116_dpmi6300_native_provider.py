@@ -1,11 +1,14 @@
 """Compile and execute the bounded native DPMI AX=0300 / DOS AX=6300 test."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import os
 import pathlib
 import subprocess
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-GCC = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 EXE = ROOT / "build" / "test_w2_116_dpmi6300_native_provider.exe"
 
 

@@ -4,6 +4,10 @@ GeneWarsFX is GeneWars 1.0 reference material. Only the 1.1 LE/MAP and the
 recompiled LbDataLoadAll_ invocation below provide GWRecomp execution evidence.
 """
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 
 import hashlib
 import json
@@ -20,7 +24,7 @@ from le_loader import load_le
 from tools.disasm.disasm32 import Disassembler
 from tools.pe.pe_analyze import Section
 
-FX = Path(r"E:\GeneWarsFX\worktrees\genewars-phase2b")
+FX = Path((_GW_FX + '\\worktrees\\genewars-phase2b'))
 FX_COMMIT = "ed9632547b09b67143b5c81d6a5a973a396b986f"
 TARGET_SHA256 = "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
 MAP_SHA256 = "30e06c203154904740c4ff3f1fcc4971fb6c0ef10ace2f4f9dc63367d45b99b3"

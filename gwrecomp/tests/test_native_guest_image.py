@@ -1,4 +1,13 @@
 """Load the fixed-VAS LE data image and execute real start through the native closure."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_CLANG_X86=_gw_os.environ.get("GWRECOMP_CLANG_X86") or _gw_os.environ.get("GWRECOMP_CLANG_X64") or __import__("shutil").which("clang") or "clang.exe"
+_GW_VS=_gw_os.path.join(_gw_os.environ.get("ProgramFiles(x86)",r"C:\Program Files (x86)"),"Microsoft Visual Studio","2022","BuildTools")
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import argparse
 import hashlib
 import json
@@ -70,7 +79,7 @@ def run(command, env):
 
 def msvc_x64_environment(base_env):
     """Read the installed VS x64 compiler environment without changing machine state."""
-    vcvars = pathlib.Path(r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat")
+    vcvars = pathlib.Path((_GW_VS + '\\VC\\Auxiliary\\Build\\vcvars64.bat'))
     if not vcvars.is_file():
         raise SystemExit(f"W1-092 needs the installed x64 host toolchain; missing {vcvars}")
     p = subprocess.run(["cmd.exe", "/d", "/c", r'call C:\PROGRA~2\MICROS~3\2022\BUILDT~1\VC\AUXILI~1\Build\vcvars64.bat >nul && set'],
@@ -468,7 +477,7 @@ def main():
         TARGET, command_tail=tail, environment_block=w3_original_environment)
     cd_fixture = None
     if args.cd_present_fixture:
-        cue_path = pathlib.Path(r"E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+        cue_path = pathlib.Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
         cue_before = hashlib.sha256(cue_path.read_bytes()).hexdigest()
         config_path = ROOT / "build" / "dos_user_profile_w2_036" / "GENEWARS" / "config.ini"
         config_bytes = config_path.read_bytes()
@@ -565,15 +574,15 @@ def main():
     env = {
         **os.environ, "PYTHONDONTWRITEBYTECODE": "1",
         "TEMP": str(task_temp), "TMP": str(task_temp), "TMPDIR": str(task_temp),
-        "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+        "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
         "PYTHONPATH": str(PY_TOOLS) + os.pathsep + os.environ.get("PYTHONPATH", ""),
     }
     if args.memory_access_diagnostics:
         env["GWRECOMP_MEMORY_DIAG"]="1"
-    native_cc = [r"E:\msys64\mingw32\bin\gcc.exe", "-std=gnu11", "-m32", "-O0"]
+    native_cc = [(_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'), "-std=gnu11", "-m32", "-O0"]
     if args.w1_092_host_backed_guest_memory:
         env = msvc_x64_environment(env)
-        native_cc = [r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\bin\clang.exe",
+        native_cc = [(_GW_CLANG_X86),
                      "-target", "x86_64-pc-windows-msvc", "-std=gnu11", "-O2",
                      "-fwrapv", "-fno-strict-aliasing", "-D_CRT_SECURE_NO_WARNINGS"]
     if pathlib.Path(args.compile_evidence_name).name != args.compile_evidence_name or not args.compile_evidence_name.endswith(".json"):
@@ -631,7 +640,7 @@ def main():
         object_path = capture_object
     if args.expect_fault:
         run([
-            r"E:\msys64\mingw32\bin\gcc.exe", "-std=gnu11", "-m32", "-O0", "-g", "-c",
+            (_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'), "-std=gnu11", "-m32", "-O0", "-g", "-c",
             "-I", str(ROOT / "runtime"),
             "-I", str(ROOT / "third_party" / "pcrecomp" / "runtime" / "recomp32"),
             str(ROOT / "build" / "entry_path_closure.c"), "-o", str(DEBUG_OBJECT),
@@ -2379,7 +2388,7 @@ def main():
         raw = dict(zip(fields, match.groups()))
         integers = {"icall_count", "interrupt_trap_pending", "memory_fault_pending", "memory_segment", "memory_width", "access_kind"}
         captured = {key: (int(value) if key in integers else f"0x{value.upper()}") for key, value in raw.items()}
-        addr2line = [r"E:\msys64\mingw32\bin\addr2line.exe", "-f", "-C", "-e", str(EXE)]
+        addr2line = [(_GW_MSYS2 + '\\mingw32\\bin\\addr2line.exe'), "-f", "-C", "-e", str(EXE)]
         executable = EXE.read_bytes()
         pe = struct.unpack_from("<I", executable, 0x3C)[0]
         optional = pe + 24

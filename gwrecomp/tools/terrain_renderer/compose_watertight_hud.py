@@ -3,10 +3,13 @@
 The curved edge mask is inferred from same-build full-frame vs isolated-map
 captures. It is marked as a derived visual mask, not an original alpha plane.
 """
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[2])
 import hashlib, json, struct
 from pathlib import Path
 
-ROOT=Path(r'E:\GWRecomp')
+ROOT=Path((_GW_ROOT))
 OUT=ROOT/'evidence'
 TERR=OUT/'terrain_renderer'
 FULL=OUT/'native_wscreen_capture_turn435_436_final_sdl.bmp'

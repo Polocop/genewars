@@ -1,4 +1,7 @@
 """Synthetic C Runtime regression for configured DOS standard-stream IOCTLs."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 
 import hashlib
 import json
@@ -15,7 +18,7 @@ SOURCE = ROOT / "tests" / "test_w2_110_ax4400_stream_classification.c"
 RUNTIME_C = ROOT / "runtime" / "gw_dos_services.c"
 RUNTIME_H = ROOT / "runtime" / "gw_dos_services.h"
 EVIDENCE = ROOT / "evidence" / "w2_110_ax4400_stream_classification.json"
-GCC = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 
 
 def sha256(path):
@@ -32,7 +35,7 @@ def run_harness():
         "TEMP": str(cache),
         "TMP": str(cache),
         "TMPDIR": str(cache),
-        "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+        "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
     }
     command = [
         str(GCC), "-std=gnu11", "-m32", "-O0",

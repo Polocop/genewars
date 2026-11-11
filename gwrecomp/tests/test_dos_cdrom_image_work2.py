@@ -1,3 +1,7 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import pathlib
 import hashlib
 import json
@@ -36,7 +40,7 @@ class CueImageTests(unittest.TestCase):
         self.assertEqual(self.bin.read_bytes(), before)
 
     def test_original_read_only_disc_track1_sector(self):
-        cue = pathlib.Path(r'E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue')
+        cue = pathlib.Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
         if not cue.is_file():
             self.skipTest('read-only reference CD fixture is unavailable')
         image = CueImage.from_cue(cue)

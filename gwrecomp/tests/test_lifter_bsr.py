@@ -1,4 +1,7 @@
 """Compile and execute lifted 32-bit BSF/BSR semantics."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import os
 import pathlib
 import subprocess
@@ -43,9 +46,9 @@ cache.mkdir(exist_ok=True)
 env = {
     **os.environ,
     "TEMP": str(cache), "TMP": str(cache), "TMPDIR": str(cache),
-    "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+    "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
 }
-compiler = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+compiler = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 if not compiler.is_file():
     raise SystemExit(f"32-bit MinGW compiler unavailable: {compiler}")
 compiled = subprocess.run([str(compiler), "-std=c11", "-Wall", "-Werror", "-o", str(exe),

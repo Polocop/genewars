@@ -1,5 +1,7 @@
+$GwRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Msys2 = if ($env:MSYS2_ROOT) { $env:MSYS2_ROOT } else { 'C:\msys64' }
 $ErrorActionPreference = 'Stop'
-$root = 'E:\GWRecomp'
+$root = "$GwRoot"
 . (Join-Path $root 'tools\oracle_sandbox_helpers.ps1')
 $setup = Get-Content -LiteralPath (Join-Path $root 'tools\setup_oracle_vhdx_admin.ps1') -Raw
 $mountScript = Get-Content -LiteralPath (Join-Path $root 'tools\mount_oracle_vhdx_admin.ps1') -Raw

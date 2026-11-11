@@ -14,6 +14,9 @@ Produces:
     evidence/scale_282_metrics.json    metrics + target classification
     reports/LOCAL_SCALE_282.md         human-readable summary
 """
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import json, os, re, subprocess, sys, time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -246,10 +249,11 @@ compile_ok = False
 compile_err = ""
 compile_out = ""
 if not NO_COMPILE:
-    gcc = "E:/msys64/mingw32/bin/gcc.exe"
+    gcc = (_GW_MSYS2.replace("\\","/") + '/mingw32/bin/gcc.exe')
     hdr = str(ROOT / "third_party" / "pcrecomp" / "runtime" / "recomp32")
     env = dict(os.environ)
-    env["PATH"] = f"E:/msys64/mingw32/bin;E:/msys64/usr/bin;" + env.get("PATH", "")
+    _m = os.environ.get("MSYS2_ROOT", r"C:\msys64").replace("\\", "/")
+    env["PATH"] = f"{_m}/mingw32/bin;{_m}/usr/bin;" + env.get("PATH", "")
     cmd = [gcc, "-m32", "-std=gnu99", "-Wno-implicit-function-declaration",
            f"-I{hdr}", f"-I{ROOT}/build",
            "-c", str(out_c), "-o", str(ROOT / "build" / "recomp_282.o")]

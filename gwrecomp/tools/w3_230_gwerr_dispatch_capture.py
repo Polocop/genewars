@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """One-shot guarded original DOS-dispatch capture for the natural GW.ERR open."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 
 import hashlib
 import json
@@ -136,7 +140,7 @@ def correlate_events(events: list[dict]) -> dict:
             "handle_open": opened}
 
 
-ROOT = Path(r"E:\GWRecomp")
+ROOT = Path((_GW_ROOT))
 REVISION = "81835b01c54dcb1510bc2d09d0b9aa5a3f9a989f"
 TARGET_SHA = "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
 CONFIG_SHA = "b2bac63096aa97a808abb8ea09486db79559b12a25a1410ea930be0e5eeffff1"
@@ -184,7 +188,7 @@ def run_capture() -> dict:
     vhdx = ROOT / "build/dosboxx_oracle/oracle_c.vhdx"
     fixture = mount / "GENEWARS/GW.EXE"
     config = ROOT / "build/dosboxx_oracle/dosbox-staging.w3-067-functional.conf"
-    cue = Path(r"E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+    cue = Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
     dosbox = ROOT / "build/staging-w3-059-exec/Debug/dosbox.exe"
     guard_py = ROOT / "tools/oracle_guard.py"
     source = ROOT / "third_party/dosbox-staging-w3-059-instrumented"

@@ -7,6 +7,10 @@ are present (they are, in evidence/), and exercise the full load->decode->CFG
 pipeline on the actual GeneWars 1.1 vs Beta2 VESA functions.
 """
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import os, sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,7 +22,7 @@ import gw_int_audit as A   # reachability walk (OBJ 2) — shares decode32/Image
 
 ROOT = Path(__file__).resolve().parent.parent
 EV = ROOT / "evidence"
-B2 = Path("E:/GeneWarsFX/upstream/genewars-re-helpers")
+B2 = Path((_GW_FX.replace("\\","/") + '/upstream/genewars-re-helpers'))
 
 # ---------------------------------------------------------------- helpers ----
 class FakeIm:

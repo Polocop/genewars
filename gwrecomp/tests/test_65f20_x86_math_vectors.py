@@ -3,13 +3,16 @@
 This validates arithmetic against captured 14-byte map records. It does not
 claim that an E19C0 record was rasterized into a particular screen pixel.
 """
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 import json
 import struct
 import unittest
 from pathlib import Path
 
 
-EVIDENCE = Path(r"E:\GWRecomp\evidence\fun_65f20_e19c0_before_after_samples.json")
+EVIDENCE = Path((_GW_ROOT + '\\evidence\\fun_65f20_e19c0_before_after_samples.json'))
 
 
 def s16(value: int) -> int:

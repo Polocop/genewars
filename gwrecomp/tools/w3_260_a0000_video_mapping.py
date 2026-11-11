@@ -1,12 +1,15 @@
 """Evidence-only reconciliation of original A0000 writes and Runtime video."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(r"E:\GWRecomp")
+ROOT = Path((_GW_ROOT))
 INPUTS = {
     "w2_120": ROOT / "evidence/w2_120_screen_copy_runtime_audit.json",
     "w3_199": ROOT / "evidence/w3_199_ecd40_continuation.json",

@@ -1,5 +1,10 @@
 """Open, read and RNC1-decode exact-build IFTITLE.ANB with original recompiled code."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
+_GW_INSTALL=_gw_os.environ.get("GENEWARS_INSTALL_DIR","<set GENEWARS_INSTALL_DIR>")
+_GW_INSTALL_PARENT=str(_GwPath(_GW_INSTALL).parent)
 import hashlib
 import json
 import os
@@ -13,7 +18,7 @@ from le_loader import load_le
 
 TARGET=ROOT/"evidence"/"genewars-1_1.exe"
 EXPECTED_TARGET="2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
-INSTALL=Path(r"<GENEWARS_INSTALL_DIR>")
+INSTALL=Path((_GW_INSTALL))
 RESOURCES={
     "GW.EXE":"2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f",
     "DATA/IFTITLE.ANB":"c7d2dfc5d774c69337436249ec74e4d0fa6ae1d06bd5ae785f9f73ee2ac0f707",
@@ -67,8 +72,8 @@ def main()->None:
     guest=ROOT/"work"/"recompiled_file_open_guest.bin"
     guest.write_bytes(image.mem)
     exe=ROOT/"build"/"test_recompiled_iftitle_pipeline.exe"
-    env={**os.environ,"PATH":r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;"+os.environ.get("PATH","")}
-    command=[r"E:\msys64\mingw32\bin\gcc.exe","-std=gnu11","-m32","-O0",
+    env={**os.environ,"PATH":(_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;')+os.environ.get("PATH","")}
+    command=[(_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'),"-std=gnu11","-m32","-O0",
         "-I",ROOT/"runtime","-I",ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32",
         "-o",exe,ROOT/"tests"/"test_recompiled_iftitle_pipeline.c",generated,
         ROOT/"runtime"/"recomp_context.c",ROOT/"runtime"/"gw_interrupts.c",

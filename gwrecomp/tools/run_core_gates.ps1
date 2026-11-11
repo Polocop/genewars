@@ -1,6 +1,8 @@
+$GwRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Msys2 = if ($env:MSYS2_ROOT) { $env:MSYS2_ROOT } else { 'C:\msys64' }
 $ErrorActionPreference = 'Stop'
-$root = 'E:\GWRecomp'
-$env:PATH = 'E:\msys64\mingw32\bin;E:\msys64\usr\bin;' + $env:PATH
+$root = "$GwRoot"
+$env:PATH = "$Msys2\mingw32\bin;$Msys2\usr\bin;" + $env:PATH
 $env:TEMP = "$root\cache"
 $env:TMP = "$root\cache"
 $env:TMPDIR = "$root\cache"
@@ -16,6 +18,6 @@ function Invoke-Logged([string[]]$Command) {
 }
 
 Clear-Content -Path $log -ErrorAction SilentlyContinue
-Invoke-Logged @('E:\msys64\mingw32\bin\gcc.exe','-std=gnu11','-m32','-c','-w','-include',"$root\build\recomp_catalog_100_recursive_prototypes.h",'-I',"$root\third_party\pcrecomp\runtime\recomp32",'-o',"$root\build\recomp_catalog_100_recursive.o", "$root\build\recomp_catalog_100_recursive.c")
-Invoke-Logged @('E:\msys64\mingw32\bin\gcc.exe','-std=gnu11','-m32','-O0','-w','-I',"$root\third_party\pcrecomp\runtime\recomp32",'-I',"$root\build",'-o',"$root\build\test_recomp_batch_rebased.exe", "$root\tests\test_recomp_batch.c")
+Invoke-Logged @("$Msys2\mingw32\bin\gcc.exe",'-std=gnu11','-m32','-c','-w','-include',"$root\build\recomp_catalog_100_recursive_prototypes.h",'-I',"$root\third_party\pcrecomp\runtime\recomp32",'-o',"$root\build\recomp_catalog_100_recursive.o", "$root\build\recomp_catalog_100_recursive.c")
+Invoke-Logged @("$Msys2\mingw32\bin\gcc.exe",'-std=gnu11','-m32','-O0','-w','-I',"$root\third_party\pcrecomp\runtime\recomp32",'-I',"$root\build",'-o',"$root\build\test_recomp_batch_rebased.exe", "$root\tests\test_recomp_batch.c")
 Invoke-Logged @("$root\build\test_recomp_batch_rebased.exe")

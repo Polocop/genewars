@@ -1,4 +1,7 @@
 """Extract and compare a real lifted function under direct and explicit-context calls."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import os,pathlib,subprocess,json,hashlib
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 cache=ROOT/'cache'; cache.mkdir(exist_ok=True)
@@ -12,7 +15,7 @@ for i in range(brace,len(src)):
         if depth==0: end=i+1; break
 assert end is not None
 (ROOT/'build'/'lift_cpu_context_fixture.c').write_text('#define RECOMP_GENERATED_CODE\n#include "recomp_types.h"\n'+src[start:end]+'\n',encoding='utf-8')
-cmd=['E:/msys64/mingw32/bin/gcc.exe','-std=gnu11','-m32','-O0','-I',str(ROOT/'runtime'),'-I',str(ROOT/'third_party'/'pcrecomp'/'runtime'/'recomp32'),'-o',str(ROOT/'build'/'test_lifted_cpu_context.exe'),str(ROOT/'tests'/'test_lifted_cpu_context.c'),str(ROOT/'runtime'/'recomp_context.c'),str(ROOT/'runtime'/'gw_interrupts.c'),str(ROOT/'runtime'/'gw_segments.c'),str(ROOT/'runtime'/'recomp_bridge.c'),str(ROOT/'build'/'lift_cpu_context_fixture.c')]
+cmd=[(_GW_MSYS2.replace("\\","/") + '/mingw32/bin/gcc.exe'),'-std=gnu11','-m32','-O0','-I',str(ROOT/'runtime'),'-I',str(ROOT/'third_party'/'pcrecomp'/'runtime'/'recomp32'),'-o',str(ROOT/'build'/'test_lifted_cpu_context.exe'),str(ROOT/'tests'/'test_lifted_cpu_context.c'),str(ROOT/'runtime'/'recomp_context.c'),str(ROOT/'runtime'/'gw_interrupts.c'),str(ROOT/'runtime'/'gw_segments.c'),str(ROOT/'runtime'/'recomp_bridge.c'),str(ROOT/'build'/'lift_cpu_context_fixture.c')]
 p=subprocess.run(cmd,cwd=ROOT,text=True,capture_output=True,env=env)
 if p.returncode:
     print(p.stdout); print(p.stderr); raise SystemExit(p.returncode)

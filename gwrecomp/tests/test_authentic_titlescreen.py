@@ -1,4 +1,7 @@
 """Run the original 1.1 title RNC decoder and VESA LbScreenSwap closure."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -11,7 +14,7 @@ from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
-GCC = Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 TARGET = ROOT / "evidence" / "genewars-1_1.exe"
 REA = ROOT / "evidence" / "rea_graphics_setup_20261011.json"
 ASSET_DIR = (ROOT / "build" / "dosboxx_oracle" /
@@ -29,8 +32,9 @@ ENV = {
     "PYTHONDONTWRITEBYTECODE": "1",
     "TEMP": str(ROOT / "cache"), "TMP": str(ROOT / "cache"),
     "TMPDIR": str(ROOT / "cache"),
-    "PATH": (r"E:\GWRecomp\build\staging-w3-253-exec\Debug;"
-             r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")),
+    "PATH": (str(ROOT / "build" / "staging-w3-253-exec" / "Debug") + ";"
+             + os.environ.get("MSYS2_ROOT", r"C:\msys64") + r"\mingw32\bin;"
+             + os.environ.get("MSYS2_ROOT", r"C:\msys64") + r"\usr\bin;" + os.environ.get("PATH", "")),
 }
 WIDTH, HEIGHT = 640, 480
 VIDEO_BYTES = WIDTH * HEIGHT
@@ -174,13 +178,13 @@ def main():
 
     exe = ROOT / "build" / "test_authentic_titlescreen.exe"
     run([GCC, "-std=gnu11", "-m32", "-O0", "-DRECOMP_TRACE",
-         "-I", ROOT / "runtime", "-I", r"E:\msys64\mingw32\include\SDL2",
+         "-I", ROOT / "runtime", "-I", (_GW_MSYS2 + '\\mingw32\\include\\SDL2'),
          "-I", ROOT / "third_party/pcrecomp/runtime/recomp32", "-o", exe,
          ROOT / "tests/test_authentic_titlescreen.c", ROOT / report["output"],
          ROOT / "runtime/recomp_context.c", ROOT / "runtime/gw_interrupts.c",
          ROOT / "runtime/gw_segments.c", ROOT / "runtime/gw_pit8254.c",
          ROOT / "runtime/gw_dos_services.c", ROOT / "runtime/gw_vbe_provider.c",
-         "-L", r"E:\msys64\mingw32\lib", "-lSDL2"])
+         "-L", (_GW_MSYS2 + '\\mingw32\\lib'), "-lSDL2"])
     process = run([exe, PAL, DAT, SETUP_SEED])
     count_line = next((line for line in process.stdout.splitlines()
                        if line.startswith("VBECOUNTS ")), None)

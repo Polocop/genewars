@@ -1,5 +1,7 @@
+$GwRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Msys2 = if ($env:MSYS2_ROOT) { $env:MSYS2_ROOT } else { 'C:\msys64' }
 $ErrorActionPreference = 'SilentlyContinue'
-$c = 'E:\GWRecomp\build\dosboxx_oracle\C'
+$c = "$GwRoot\build\dosboxx_oracle\C"
 if (Test-Path $c) {
   $all = Get-ChildItem $c -Recurse -File
   $tot = ($all | Measure-Object Length -Sum).Sum

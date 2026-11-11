@@ -1,8 +1,11 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 import sys, re
 from pathlib import Path
 from collections import Counter
-root = Path(r"E:\GWRecomp")
+root = Path((_GW_ROOT))
 sys.path.insert(0, str(root/"src")); sys.path.insert(0, str(root/"third_party"/"pcrecomp"))
 from le_loader import load_le
 from tools.disasm.disasm32 import Disassembler

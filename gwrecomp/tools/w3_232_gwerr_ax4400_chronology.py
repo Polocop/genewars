@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Audit only the already-recorded W3-231 GW.ERR and AX=4400 BX=1 events."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 import hashlib
 import json
 import os
 from pathlib import Path
 
-ROOT = Path(r"E:\GWRecomp")
+ROOT = Path((_GW_ROOT))
 W3_231 = ROOT / "evidence/w3_231_gwerr_dispatch_capture.json"
 W3_221 = ROOT / "evidence/original_ax4400_bx1_alignment_w3_221.json"
 W1_074 = ROOT / "evidence/native_address_ax4400_w1_074.json"

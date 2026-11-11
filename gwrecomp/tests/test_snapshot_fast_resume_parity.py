@@ -1,5 +1,10 @@
 """Fast, snapshot-backed parity checks for the 1292 building and spec-2 order paths."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
+_GW_INSTALL=_gw_os.environ.get("GENEWARS_INSTALL_DIR","<set GENEWARS_INSTALL_DIR>")
+_GW_INSTALL_PARENT=str(_GwPath(_GW_INSTALL).parent)
 import hashlib
 import json
 import os
@@ -14,13 +19,13 @@ EXPECTED_LE = "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
 EXE = ROOT / "build" / "test_ifctitle_creature_probe.exe"
 GUEST = ROOT / "work" / "ifctitle_creature_probe_guest.bin"
 MANIFEST = ROOT / "work" / "genewars_1_1_install_manifest_creature_probe.tsv"
-INSTALL = Path(r"<GENEWARS_INSTALL_DIR>")
+INSTALL = Path((_GW_INSTALL))
 SNAP_DIR = ROOT / "snapshots"
 
 
 def run_resume(name: str, snapshot: Path, stop_turn: int, feature_env: dict[str, str]) -> dict:
     env = os.environ.copy()
-    env["PATH"] = r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + env.get("PATH", "")
+    env["PATH"] = (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + env.get("PATH", "")
     env.update({
         "GWRECOMP_IFCLEVEL_CONTINUE": "1",
         "GWRECOMP_IFCLEVEL_NATIVE_GAME_LOOP": "1",

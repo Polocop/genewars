@@ -1,7 +1,11 @@
 """Version 1 deterministic fixed-link runtime frontier snapshot and validator."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import hashlib, json, pathlib, re
 
-CUE_DEFAULT = pathlib.Path(r"E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+CUE_DEFAULT = pathlib.Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
 
 def sha256_bytes(data): return hashlib.sha256(data).hexdigest()
 def sha256_file(path): return sha256_bytes(pathlib.Path(path).read_bytes())

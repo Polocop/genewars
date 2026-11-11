@@ -1,4 +1,7 @@
 """Independent native-C regressions for the DOS virtual-file/AX=4400 path."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -14,7 +17,7 @@ W1_CAPTURE = ROOT / "evidence" / "native_setup_config_reconciled_work1_20261008.
 FIXTURE = ROOT / "tests" / "fixtures" / "w3_067_functional_config.ini"
 TEST_SOURCE = ROOT / "tests" / "test_dos_ax4400_runtime_work2.c"
 TEST_EXE = ROOT / "build" / "test_dos_ax4400_runtime_work2.exe"
-COMPILER = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+COMPILER = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 
 
 def compile_and_run_c_runtime():
@@ -26,7 +29,7 @@ def compile_and_run_c_runtime():
         "TEMP": str(cache),
         "TMP": str(cache),
         "TMPDIR": str(cache),
-        "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+        "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
     }
     command = [
         str(COMPILER), "-std=gnu11", "-m32", "-O0",

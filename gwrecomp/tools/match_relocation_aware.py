@@ -40,26 +40,30 @@ Output:
 Read-only against E:\\GeneWarsFX.  Writes only under E:\\GWRecomp.
 """
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import sys, json, hashlib, struct, pathlib, re
 from dataclasses import dataclass, field, asdict
 
-sys.path.insert(0, r"E:/GeneWarsFX/experiments/dos-re-gw10")
-sys.path.insert(0, r"E:/GWRecomp/tools")
+sys.path.insert(0, (_GW_FX.replace("\\","/") + '/experiments/dos-re-gw10'))
+sys.path.insert(0, (_GW_ROOT.replace("\\","/") + '/tools'))
 from dos_re.le import load_le
 from extract_symbol_corpus import (parse_fixups, le_fixup_header,
                                    parse_loaded_map, parse_disc_map)
 
 import capstone
 
-ROOT   = pathlib.Path(r"E:/GWRecomp")
+ROOT   = pathlib.Path((_GW_ROOT.replace("\\","/")))
 EXE    = ROOT/"evidence/genewars-1_1.exe"
 LOAD   = ROOT/"evidence/genewars-1_1.map"
 DISC   = ROOT/"evidence/disc-MAIN.MAP"
 CORPUS = ROOT/"evidence/symbol_corpus.json"
 
-B2_EXE = pathlib.Path(r"E:/GeneWarsFX/upstream/genewars-re-helpers/bin/gw-genewars-beta2-jul_1996.exe")
-B2_MAP = pathlib.Path(r"E:/GeneWarsFX/upstream/genewars-re-helpers/symbols/gw-genewars-beta2-jul_1996.map")
-BFLIB  = pathlib.Path(r"E:/GeneWarsFX/upstream/genewars/bflibrary/src")
+B2_EXE = pathlib.Path((_GW_FX.replace("\\","/") + '/upstream/genewars-re-helpers/bin/gw-genewars-beta2-jul_1996.exe'))
+B2_MAP = pathlib.Path((_GW_FX.replace("\\","/") + '/upstream/genewars-re-helpers/symbols/gw-genewars-beta2-jul_1996.map'))
+BFLIB  = pathlib.Path((_GW_FX.replace("\\","/") + '/upstream/genewars/bflibrary/src'))
 
 OUT_IDX = ROOT/"evidence/bflib_match_index.json"
 OUT_MD  = ROOT/"reports/L_BFLIB_MATCH.md"

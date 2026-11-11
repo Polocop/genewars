@@ -1,5 +1,15 @@
 """Run original IFCTitle::PlugIn, Update, and Draw in bounded guest state."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_CLANG_X86=_gw_os.environ.get("GWRECOMP_CLANG_X86") or _gw_os.environ.get("GWRECOMP_CLANG_X64") or __import__("shutil").which("clang") or "clang.exe"
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
+_GW_INSTALL=_gw_os.environ.get("GENEWARS_INSTALL_DIR","<set GENEWARS_INSTALL_DIR>")
+_GW_INSTALL_PARENT=str(_GwPath(_GW_INSTALL).parent)
 import hashlib as _hashlib
 
 
@@ -48,7 +58,7 @@ import struct
 
 ROOT=Path(__file__).resolve().parents[1]
 PYTHON=ROOT/".venv"/"Scripts"/"python.exe"
-CC=[Path(r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\bin\clang.exe"),
+CC=[Path((_GW_CLANG_X86)),
     "--target=i686-w64-windows-gnu"]
 TARGET=ROOT/"evidence"/"genewars-1_1.exe"
 EXPECTED_TARGET="2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
@@ -65,7 +75,7 @@ REA_OPTIONS_TRANSITION={
         "setup_game_0x94AC0":"ev_b5cdf5bb4a586ebdaf9611cd9b74a9eee37c3ebc3e2689284cf3f8f01666e484",
         "global_this_xrefs_0x114CA8":"ev_64c53b43f7e67e3810f3a54c03596d5181445093284c52af2cdec8d082fe6e81"},
     "limitation":"Ghidra read_bytes confirms 0x6A3D0 code but has no defined procedure entry there; semantics and boundaries are cross-checked against canonical LE with Capstone and native hooks."}
-INSTALL=Path(r"<GENEWARS_INSTALL_DIR>")
+INSTALL=Path((_GW_INSTALL))
 RESOURCE=INSTALL/"DATA"/"IFTITLE.ANB"
 EXPECTED_RESOURCE="c7d2dfc5d774c69337436249ec74e4d0fa6ae1d06bd5ae785f9f73ee2ac0f707"
 TITLE_SCREEN=INSTALL/"DATA"/"TITLESCR.DAT"
@@ -74,7 +84,7 @@ CONFIG_INI=INSTALL/"CONFIG.INI"
 EXPECTED_CONFIG_INI="e7a4728ff07332c2f04320fda202ac5521818a47453e670f9f2842767ef36798"
 BIOINTRO=INSTALL/"INTRO"/"BIOINTRO.SMK"
 EXPECTED_BIOINTRO="fcd3dcddb1ace394b882f240f8cec3625a57d471be5cd66f1db75e543688a4ef"
-GENEWARS_CUE=Path(r"E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+GENEWARS_CUE=Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
 EXPECTED_GENEWARS_CUE="1d417e3aed625d4f054b51054a1211562a19cd4f712b08e7846613517228a5b5"
 TITLE_RESOURCES={
     "DATA/TITLESCR.DAT":"2548b024fede333b49fc4011541939fc8ce294cb95b48cdb41ed7d0cec54a0b9",
@@ -94,7 +104,7 @@ INTERFACE_RESOURCES={
 }
 REBASES={1:0x1EB000,3:0x1DA000}
 ENV={**os.environ,"PYTHONDONTWRITEBYTECODE":"1",
-     "PATH":r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;"+os.environ.get("PATH","")}
+     "PATH":(_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;')+os.environ.get("PATH","")}
 
 def sha(path:Path)->str: return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -3445,7 +3455,7 @@ def main()->None:
         f"-DMSCDEX_AUDIO_BEGIN={mscdex_audio_begin}u",
         f"-DMSCDEX_AUDIO_END={mscdex_audio_end}u","-I",ROOT/"runtime",
         "-I",ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32",
-        "-I",r"E:\msys64\mingw32\include\SDL2"]
+        "-I",(_GW_MSYS2 + '\\mingw32\\include\\SDL2')]
     if os.environ.get("GW_FULL_TRACE") == "1":
         compile_flags.append("-DGW_FULL_TRACE_BUILD=1")
     # The expanded, instruction-level closure includes one ~4 MiB lifted
@@ -3456,7 +3466,7 @@ def main()->None:
     object_dir=ROOT/"work"/"native_ifctitle_plugin_load_at_objs"
     project_headers=[ROOT/"runtime",
         ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32",
-        Path(r"E:\msys64\mingw32\include\SDL2")]
+        Path((_GW_MSYS2 + '\\mingw32\\include\\SDL2'))]
     sources=[("harness",ROOT/"tests"/"test_ifctitle_plugin_load_at.c"),
         ("lifted-closure",generated),("resource-callback",callback),
         ("recomp-context",ROOT/"runtime"/"recomp_context.c"),
@@ -3473,7 +3483,7 @@ def main()->None:
         compile_cached(source,obj_path,compile_flags,label,project_headers,timeout=300)
         objects.append(obj_path)
     link_command=[*CC,"-m32","-o",exe,*objects,
-        "-L",r"E:\msys64\mingw32\lib","-lSDL2","-lbcrypt","-lm"]
+        "-L",(_GW_MSYS2 + '\\mingw32\\lib'),"-lSDL2","-lbcrypt","-lm"]
     run(link_command,timeout=90,quiet=True)
     if sha(TITLE_SCREEN)!=EXPECTED_TITLE_SCREEN: raise SystemExit("exact-build TITLESCR.DAT hash mismatch")
     prior_draw_sdl=ROOT/"evidence"/"native_ifctitle_draw_sdl.bmp"
@@ -4581,7 +4591,7 @@ def main()->None:
             "output_sha256":output_hash,"independent_rnc1_reference_sha256":expected_decoded,
             "manager_loaded_iftitle_sha256":manager_record_hash,
             "independent_reference":{"kind":"read-only Python RNC1 decoder and CRC check from GeneWarsFX evidence tree",
-                "script":"E:/GeneWarsFX/work/phase2v_rnc1_probe.py","input_sha256":EXPECTED_RESOURCE,
+                "script":(_GW_FX.replace("\\","/") + '/work/phase2v_rnc1_probe.py'),"input_sha256":EXPECTED_RESOURCE,
                 "output_sha256":sha(independent_reference) if independent_reference.exists() else None,
                 "header_unpacked_crc":"0x31de","decoder_unpacked_crc":"0x31de"},
                 "relocated_payload_matches_original":payload_matches,

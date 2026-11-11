@@ -1,5 +1,8 @@
 """Execute lifted x86 integer-width edge cases for multiply/divide/SETcc."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_CLANG_X64=_gw_os.environ.get("GWRECOMP_CLANG_X64") or _gw_os.environ.get("GWRECOMP_CLANG") or __import__("shutil").which("clang") or "clang.exe"
 
 from pathlib import Path
 import subprocess
@@ -99,7 +102,7 @@ static void recomp_flags_out(void) {}
 #define RECOMP_FLAGS_OUT() recomp_flags_out()
 """
     source_text = prelude + "\n".join(functions) + "\nint main(void) {\n" + "\n".join(checks) + "\nreturn 0;\n}\n"
-    clang = Path(r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\clang.exe")
+    clang = Path((_GW_CLANG_X64))
     with tempfile.TemporaryDirectory(prefix="gw-lifter-int-width-") as temp:
         source = Path(temp) / "integer_width.c"
         exe = Path(temp) / "integer_width.exe"

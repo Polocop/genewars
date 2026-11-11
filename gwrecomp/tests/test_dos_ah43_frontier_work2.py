@@ -1,4 +1,7 @@
 """C Runtime check for the measured AH=4300 path and current unknown frontier."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import json
 import os
 import pathlib
@@ -11,13 +14,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tests" / "test_dos_ah43_frontier_work2.c"
 EXE = ROOT / "build" / "test_dos_ah43_frontier_work2.exe"
 W1 = ROOT / "evidence" / "native_setup_config_reconciled_work1_20261008.json"
-CC = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+CC = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 
 
 def run_test_binary():
     cache=ROOT/"cache"; cache.mkdir(exist_ok=True)
     env={**os.environ,"TEMP":str(cache),"TMP":str(cache),"TMPDIR":str(cache),
-         "PATH":r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;"+os.environ.get("PATH","")}
+         "PATH":(_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;')+os.environ.get("PATH","")}
     cmd=[str(CC),"-std=gnu11","-m32","-O0","-I",str(ROOT/"runtime"),
          "-I",str(ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32"),
          str(SOURCE),str(ROOT/"runtime"/"gw_dos_services.c"),

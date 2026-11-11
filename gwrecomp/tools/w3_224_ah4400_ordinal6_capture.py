@@ -1,4 +1,8 @@
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 
 import hashlib
 import argparse
@@ -9,13 +13,13 @@ import subprocess
 import sys
 import time
 
-ROOT = Path(r"E:\GWRecomp")
+ROOT = Path((_GW_ROOT))
 sys.path.insert(0, str(ROOT))
 from tests.test_w3_221_original_ax4400_bx1_alignment import parse_trace
 
 MOUNT = ROOT / "build/dosboxx_oracle/C"
 CONFIG = ROOT / "build/dosboxx_oracle/dosbox-staging.w3-067-functional.conf"
-CUE = Path(r"E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+CUE = Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
 SOURCE = ROOT / "third_party/dosbox-staging-w3-059-instrumented"
 DOSBOX = ROOT / "build/staging-w3-059-exec/Debug/dosbox.exe"
 GUARD = ROOT / "tools/oracle_guard.py"

@@ -1,5 +1,8 @@
 """Validate external GeneWars symbols/layout and execute original title list walker."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 
 import hashlib
 import os
@@ -150,8 +153,8 @@ def main() -> None:
     exe = ROOT / "build" / f"test_{artifact_stem}.exe"
     env = {**os.environ,
            "GW_TITLE_LOADALL_GUEST": str(guest),
-           "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
-    command = [r"E:\msys64\mingw32\bin\gcc.exe", "-std=gnu11", "-m32", "-O0",
+           "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
+    command = [(_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'), "-std=gnu11", "-m32", "-O0",
                "-I", str(ROOT / "runtime"),
                "-I", str(ROOT / "third_party" / "pcrecomp" / "runtime" / "recomp32"),
                "-o", str(exe), str(ROOT / "tests" / "test_authentic_title_loadall.c"),

@@ -1,3 +1,7 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import hashlib
 import unittest
 from pathlib import Path
@@ -6,7 +10,7 @@ from tools.w3_243_profile import resolve_profile_root
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CUE = Path(r"E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+CUE = Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
 EXPECTED_CUE = "1d417e3aed625d4f054b51054a1211562a19cd4f712b08e7846613517228a5b5"
 
 

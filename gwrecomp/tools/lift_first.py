@@ -1,12 +1,15 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 import sys
 from pathlib import Path
-sys.path.insert(0, r'E:\GWRecomp\third_party\recoil-recomp\tools\pcrecomp')
-sys.path.insert(0, r'E:\GWRecomp\src')
+sys.path.insert(0, (_GW_ROOT + '\\third_party\\recoil-recomp\\tools\\pcrecomp'))
+sys.path.insert(0, (_GW_ROOT + '\\src'))
 from le_loader import load_le
 from capstone import Cs,CS_ARCH_X86,CS_MODE_32
 from tools.lift.lift32 import Lifter
 
-root=Path(r'E:\GWRecomp')
+root=Path((_GW_ROOT))
 exe=root/'evidence'/'genewars-1_1.exe'; mp=root/'evidence'/'genewars-1_1.map'
 addr=0x248F0; end=0x248FE; name='W?$ct:InfoRequester$n()_'
 im=load_le(exe)

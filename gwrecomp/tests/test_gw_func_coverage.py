@@ -6,6 +6,9 @@ Passes when the JSON schema, counts, sort order and integrity flags are as expec
 the disabled run writes nothing and prints no summary line.
 """
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_CLANG_X64=_gw_os.environ.get("GWRECOMP_CLANG_X64") or _gw_os.environ.get("GWRECOMP_CLANG") or __import__("shutil").which("clang") or "clang.exe"
 
 import json
 import os
@@ -15,7 +18,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CLANG = Path(r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\clang.exe")
+CLANG = Path((_GW_CLANG_X64))
 
 DRIVER = r"""
 #include <stdint.h>

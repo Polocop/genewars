@@ -1,12 +1,16 @@
 """Copy the read-only GeneWars GAME tree into an isolated virtual C drive."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import hashlib
 import json
 import pathlib
 import shutil
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SOURCE = pathlib.Path(r"E:\GeneWarsFX\work\disc_extracted\GAME")
+SOURCE = pathlib.Path((_GW_FX + '\\work\\disc_extracted\\GAME'))
 DEST_ROOT = ROOT / "build" / "dos_c_reference_20261006"
 DEST_GAME = DEST_ROOT / "GENEWARS"
 MANIFEST = ROOT / "evidence" / "dos_game_install_manifest.json"

@@ -1,10 +1,13 @@
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 import hashlib
 import json
 from pathlib import Path
 
-ROOT = Path(r"E:\GWRecomp")
+ROOT = Path((_GW_ROOT))
 REVISION = "81835b01c54dcb1510bc2d09d0b9aa5a3f9a989f"
 SOURCE = ROOT / "third_party/dosbox-staging-w3-059-instrumented"
 BUILD = ROOT / "build/staging-w3-059-instrumented-refresh-20261009"
@@ -62,7 +65,7 @@ def collect() -> dict:
             "git_status_after": dirty.stdout.splitlines(),
         },
         "configure": {
-            "command": "cmake -S third_party\\dosbox-staging-w3-059-instrumented -B build\\staging-w3-059-instrumented-refresh-20261009 -G \"Visual Studio 17 2022\" -T ClangCL -A x64 -DOPT_HEAVY_DEBUGGER=ON -DOPT_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=\"C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/vcpkg/scripts/buildsystems/vcpkg.cmake\" -DVCPKG_INSTALLED_DIR=\"E:/GWRecomp/build/staging-w3-059/vcpkg_installed\"",
+            "command": ('cmake -S third_party\\dosbox-staging-w3-059-instrumented -B build\\staging-w3-059-instrumented-refresh-20261009 -G "Visual Studio 17 2022" -T ClangCL -A x64 -DOPT_HEAVY_DEBUGGER=ON -DOPT_TESTS=ON -DCMAKE_TOOLCHAIN_FILE="C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_INSTALLED_DIR="' + _GW_ROOT.replace("\\","/") + '/build/staging-w3-059/vcpkg_installed"'),
             "exit_code": 0,
             "cache_sha256": sha256(cache_path),
             "configure_log_sha256": sha256(configure_path),

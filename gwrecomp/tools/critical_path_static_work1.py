@@ -1,4 +1,8 @@
 """Build bounded offline caller/path evidence for W1-047; never launches a guest."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import argparse
 import hashlib
 import json
@@ -41,9 +45,9 @@ def build_evidence(root):
     if any(x.get("target_sha256") != TARGET for x in (orig_div, w3_061, seed, post)):
         raise ValueError("critical evidence does not match the pinned target")
 
-    exact_map = Path(r"E:\GeneWarsFX\upstream\genewars-re-helpers\symbols\gw-genewars-1_1-nov_1996.map")
-    beta_map = Path(r"E:\GeneWarsFX\upstream\genewars-re-helpers\symbols\gw-genewars-beta2-jul_1996-original_bld.map")
-    source_root = Path(r"E:\GeneWarsFX\upstream\genewars")
+    exact_map = Path((_GW_FX + '\\upstream\\genewars-re-helpers\\symbols\\gw-genewars-1_1-nov_1996.map'))
+    beta_map = Path((_GW_FX + '\\upstream\\genewars-re-helpers\\symbols\\gw-genewars-beta2-jul_1996-original_bld.map'))
+    source_root = Path((_GW_FX + '\\upstream\\genewars'))
     source_files = {
         "main": source_root / "bio/src/pcmain.cpp",
         "game": source_root / "bio/src/game.cpp",

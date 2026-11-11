@@ -39,12 +39,16 @@ A symbol's function body is [va, next_symbol_va) within the code object; the las
 symbol in the code object runs to the object's end. This mirrors how the works
 already delimit functions (see map_overlap_ownership_work1 / dependency_closure_va_corrected).
 """
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import sys, struct, json, hashlib, pathlib
 
-sys.path.insert(0, r"E:/GeneWarsFX/experiments/dos-re-gw10")
+sys.path.insert(0, (_GW_FX.replace("\\","/") + '/experiments/dos-re-gw10'))
 from dos_re.le import load_le  # read-only helper for the flat image + objects
 
-ROOT   = pathlib.Path(r"E:/GWRecomp")
+ROOT   = pathlib.Path((_GW_ROOT.replace("\\","/")))
 EXE    = ROOT/"evidence/genewars-1_1.exe"
 LOAD   = ROOT/"evidence/genewars-1_1.map"
 DISC   = ROOT/"evidence/disc-MAIN.MAP"

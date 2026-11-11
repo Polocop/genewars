@@ -1,3 +1,6 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[2])
 import argparse, csv, hashlib, json, struct
 from pathlib import Path
 
@@ -17,7 +20,7 @@ for name in ['game-root','output-dir','snapshot','render-scenario']: ap.add_argu
 for name in ['camera-x-q8','camera-y-q8','scale-x','scale-y','height-scale','planet-class']: ap.add_argument('--'+name,type=int,required=True)
 a=ap.parse_args(); root=Path(a.game_root); out=Path(a.output_dir)
 level=root/'LEVELS'/'CONQ001.DAT'; render_level=Path(a.render_scenario); pal=root/'DATA'/'MAIN.PAL'; bank=root/'DATA'/f'B32{"ABCD"[a.planet_class]}.DAT'
-decoded=Path(r'E:\GWRecomp\work\terrain_renderer\input')/f'B32{"ABCD"[a.planet_class]}.raw'
+decoded=Path((_GW_ROOT + '\\work\\terrain_renderer\\input'))/f'B32{"ABCD"[a.planet_class]}.raw'
 ld=level.read_bytes(); rd=render_level.read_bytes(); pd=pal.read_bytes(); bd=decoded.read_bytes()
 if len(ld)!=343958 or struct.unpack_from('<I',ld)[0]!=0x55336 or len(rd)!=len(ld) or struct.unpack_from('<I',rd)[0]!=0x55336 or len(pd)!=768 or len(bd)!=163840: raise SystemExit('source dimensions/signature mismatch')
 o=0x355E; st=14; pos=o+(38*128+95)*st
@@ -82,9 +85,9 @@ for r in rows(out/'conq001_854x480.cells.csv'):
 report={'schema':'gwrecomp.standalone-terrain-renderer/v1','result':'snapshot_backed_terrain_rendered_with_additional_widescreen_cells','scope':'offline independent renderer; no LE execution or simulation changes',
  'implementation':{'renderer_source':'E:\\GWRecomp\\tools\\terrain_renderer\\gw_terrain_data_renderer.cpp','renderer_exe':'E:\\GWRecomp\\work\\terrain_renderer\\gw_terrain_data_renderer.exe',
   'snapshot_extractor':'E:\\GWRecomp\\tools\\terrain_renderer\\prepare_snapshot_scenario.py','runner':'E:\\GWRecomp\\tools\\terrain_renderer\\run_terrain_renderer.ps1','validator':'E:\\GWRecomp\\tools\\terrain_renderer\\validate_terrain_renderer.py',
-  'renderer_source_sha256':sha(Path(r'E:\GWRecomp\tools\terrain_renderer\gw_terrain_data_renderer.cpp')),'renderer_exe_sha256':sha(Path(r'E:\GWRecomp\work\terrain_renderer\gw_terrain_data_renderer.exe')),
-  'snapshot_extractor_sha256':sha(Path(r'E:\GWRecomp\tools\terrain_renderer\prepare_snapshot_scenario.py')),'runner_sha256':sha(Path(r'E:\GWRecomp\tools\terrain_renderer\run_terrain_renderer.ps1')),
-  'validator_sha256':sha(Path(r'E:\GWRecomp\tools\terrain_renderer\validate_terrain_renderer.py'))},
+  'renderer_source_sha256':sha(Path((_GW_ROOT + '\\tools\\terrain_renderer\\gw_terrain_data_renderer.cpp'))),'renderer_exe_sha256':sha(Path((_GW_ROOT + '\\work\\terrain_renderer\\gw_terrain_data_renderer.exe'))),
+  'snapshot_extractor_sha256':sha(Path((_GW_ROOT + '\\tools\\terrain_renderer\\prepare_snapshot_scenario.py'))),'runner_sha256':sha(Path((_GW_ROOT + '\\tools\\terrain_renderer\\run_terrain_renderer.ps1'))),
+  'validator_sha256':sha(Path((_GW_ROOT + '\\tools\\terrain_renderer\\validate_terrain_renderer.py')))},
  'inputs':{'scenario':{'path':str(level),'bytes':len(ld),'sha256':sha(level),'world_begin':'0x355E','world_records':16384,'record_stride':14,'world_end':'0x3B55E'},
  'render_scenario':{'path':str(render_level),'sha256':sha(render_level),'world_bytes_from_snapshot':True},
  'B32':{'path':str(bank),'compressed_sha256':sha(bank),'decoded_path':str(decoded),'decoded_bytes':len(bd),'decoded_sha256':sha(decoded),'atlas_layout':'8x20 blocks, 32x32 indexed; row pitch 256 bytes','sample_formula':'(block//8)*0x2000+(block%8)*32+v*256+u'},
@@ -93,7 +96,7 @@ report={'schema':'gwrecomp.standalone-terrain-renderer/v1','result':'snapshot_ba
  'camera':{'snapshot':str(snap_path),'turn':snap_turn,'mapdisplay_center_q8':camera_xy,'camera_evidence':'evidence/true_widescreen_panorama_multipass_probe.json','projection_equation_shape':'screenX=cx+((dx-dy)*scaleX)/256; screenY=cy+((dx+dy)*scaleY)/256-(height>>6)*heightScale','scale':[a.scale_x,a.scale_y,a.height_scale],'numeric_scale_status':'experimental; live camera center is measured, but the renderer scales and height scale are not an authentic frame calibration'},
  'renderer':{'logical_cell_source':'stored scenario byte +4 block ID, signed word +2 height; byte +5 retained in CSV','tile_footprint':'32x16 diamond, top face only','texture':'original decoded B32 bank; 256-wide atlas rows','draw_order':'stable projected-y, projected-x, world-y, world-x','known_gaps':['byte+5 orientation geometry transform is recorded but not applied','exact original triangle UV/side-face topology is unresolved','output is authentic resource/map data in an experimental isometric projection, not pixel-equivalent to original']},
  'views':views,'comparison':{'4_3':'640x480','wide':'854x480','same_camera_and_pixel_scale':True,'center_alignment_shift':shift,'common_pixels_equal':eq,'common_pixels':640*480,'exact_overlap_parity':eq==640*480,'side_bands':bands,'additional_world_cells':extra},
- 'preservation':{'canonical_LE_modified':False,'canonical_LE_sha256':sha(Path(r'E:\GWRecomp\evidence\genewars-1_1.exe')),
+ 'preservation':{'canonical_LE_modified':False,'canonical_LE_sha256':sha(Path((_GW_ROOT + '\\evidence\\genewars-1_1.exe'))),
   'original_scenario_modified':False,'original_scenario_sha256':sha(level),'original_B32_modified':False,'original_B32_sha256':sha(bank),
   'original_palette_modified':False,'original_palette_sha256':sha(pal),'snapshot_modified':False,'snapshot_sha256':sha(snap_path),
   'GeneWarsFX_modified':False,'note':'Renderer and extraction pipeline only read the original LE/resources/snapshot; the temporary CONQ overlay and outputs are under E:\\GWRecomp\\work and evidence.'}}

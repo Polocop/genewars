@@ -14,6 +14,9 @@ Two measurements, both bounded and both independent of game state:
 The report is written to run-evidence/observer_coverage_selftest_report.json.
 Labels: "observed" = measured here; "inferred" = read from code, not executed.
 """
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import datetime
 import hashlib
 import json
@@ -24,7 +27,7 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-GCC = r"E:\msys64\mingw32\bin\gcc.exe"
+GCC = (_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe')
 CLOSURE = ROOT / "work" / "ifctitle_creature_probe_closure.c"
 REPLAY_LOG = (ROOT / "run-evidence" / "mission" / "20261028-005647-G-GP-002-93ed"
               / "replay_725_730.stderr.log")
@@ -300,7 +303,7 @@ def replay_crosscheck():
 def main():
     env = {**os.environ,
            "TEMP": str(ROOT / "cache"), "TMP": str(ROOT / "cache"), "TMPDIR": str(ROOT / "cache"),
-           "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+           "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
            "GWRECOMP_WRITE_CENSUS": "1"}
     exe = build_selftest(env)
     measured, census_rows = run_selftest(exe, env)

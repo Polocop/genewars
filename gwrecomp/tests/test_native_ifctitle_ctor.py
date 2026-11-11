@@ -1,5 +1,8 @@
 """Execute original GeneWars 1.1 static initializer 0x830F0 in a bounded closure."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib as _hashlib
 
 
@@ -46,7 +49,7 @@ import sys
 
 ROOT=Path(__file__).resolve().parents[1]
 PYTHON=ROOT/".venv"/"Scripts"/"python.exe"
-GCC=Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC=Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 TARGET=ROOT/"evidence"/"genewars-1_1.exe"
 EXPECTED_TARGET="2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
 REBASES={1:0x1EB000,3:0x1DA000}
@@ -62,7 +65,7 @@ INDIRECT_FIXUPS={
     0x112145:0x95890, 0x112131:0x958E0,
 }
 ENV={**os.environ,"PYTHONDONTWRITEBYTECODE":"1",
-     "PATH":r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;"+os.environ.get("PATH","")}
+     "PATH":(_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;')+os.environ.get("PATH","")}
 
 def run(command:list[object],timeout:int=45,quiet:bool=False)->subprocess.CompletedProcess[str]:
     p=subprocess.run([str(x) for x in command],cwd=ROOT,env=ENV,text=True,

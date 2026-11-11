@@ -1,3 +1,6 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -23,7 +26,7 @@ def main():
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["TEMP"] = env["TMP"] = env["TMPDIR"] = str(ROOT / "build" / "tmp")
-    env["PATH"] = r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + env.get("PATH", "")
+    env["PATH"] = (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + env.get("PATH", "")
     (ROOT / "build" / "tmp").mkdir(exist_ok=True)
 
     table = json.loads(TABLE.read_text(encoding="utf-8"))
@@ -37,7 +40,7 @@ def main():
     # legacy body without a RECOMP_ENTER marker); the marker set is 1,566 VAs.
     assert metrics["lifted_functions_in_c"] == 1567 and len(entries) == 1566
 
-    gcc = r"E:\msys64\mingw32\bin\gcc.exe"
+    gcc = (_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe')
     hdr = str(ROOT / "third_party" / "pcrecomp" / "runtime" / "recomp32")
     obj = ROOT / "build" / "recomp_282.o"
     link_obj = ROOT / "build" / "recomp_282_icall_linkcheck.o"

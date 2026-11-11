@@ -1,4 +1,7 @@
 """Run real lifted start through the native DOS AH=30h callback."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import json
 import os
 import hashlib
@@ -12,7 +15,7 @@ BUILD = ROOT / "build"
 SOURCE = BUILD / "entry_path_closure.c"
 FIXTURE = BUILD / "native_dos_callback_fixture.c"
 EXE = BUILD / "test_native_dos_callback.exe"
-GCC = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 
 
 def extract_function(text: str, name: str) -> str:
@@ -42,7 +45,7 @@ def main() -> None:
         **os.environ,
         "TEMP": str(ROOT / "cache"), "TMP": str(ROOT / "cache"),
         "TMPDIR": str(ROOT / "cache"),
-        "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+        "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
     }
     command = [str(GCC), "-std=gnu11", "-m32", "-O0",
         "-I", str(ROOT / "runtime"),

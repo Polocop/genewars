@@ -1,4 +1,7 @@
 """Regenerate/route the entry closure, then compile its complete x86-32 unit."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -31,7 +34,7 @@ def main():
         **os.environ,
         "PYTHONDONTWRITEBYTECODE": "1",
         "TEMP": str(task_temp), "TMP": str(task_temp), "TMPDIR": str(task_temp),
-        "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+        "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
         "PYTHONPATH": str(ROOT / "third_party" / "python") + os.pathsep + os.environ.get("PYTHONPATH", ""),
     }
     for helper in ("refresh_entry_start.py", "route_lifted_interrupts.py"):
@@ -55,14 +58,14 @@ def main():
     if "UNIMPLEMENTED: int" in source:
         raise AssertionError("entry closure contains an unhandled INT no-op")
     command = [
-        r"E:\msys64\mingw32\bin\gcc.exe", "-std=gnu11", "-m32", "-O0", "-c",
+        (_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'), "-std=gnu11", "-m32", "-O0", "-c",
         "-I", str(ROOT / "runtime"),
         "-I", str(ROOT / "third_party" / "pcrecomp" / "runtime" / "recomp32"),
         str(SOURCE), "-o", str(OBJECT),
     ]
     run(command, env)
     nm = subprocess.run(
-        [r"E:\msys64\mingw32\bin\nm.exe", "-u", str(OBJECT)],
+        [(_GW_MSYS2 + '\\mingw32\\bin\\nm.exe'), "-u", str(OBJECT)],
         cwd=ROOT, env=env, text=True, capture_output=True,
     )
     if nm.returncode:

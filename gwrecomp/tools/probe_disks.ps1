@@ -1,3 +1,5 @@
+$GwRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Msys2 = if ($env:MSYS2_ROOT) { $env:MSYS2_ROOT } else { 'C:\msys64' }
 $ErrorActionPreference = 'Stop'
 Get-Volume -DriveLetter D, E | ForEach-Object {
   [PSCustomObject]@{
@@ -9,7 +11,7 @@ Get-Volume -DriveLetter D, E | ForEach-Object {
   }
 } | Format-List
 Write-Output '--- VHD/VHDX presence ---'
-Get-ChildItem -Path E:\GWRecomp, D:\ -Filter *.vhdx -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length | Format-List
+Get-ChildItem -Path $GwRoot, D:\ -Filter *.vhdx -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length | Format-List
 Write-Output '--- temp leftovers (large files >100MB on D:) ---'
 Get-ChildItem -Path D:\ -Filter *.vhd* -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, @{n='MB';e={[math]::Round($_.Length/1MB,1)}} | Format-List
 Write-Output '--- running DOSBox/oracle procs ---'

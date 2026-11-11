@@ -1,4 +1,8 @@
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import json
 import hashlib
 from pathlib import Path
@@ -46,10 +50,10 @@ def build_result(trace_path:Path,preflight:dict,guard:dict):
 def run_capture():
     import os, subprocess, sys
     from pathlib import Path
-    root=Path(r'E:\GWRecomp')
+    root=Path((_GW_ROOT))
     mount=root/'build/dosboxx_oracle/C'; fixture=mount/'GENEWARS/GW.EXE'
     config=root/'build/dosboxx_oracle/dosbox-staging.w3-067-functional.conf'
-    cue=Path(r'E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue')
+    cue=Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
     dosbox=root/'build/staging-w3-059-exec/Debug/dosbox.exe'; guard_py=root/'tools/oracle_guard.py'
     source=root/'third_party/dosbox-staging-w3-059-instrumented'; cpu_source=source/'src/cpu/cpu.cpp'
     trace=mount/'W3_228_GWERR_CALLER_20261009_01.jsonl'; run_id='w3-228-gwerr-caller-20261009-01'
@@ -98,7 +102,7 @@ def run_capture():
 def audit_existing():
     import json
     from pathlib import Path
-    root=Path(r'E:\GWRecomp')
+    root=Path((_GW_ROOT))
     out=root/'evidence/w3_228_gwerr_caller_capture.json'
     report=root/'reports/coordination/w3_228_gwerr_caller_capture.md'
     prior=json.loads(out.read_text(encoding='utf-8'))
@@ -106,7 +110,7 @@ def audit_existing():
     result=build_result(Path(pre['trace']),pre,guard)
     result['guard_returncode']=prior.get('guard_returncode')
     result['scope'].update(prior.get('scope',{}))
-    gwerr=Path(r'E:\GWRecomp\build\dosboxx_oracle\C\GENEWARS\GW.ERR')
+    gwerr=Path((_GW_ROOT + '\\build\\dosboxx_oracle\\C\\GENEWARS\\GW.ERR'))
     result['post_run_GW_ERR']={'exists':gwerr.exists(),'size_bytes':gwerr.stat().st_size if gwerr.exists() else None,'sha256':hashlib.sha256(gwerr.read_bytes()).hexdigest() if gwerr.exists() and gwerr.stat().st_size<=MAX_TRACE_BYTES else None}
     result['frontier_interpretation']='The run reached measured video framebuffer assignment checkpoints, with the sampled pointer global changing to 0xA0000, and later reached W3_134_LBMEMORYALLOC_RETURN. No framebuffer pixel payload was sampled; this is not proof of a displayed first frame.'
     out.write_text(json.dumps(result,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')

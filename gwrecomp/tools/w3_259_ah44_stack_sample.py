@@ -1,5 +1,14 @@
 """Reducer and one-run protected capture for W3-259."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_VS=_gw_os.path.join(_gw_os.environ.get("ProgramFiles(x86)",r"C:\Program Files (x86)"),"Microsoft Visual Studio","2022","BuildTools")
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
+_GW_INSTALL=_gw_os.environ.get("GENEWARS_INSTALL_DIR","<set GENEWARS_INSTALL_DIR>")
+_GW_INSTALL_PARENT=str(_GwPath(_GW_INSTALL).parent)
 
 import hashlib
 import argparse
@@ -10,7 +19,7 @@ import subprocess
 import sys
 from typing import Any
 
-ROOT = Path(r"E:\GWRecomp")
+ROOT = Path((_GW_ROOT))
 REVISION = "81835b01c54dcb1510bc2d09d0b9aa5a3f9a989f"
 TARGET_SHA256 = "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
 TARGET_SIZE = 1_251_658
@@ -144,8 +153,8 @@ def build_manifest() -> dict[str, Any]:
             "generator": cache_values.get("CMAKE_GENERATOR"),
             "toolset": cache_values.get("CMAKE_GENERATOR_TOOLSET"),
             "source_directory": cache_values.get("CMAKE_HOME_DIRECTORY"),
-            "c_compiler": r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\clang-cl.exe",
-            "cxx_compiler": r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\clang-cl.exe",
+            "c_compiler": (_GW_VS + '\\VC\\Tools\\Llvm\\x64\\bin\\clang-cl.exe'),
+            "cxx_compiler": (_GW_VS + '\\VC\\Tools\\Llvm\\x64\\bin\\clang-cl.exe'),
             "compiler_version": "Clang 19.1.5 with MSVC-like command-line",
             "debugger": cache_values.get("OPT_DEBUGGER"),
             "heavy_debugger": cache_values.get("OPT_HEAVY_DEBUGGER"),
@@ -227,9 +236,9 @@ def verify_sandbox() -> dict[str, Any]:
 
 def fixture_preflight() -> dict[str, Any]:
     target = MOUNT / "GENEWARS/GW.EXE"
-    cue = Path(r"E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+    cue = Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
     address = MOUNT / "ADDRESS.TXT"
-    source_address = Path(r"<GENEWARS_HDD_ROOT>\ADDRESS.TXT")
+    source_address = Path((_GW_INSTALL_PARENT + '\\ADDRESS.TXT'))
     if not target.is_file() or target.stat().st_size != TARGET_SIZE or sha256(target) != TARGET_SHA256:
         raise RuntimeError("GW.EXE fixture identity mismatch")
     if not CONFIG.is_file() or sha256(CONFIG) != CONFIG_SHA256:
@@ -325,7 +334,7 @@ def main() -> int:
     outcome = invoke_guard()
     cue = Path(fixture["cue_path"])
     source_address = Path(fixture["source_address_path"])
-    game_source = Path(r"<GENEWARS_INSTALL_DIR>\GW.EXE")
+    game_source = Path((_GW_INSTALL + '\\GW.EXE'))
     postrun_integrity = {
         "cue_sha256_after": sha256(cue),
         "cue_unchanged": sha256(cue) == fixture["cue_sha256"],
@@ -368,7 +377,7 @@ if __name__ == "__main__":
         if "postrun_integrity" not in data:
             cue = Path(fixture["cue_path"])
             source_address = Path(fixture["source_address_path"])
-            game_source = Path(r"<GENEWARS_INSTALL_DIR>\GW.EXE")
+            game_source = Path((_GW_INSTALL + '\\GW.EXE'))
             data["postrun_integrity"] = {
                 "cue_sha256_after": sha256(cue),
                 "cue_unchanged": sha256(cue) == fixture["cue_sha256"],

@@ -1,7 +1,10 @@
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 import hashlib, json, re
 from pathlib import Path
-ROOT=Path(r'E:\GWRecomp')
+ROOT=Path((_GW_ROOT))
 ORIGINAL=ROOT/'evidence/original_ax4400_bx1_alignment_w3_221.json'
 TRACE=ROOT/'build/dosboxx_oracle/C/W3_221_AX4400_BX1_ALIGNMENT_20261009_01.jsonl'
 NATIVE=ROOT/'evidence/native_address_ax4400_w1_074.json'

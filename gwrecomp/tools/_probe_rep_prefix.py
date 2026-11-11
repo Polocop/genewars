@@ -1,7 +1,10 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 # probe_rep_prefix.py — discriminating test for the P05/P06 false negative
 import sys, re
-root = r"E:\GWRecomp"
+root = (_GW_ROOT)
 sys.path.insert(0, root + r"\src")
 sys.path.insert(0, root + r"\third_party\pcrecomp")
 from le_loader import load_le

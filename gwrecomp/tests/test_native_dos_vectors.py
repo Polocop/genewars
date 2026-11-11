@@ -1,4 +1,7 @@
 """Build and run the native DOS vector service harness."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -8,14 +11,14 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
 EXE = BUILD / "test_native_dos_vectors.exe"
-GCC = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 TARGET = ROOT / "evidence" / "genewars-1_1.exe"
 
 def main():
     BUILD.mkdir(exist_ok=True)
     env = {**os.environ, "TEMP": str(ROOT / "cache"), "TMP": str(ROOT / "cache"),
            "TMPDIR": str(ROOT / "cache"),
-           "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
+           "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
     command = [str(GCC), "-std=gnu11", "-m32", "-O0",
         "-I", str(ROOT / "runtime"),
         "-I", str(ROOT / "third_party" / "pcrecomp" / "runtime" / "recomp32"),

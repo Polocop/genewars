@@ -1,4 +1,7 @@
 """Generate real lifted string operations and verify segment/range guards natively."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -52,9 +55,9 @@ def main():
     cache = ROOT / "cache"; cache.mkdir(exist_ok=True)
     source = generate_lifts()
     env = {**os.environ, "TEMP": str(cache), "TMP": str(cache), "TMPDIR": str(cache),
-           "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
+           "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
     exe = ROOT / "build" / "test_segment_string_bounds.exe"
-    command = [r"E:\msys64\mingw32\bin\gcc.exe", "-std=gnu11", "-m32", "-O0", "-w",
+    command = [(_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'), "-std=gnu11", "-m32", "-O0", "-w",
                "-I", str(ROOT / "third_party" / "pcrecomp" / "runtime" / "recomp32"),
                "-I", str(ROOT / "build"),
                "-o", str(exe), str(ROOT / "tests" / "test_segment_string_bounds.c"),

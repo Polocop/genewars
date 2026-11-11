@@ -1,11 +1,14 @@
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 import hashlib
 import json
 import re
 from pathlib import Path
 
-ROOT = Path(r"E:\GWRecomp")
+ROOT = Path((_GW_ROOT))
 EVIDENCE = ROOT / "evidence/w3_224_ah4400_ordinal6_caller.json"
 TRACE = ROOT / "build/dosboxx_oracle/C/W3_224_AH4400_ORDINAL6_20261009_01.jsonl"
 SOURCE = ROOT / "third_party/dosbox-staging-w3-059-instrumented/src/cpu/core_dyn_x86.cpp"

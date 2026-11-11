@@ -24,6 +24,10 @@ Artifacts: evidence/disk_guard_test_<name>.json (one per test) + a summary.
 Run:  E:\\GWRecomp\\.venv\\Scripts\\python.exe E:\\GWRecomp\\tests\\test_oracle_guard.py
 """
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import base64
 import json
 import os
@@ -45,7 +49,7 @@ PY = sys.executable
 SCRATCH = Path(os.environ.get("LDG_SCRATCH",
           r"E:\AI\hermes\profiles\ninfer\cache\scratch\ldg_tests"))
 EV = ROOT / "evidence" / "oracle_runs"
-GENEWARSFX = r"E:\GeneWarsFX"
+GENEWARSFX = (_GW_FX)
 os.environ.setdefault("GWRECOMP_GENEWARSFX", GENEWARSFX)
 
 RESULTS = []

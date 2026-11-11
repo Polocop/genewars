@@ -70,7 +70,7 @@ def _in_blocked_dir(q: pathlib.Path) -> bool:
                 return True
     except ValueError:
         pass
-    # outside the repo entirely (e.g. under E:\GeneWarsFX) => block
+    # outside the repo entirely (e.g. under <GENEWARSFX_ROOT>) => block
     if GENEWARSFX.exists():
         try:
             q.relative_to(GENEWARSFX.resolve())

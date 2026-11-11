@@ -16,9 +16,12 @@ Output:
     validation status vs LE object + fixups + function bounds,
     and whether it matches the W1-resolved destination.
 """
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 import json, sys, os, glob
 
-ROOT = r"E:\GWRecomp"
+ROOT = (_GW_ROOT)
 EV = os.path.join(ROOT, "evidence")
 
 def load_json(p):

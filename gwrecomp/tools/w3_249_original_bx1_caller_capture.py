@@ -1,5 +1,11 @@
 """One bounded original caller capture, launched only by oracle_guard."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
+_GW_INSTALL=_gw_os.environ.get("GENEWARS_INSTALL_DIR","<set GENEWARS_INSTALL_DIR>")
+_GW_INSTALL_PARENT=str(_GwPath(_GW_INSTALL).parent)
 
 import hashlib
 import json
@@ -19,9 +25,9 @@ CONFIG = ROOT / "build/dosboxx_oracle/dosbox-staging.w3-067-functional.conf"
 DOSBOX = ROOT / "build/staging-w3-249-exec/Debug/dosbox.exe"
 SOURCE = ROOT / "third_party/dosbox-staging-w3-059-instrumented"
 GUARD = ROOT / "tools/oracle_guard.py"
-CUE = Path(r"E:\GeneWarsFX\evidence\original_disc\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+CUE = Path((_GW_FX + '\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
 ADDRESS = MOUNT / "ADDRESS.TXT"
-SOURCE_ADDRESS = Path(r"<GENEWARS_HDD_ROOT>\ADDRESS.TXT")
+SOURCE_ADDRESS = Path((_GW_INSTALL_PARENT + '\\ADDRESS.TXT'))
 TRACE = MOUNT / "W3_249_ISATTY_CALLERS_20261009_01.jsonl"
 OUTPUT = ROOT / "evidence/w3_249_original_bx1_caller_capture.json"
 RUN_ID = "w3-249-original-isatty-caller-20261009-01"

@@ -20,6 +20,10 @@ Method (per cd-image-iso9660 skill — standard reader, never hand-rolled):
 Read-only w.r.t. E:\\GeneWarsFX (hashes it to prove unchanged). No GUI. Does NOT
 implement the MSCDEX runtime handler (that is W2-MSCDEXRESP/WORK2).
 """
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import os, re, json, hashlib, struct, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,7 +32,7 @@ REP = os.path.join(ROOT, "reports")
 WORK = os.path.join(ROOT, "build", "cdrom")
 os.makedirs(WORK, exist_ok=True)
 
-REF = r"E:\GeneWarsFX"
+REF = (_GW_FX)
 CUE = os.path.join(REF, "Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
 
 def log(m): print(m, flush=True)
@@ -242,7 +246,7 @@ def main():
         "source_reference": {
             "path": data_bin,
             "cue": CUE,
-            "read_only_reference": "E:/GeneWarsFX",
+            "read_only_reference": (_GW_FX.replace("\\","/")),
             "original_bin_sha256": orig_sha,
             "original_unchanged_after": ref_unchanged,
         },

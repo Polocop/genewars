@@ -1,4 +1,7 @@
 """Compile current lifter output against the real per-context PIT Runtime."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -117,9 +120,9 @@ class GeneratedPortIORuntimeIntegration(unittest.TestCase):
             **os.environ,
             "PYTHONDONTWRITEBYTECODE": "1",
             "TEMP": str(temp), "TMP": str(temp), "TMPDIR": str(temp),
-            "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+            "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
         }
-        gcc = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+        gcc = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
         command = [
             str(gcc), "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-m32", "-O0",
             "-I", str(ROOT / "runtime"),

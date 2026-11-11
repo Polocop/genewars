@@ -1,8 +1,11 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 from pathlib import Path
 from dos_re.le import load_le
 from capstone import Cs,CS_ARCH_X86,CS_MODE_32
-im=load_le(Path(r'E:\GWRecomp\evidence\genewars-1_1.exe')); rows=[]
-for l in Path(r'E:\GWRecomp\evidence\genewars-1_1.map').read_text(errors='replace').splitlines():
+im=load_le(Path((_GW_ROOT + '\\evidence\\genewars-1_1.exe'))); rows=[]
+for l in Path((_GW_ROOT + '\\evidence\\genewars-1_1.map')).read_text(errors='replace').splitlines():
  s=l.split()
  if len(s)>=2 and s[0].startswith('0001:'):
   try:rows.append((int(s[0].split(':')[1],16),s[1]))

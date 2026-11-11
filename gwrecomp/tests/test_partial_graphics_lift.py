@@ -1,4 +1,7 @@
 """Generate and execute a bounded authentic GeneWars 1.1 graphics helper."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib
 import json
 import os
@@ -9,11 +12,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
-GCC = Path(r"E:\msys64\mingw32\bin\gcc.exe")
+GCC = Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
 TARGET = ROOT / "evidence" / "genewars-1_1.exe"
 ENV = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "TEMP": str(ROOT / "cache"),
        "TMP": str(ROOT / "cache"), "TMPDIR": str(ROOT / "cache"),
-       "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", "")}
+       "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", "")}
 
 
 def run(cmd, expect=0):

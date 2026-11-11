@@ -1,4 +1,7 @@
 """Focused C-provider regression for DPMI linear lock/unlock calls."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import os
 import pathlib
 import subprocess
@@ -9,13 +12,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class DpmiLinearLockTests(unittest.TestCase):
     def test_no_paging_host_lock_contract(self):
-        compiler = pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe")
+        compiler = pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe'))
         executable = ROOT / "build" / "test_dpmi_linear_lock.exe"
         env = {
             **os.environ,
             "TEMP": str(ROOT / "cache"), "TMP": str(ROOT / "cache"),
             "TMPDIR": str(ROOT / "cache"),
-            "PATH": r"E:\msys64\mingw32\bin;E:\msys64\usr\bin;" + os.environ.get("PATH", ""),
+            "PATH": (_GW_MSYS2 + '\\mingw32\\bin;' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
         }
         command = [str(compiler), "-std=gnu11", "-m32", "-O0",
                    "-I", str(ROOT / "runtime"),

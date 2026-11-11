@@ -1,4 +1,7 @@
 """Boundary-gated, rebase-aware differential test for new call-free MAIN.MAP CFGs."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import json, pathlib, re, subprocess, sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src")); sys.path.insert(0, str(ROOT / "third_party" / "pcrecomp"))
@@ -135,7 +138,7 @@ if "--generate-only" in sys.argv:
     import hashlib
     print(json.dumps({"generated_test":str(test_path.relative_to(ROOT)),"lift_source_sha256":hashlib.sha256((ROOT/"build"/"recomp_cfg_leaf_work3.c").read_bytes()).hexdigest(),"functions":N}))
     raise SystemExit(0)
-compiler=pathlib.Path(r"E:\msys64\mingw32\bin\gcc.exe"); exe=ROOT/"build"/"test_recomp_cfg_leaf_work3.exe"; hdr=ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32"
+compiler=pathlib.Path((_GW_MSYS2 + '\\mingw32\\bin\\gcc.exe')); exe=ROOT/"build"/"test_recomp_cfg_leaf_work3.exe"; hdr=ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32"
 cmd=[str(compiler),"-std=gnu11","-m32","-O0","-w","-I",str(hdr),"-I",str(ROOT/"build"),"-o",str(exe),str(test_path),str(ROOT/"runtime"/"recomp_x87.c")]
 cp=subprocess.run(cmd,capture_output=True,text=True,cwd=ROOT)
 if cp.returncode: raise SystemExit("compile failed:\n"+cp.stderr[-6000:])

@@ -1,10 +1,13 @@
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 
 import hashlib
 import json
 from pathlib import Path
 
-ROOT = Path(r"E:\GWRecomp")
+ROOT = Path((_GW_ROOT))
 CAPTURE = ROOT / "evidence/w3_224_ah4400_ordinal6_caller.json"
 AUDIT225 = ROOT / "evidence/w3_225_ah4400_static_audit.json"
 IMAGE = ROOT / "evidence/genewars-1_1.exe"
