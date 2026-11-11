@@ -77,7 +77,7 @@ At that point the remaining blocker for independent Level B/C was `SAVE0.SAV`, a
 | Original game without a save (replay with the original OPTIONS plug-in) | probes `SAVE0.SAV` twice, DOS file-not-found, reads nothing; the 14 probes of slots 1-7 unchanged |
 | Replay screen captures, 16 files | 14 identical; 2 differ in a few pixels (below) |
 | Replay mode as a whole | **not completed in either profile** outside the maintainers' machine: it needs `evidence/genewars_11_titlescreen_dac6.raw` (oracle capture, unpublished) and a capture file from an earlier run; the pre-change driver stops at the same points |
-| Tests | `tests/test_save_profiles.py` (9 self-contained tests) |
+| Tests | `tests/test_save_profiles.py` (9 self-contained tests; the suite is now 467 modules: 95 pass, 358 blocked, 14 known failures, 0 unexpected, measured on the fresh clone) |
 
 Residual differences between the profiles, replay captures: the OPTIONS screen differs in 38 of 307,200 pixels (a 5x11 area) and the post-confirmation screen in 235 (a 14x31 area at the bottom left, where the specialist portrait is drawn). Two runs of the same profile give byte-identical captures (0 of 12 differ), so these two differences are deterministic and caused by the profile. In the OPTIONS screen the reference-save run draws a dark 4x11 marker that the no-saves run does not (a save-slot indicator, judging from the pixels); the cause of the portrait-area difference was not determined. Nothing was forced to match.
 

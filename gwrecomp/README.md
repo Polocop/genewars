@@ -45,7 +45,7 @@ Your own Gene Wars **1.1 (Europe)** install folder (11 files byte-identical to t
 
 ## Tests
 
-`scripts\test.ps1` classifies every module. After `setup.ps1` in a clean clone (no game files): of 466 modules, **94 pass**, **358 are blocked** by a named missing input (not failures), **14 are known failures** (triaged; they also fail with all private inputs present) and **0 fail unexpectedly**. See [docs/TEST_STATUS.md](docs/TEST_STATUS.md) and `scripts/test_triage.json`.
+`scripts\test.ps1` classifies every module. After `setup.ps1` in a clean clone (no game files): of 467 modules, **95 pass**, **358 are blocked** by a named missing input (not failures), **14 are known failures** (triaged; they also fail with all private inputs present) and **0 fail unexpectedly**. See [docs/TEST_STATUS.md](docs/TEST_STATUS.md) and `scripts/test_triage.json`.
 
 ## Current limitations
 
