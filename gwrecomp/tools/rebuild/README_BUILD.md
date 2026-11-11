@@ -25,7 +25,7 @@ The scripts find their own location, so the repository can live in any directory
 | Git | any recent | https://git-scm.com/download/win |
 | Python | 3.13.0 (3.10+ should work) | https://www.python.org/downloads/windows/ |
 | Python packages | `capstone==5.0.9`, `unicorn==2.1.4` | installed by `scripts\setup.ps1` into `.venv` from `tools\rebuild\requirements.txt` |
-| MSYS2 + mingw32 packages | gcc 16.2.0, SDL2 2.32.10, binutils 2.47, crt | install MSYS2 (https://www.msys2.org/), then `scripts\setup.ps1 -InstallMsys2Packages` (runs `pacman -S --needed mingw-w64-i686-gcc mingw-w64-i686-SDL2 mingw-w64-i686-binutils mingw-w64-i686-crt-git`) |
+| MSYS2 + mingw32 packages | gcc 16.2.0, SDL2 2.32.10, binutils 2.47, crt 14.0.0 (+ 18 dependencies, pinned) | install MSYS2 (https://www.msys2.org/), then `scripts\setup.ps1 -InstallMsys2Packages`. **MSYS2 retired its i686 environment, so `pacman -S mingw-w64-i686-gcc` no longer works**; the script installs the exact package files listed in `toolsebuild\msys2-mingw32-packages.json` from the MSYS2 mirror with `pacman -U`, checking each SHA-256 first |
 | LLVM / clang | 19.1.5 | `winget install --id LLVM.LLVM --version 19.1.5 -e`, or Visual Studio 2022 Build Tools with the LLVM component |
 | pcrecomp (lifter, MIT) | commit `35548b8d0fd8aa853da67edcf7cd6134f6b9cdc7` + `patches\P01_pcrecomp_local_mods.patch` | cloned and patched (SHA-256 verified) by `scripts\setup.ps1` into `third_party\pcrecomp` |
 
@@ -119,7 +119,7 @@ Level C proves only that the executable starts and exits cleanly; it is not a ga
 | Symptom | Cause / action |
 |---|---|
 | "running scripts is disabled on this system" | use `-ExecutionPolicy Bypass` as shown (process scope only) |
-| `MSYS2_ROOT is not configured` / gcc not found | install MSYS2 (default `C:\msys64`) or set `MSYS2_ROOT`; then `setup.ps1 -InstallMsys2Packages` |
+| `MSYS2_ROOT is not configured` / gcc not found | install MSYS2 (default `C:\msys64`) or set `MSYS2_ROOT`; then `setup.ps1 -InstallMsys2Packages` (do not use `pacman -S` for the mingw32 packages: they are no longer in the database) |
 | `clang not found` | install LLVM 19.1.5 or set `GWRECOMP_CLANG_X64` |
 | `pcrecomp patch failed: pre-image mismatch` | the pcrecomp checkout is not at the pinned commit or line endings differ; delete `third_party\pcrecomp` and re-run `setup.ps1` (it sets `core.autocrlf=true` as the patch images require) |
 | `input ... has SHA-256 X, expected Y` | your file is a different build/dump than the one the harness supports; see section 3 |
