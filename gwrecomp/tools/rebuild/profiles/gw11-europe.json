@@ -92,7 +92,8 @@
       "path": "SAVE/SAVE0.SAV",
       "sha256": "a174d375b625e1f0016eefade2e639b9366ff68608d3af62f51d971363a0a95e",
       "role": "local-fixture",
-      "note": "a save game created by the maintainers while testing; absent from the disc; cannot be reproduced by another user"
+      "note": "regression profile only: a save created by the maintainers (absent from the disc). It is NOT required: a fresh installation with an empty SAVE directory is the supported 'no-saves' profile. If SAVE contains anything else, the build refuses it.",
+      "optional": true
     }
   ],
   "disc": {
@@ -137,5 +138,9 @@
       38,
       59
     ]
+  },
+  "save_profiles": {
+    "no-saves": "SAVE is empty or absent (fresh installation); the replays expect the original OPTIONS plug-in to probe SAVE0.SAV, receive DOS file-not-found and read no save",
+    "reference-save": "SAVE holds exactly the reference SAVE0.SAV (SHA-256 in the install_files entry); the replays expect the original plug-in to read it"
   }
 }

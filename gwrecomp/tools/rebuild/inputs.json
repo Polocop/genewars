@@ -60,7 +60,8 @@
     },
     {
       "path": "SAVE/SAVE0.SAV",
-      "sha256": "a174d375b625e1f0016eefade2e639b9366ff68608d3af62f51d971363a0a95e"
+      "sha256": "a174d375b625e1f0016eefade2e639b9366ff68608d3af62f51d971363a0a95e",
+      "optional": true
     }
   ],
   "cue": {

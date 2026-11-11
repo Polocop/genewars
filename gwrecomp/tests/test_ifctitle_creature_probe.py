@@ -136,7 +136,6 @@ TITLE_RESOURCES={
     "DATA/FONT2.TAB":"f54057e1b19cc1711a1596b6459cfdfb359a170f5ed739df71fd852befba4bab",
     "DATA/TEXT.DAT":"17fd1cc1eb502e629765ae7a18251750592871dcb7c76f95ad9a610858808c47",
     "DATA/FILEEN.DAT":"98902c34587768832b1c40ddbccf8db8f2982f875c3ea8631170f15347a6cf40",
-    "SAVE/SAVE0.SAV":"a174d375b625e1f0016eefade2e639b9366ff68608d3af62f51d971363a0a95e",
 }
 INTERFACE_RESOURCES={
     "DATA/MAIN.GLA":"c5e12a5b4325c8302cab0fb3ba3aaa654e2e044131763298815766d8a6f47a58",
@@ -199,6 +198,28 @@ def _report_reference_map():
 
 
 def sha(path:Path)->str: return hashlib.sha256(path.read_bytes()).hexdigest()
+
+REFERENCE_SAVE0_SHA256="a174d375b625e1f0016eefade2e639b9366ff68608d3af62f51d971363a0a95e"
+def detect_save_profile()->str:
+    """Which SAVE-directory profile this installation is in.
+
+    reference-save : SAVE contains exactly SAVE0.SAV with the maintainers' reference content (regression profile)
+    no-saves       : SAVE is empty or absent, i.e. a fresh installation (the profile outside contributors can reproduce)
+    Anything else (another save, or a SAVE0.SAV with other content) is refused: the replays below validate one of these two
+    states and no other."""
+    save_dir=INSTALL/"SAVE"
+    present=sorted(p.name for p in save_dir.iterdir() if p.is_file()) if save_dir.is_dir() else []
+    if not present: return "no-saves"
+    if [name.upper() for name in present]==["SAVE0.SAV"]:
+        actual=sha(save_dir/present[0])
+        if actual==REFERENCE_SAVE0_SHA256: return "reference-save"
+        raise SystemExit(f"SAVE0.SAV has SHA-256 {actual}, not the reference save; remove it (profile no-saves) or use the reference file")
+    raise SystemExit(f"unsupported SAVE directory content {present}: supported states are an empty SAVE directory (no-saves) or exactly the reference SAVE0.SAV")
+def save_evidence(resource_inputs:dict,read_by:str)->dict:
+    entry=resource_inputs.get("SAVE/SAVE0.SAV")
+    if entry is None:
+        return {"SAVE0.SAV":{"present":False,"profile":"no-saves","note":"fresh installation: the SAVE directory is empty"}}
+    return {"SAVE0.SAV":{"sha256":entry["sha256"],"read_by":read_by,"bytes":entry["size"],"profile":"reference-save"}}
 
 def cue_matches_profile(cue:Path)->bool:
     """True when every track image of `cue` has the size and SHA-256 recorded in the version profile.
@@ -768,6 +789,12 @@ def main()->None:
         if actual!=expected: raise SystemExit(f"exact-build title resource hash mismatch: {rel} {actual}")
         resource_inputs[rel]={"path":str(path),"sha256":actual,"size":path.stat().st_size,
                               "provenance":"read-only files in local GeneWars 1.1 installation"}
+    save_profile=detect_save_profile()
+    if save_profile=="reference-save":
+        path=INSTALL/"SAVE"/"SAVE0.SAV"
+        resource_inputs["SAVE/SAVE0.SAV"]={"path":str(path),"sha256":sha(path),"size":path.stat().st_size,
+                              "provenance":"read-only reference save of the maintainers (regression profile)"}
+    print(f"TRACE save_profile {save_profile}",flush=True)
     interface_resource_inputs={}
     for rel,expected in INTERFACE_RESOURCES.items():
         path=INSTALL/Path(rel)
@@ -8705,9 +8732,16 @@ def main()->None:
         raise SystemExit(f"original OPTIONS did not issue two real file-not-found opens for each absent absolute SAVE slot: {save_missing_by_slot}; {transition_trace!r}")
     if "ERROR loading !" in combined_transition_output:
         raise SystemExit("original OPTIONS PlugIn still reports a resource load error")
-    if re.search(r"TRACE original VFS read path='[^']*save[\\/]save0\.sav'", combined_transition_output, re.IGNORECASE) is None or \
-            re.search(r"missing_save_slots=\d+", transition_trace) is None:
-        raise SystemExit("original OPTIONS PlugIn did not read the observed SAVE0 input or report the save-slot count")
+    if save_profile=="reference-save":
+        if re.search(r"TRACE original VFS read path='[^']*save[\\/]save0\.sav'", combined_transition_output, re.IGNORECASE) is None or \
+                re.search(r"missing_save_slots=\d+", transition_trace) is None:
+            raise SystemExit("original OPTIONS PlugIn did not read the observed SAVE0 input or report the save-slot count")
+    else:
+        # no-saves: the original game itself must probe SAVE0.SAV, receive DOS file-not-found and never read a save
+        save0_missing=re.findall(r"TRACE original VFS open path='[^']*SAVE\\SAVE0\.SAV' access=0 result=2 missing_file", combined_transition_output, re.IGNORECASE)
+        if not save0_missing or re.search(r"TRACE original VFS read path='[^']*save[\\/]save\d\.sav'", combined_transition_output, re.IGNORECASE) is not None:
+            raise SystemExit(f"no-saves profile: original OPTIONS must probe SAVE0.SAV, get file-not-found and read no save; observed opens={len(save0_missing)}")
+        print(f"TRACE save_profile no-saves original_OPTIONS_save0_probes={len(save0_missing)} reads=0",flush=True)
     stderr_lines=executed_stderr.splitlines()
     low_begin=stderr_lines.index("TRACE low-write transition-window=begin")
     low_end=stderr_lines.index("TRACE low-write transition-window=end",low_begin+1)
@@ -9072,7 +9106,7 @@ def main()->None:
         "pullout_vga_palette_snapshot":pullout_dac_trace,
         "pullout_vga_retrace_wait":pullout_retrace_trace,
         "result":"The original setup_game prefix ran its BIOINTRO size check and set the availability bit. The original OPTIONS->TITLE game() transition completed with zero unexpected writes. An SDL click on the original TITLE id=0 gadget executed IFCTitle::Update and published pending interface 0x00360A11; the watched JNE at 0x70EED bypassed the exit_ call at 0x70F05. This is a bounded experimental VBE profile, not a natural DOS/4GW boot.",
-        "resources":{"SAVE0.SAV":{"sha256":resource_inputs["SAVE/SAVE0.SAV"]["sha256"],"read_by":"original OPTIONS PlugIn/DOS VFS","bytes":resource_inputs["SAVE/SAVE0.SAV"]["size"]},
+        "resources":{**save_evidence(resource_inputs,"original OPTIONS PlugIn/DOS VFS"),
             "missing_save_slots":{"count":14,"paths":"C:\\GENEWARS\\SAVE\\SAVE1.SAV..SAVE7.SAV","per_slot":2,"result":"DOS file-not-found (AX=2); absent slots verified in read-only install"}},
         "scratch_allocation":{"guest_global":"0x002EECA8 (LE 0x00114CA8)","pre_table_value":"0x00000000",
             "guest_pointer":"0x000090C8","descriptor":"*SCRATCH at LE 0x1040AC","size_bytes":0x2000,
@@ -9142,7 +9176,7 @@ def main()->None:
                 "pullout_vga_palette_snapshot":pullout_dac_trace,
                 "pullout_vga_retrace_wait":pullout_retrace_trace,
         "result":"setup_game's original LbDataLoadAll_ processed the LE *W_SCREEN/*VESA/*SCRATCH records and its bounded prefix validated BIOINTRO.SMK, setting the availability bit. The native-recompiled interface transition completed PullOut and IFCOptions::PlugIn, returned to TITLE, then an SDL click on id=0 ran IFCTitle::Update through the availability branch and published pending interface 0x00360A11. The observed transitions had zero unexpected writes.",
-            "resources":{"SAVE0.SAV":{"sha256":resource_inputs["SAVE/SAVE0.SAV"]["sha256"],"bytes":resource_inputs["SAVE/SAVE0.SAV"]["size"],"provenance":"verified local installation, original OPTIONS PlugIn read"},
+            "resources":{**save_evidence(resource_inputs,"verified local installation, original OPTIONS PlugIn read"),
                 "missing_save_slots":{"count":14,"paths":"C:\\GENEWARS\\SAVE\\SAVE1.SAV..SAVE7.SAV","per_slot":2,"dos_result":"AX=2 file-not-found; each absolute path was requested twice"}},
             "scratch_allocation":{"global_link":"0x00114CA8","global_guest":"0x002EECA8","pre_table_value":"0x00000000","guest_pointer":"0x000090C8","descriptor":"*SCRATCH at LE 0x001040AC","size_bytes":8192,"backing":"live DOS MCB ledger","allocation_trace":memory_table_trace,"unexpected_guest_writes":0},
             "memory_profile":{"WScreen":"0x0200B920; 640x480x8, backed by live DPMI allocation","VESA":"null in this experimental profile; not needed to complete PlugIn"}},

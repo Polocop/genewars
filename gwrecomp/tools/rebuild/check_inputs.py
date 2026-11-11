@@ -13,6 +13,18 @@ def sha(p):
         for chunk in iter(lambda: f.read(1 << 20), b""): h.update(chunk)
     return h.hexdigest()
 
+def save_profile(install, reference_sha):
+    """Same rule as the build driver: 'no-saves' (empty or absent SAVE), 'reference-save' (exactly the reference SAVE0.SAV);
+    anything else is refused with SystemExit."""
+    d = Path(install) / "SAVE"
+    present = sorted(p.name for p in d.iterdir() if p.is_file()) if d.is_dir() else []
+    if not present: return "no-saves"
+    if [n.upper() for n in present] == ["SAVE0.SAV"]:
+        if sha(d / present[0]) == reference_sha: return "reference-save"
+        raise SystemExit("SAVE0.SAV is not the reference save")
+    raise SystemExit(f"unsupported SAVE directory content {present}")
+
+
 def cue_report(cue, want):
     nonlocal_bad = 0
     label = "CD image cue (GENEWARS_CUE)"
@@ -46,14 +58,20 @@ def main(argv=None):
     if not a.install: print("MISSING  GENEWARS_INSTALL_DIR is not set"); bad += 1
     else:
         roles = {f["path"]: f["role"] for f in json.loads((Path(__file__).with_name("profiles") / "gw11-europe.json").read_text(encoding="utf-8"))["install_files"]}
-        for f in spec["install_files"]: report(f"{f['path']} [{roles.get(f['path'], '?')}]", Path(a.install) / f["path"], f["sha256"])
+        for f in spec["install_files"]:
+            if f.get("optional"):
+                ref = f["sha256"]
+                try: print(f"PASS     SAVE directory: profile {save_profile(a.install, ref)} (SAVE0.SAV is optional)")
+                except SystemExit as e: print(f"MISMATCH SAVE directory: {e}"); bad += 1
+                continue
+            report(f"{f['path']} [{roles.get(f['path'], '?')}]", Path(a.install) / f["path"], f["sha256"])
     bad += cue_report(a.cue, spec["cue"]["sha256"])
     if a.map:
         report("symbol map (GENEWARS_MAP, optional reference)", a.map, spec["map"]["sha256"])
     else:
         print("SKIPPED  symbol map (optional reference; the build does not need it)")
     print("ALL INPUTS PRESENT" if not bad else f"{bad} input(s) missing or different: Level B cannot run")
-    print("roles: retail-disc = byte-identical to the file on the retail Europe disc; patch-1.1 = shipped by the 1.1 patch; local-config = written by the game installer; local-fixture = a file the maintainers created (cannot be reproduced; see docs/INPUTS.md)")
+    print("roles: retail-disc = byte-identical to the file on the retail Europe disc; patch-1.1 = shipped by the 1.1 update; local-config = written by the game installer. SAVE profiles: no-saves (empty SAVE, what a fresh install has) or reference-save (the maintainers' regression save); see docs/INPUTS.md")
     return 1 if bad else 0
 
 if __name__ == "__main__":
