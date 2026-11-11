@@ -1,0 +1,97 @@
+# GWRecomp, Level A on a clean Windows runner. Uses NO game files and NO secrets.
+#   setup.ps1 -> build.ps1 -Level A -> scripts\run_tests.py -> negative check that Levels B/C stop with a clear
+#   "missing input" message. Levels B and C need the user's own copy of Gene Wars and are never run on public runners.
+name: GWRecomp Level A (Windows)
+
+on:
+  push:
+    branches: [gwrecomp-native-port]
+    paths: ['gwrecomp/**', '.github/workflows/gwrecomp-level-a.yml']
+  pull_request:
+    paths: ['gwrecomp/**', '.github/workflows/gwrecomp-level-a.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gwrecomp-level-a-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  level-a:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell
+        working-directory: gwrecomp
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      # Actions are pinned by commit SHA (tags in comments).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.13'
+
+      - uses: msys2/setup-msys2@d44ca8e88d8b43d56cf5670f91747359d5537f97 # v2.26.0
+        id: msys
+        with:
+          msystem: MINGW32
+          update: false
+          install: >-
+            mingw-w64-i686-gcc
+            mingw-w64-i686-SDL2
+            mingw-w64-i686-binutils
+            mingw-w64-i686-crt-git
+
+      - name: Point the scripts at this MSYS2
+        run: |
+          $root = '${{ steps.msys.outputs.msys2-location }}'
+          if (-not (Test-Path (Join-Path $root 'mingw32\bin\gcc.exe'))) { $root = Split-Path -Parent $root }
+          "MSYS2_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Tool versions (reference build used Python 3.13.0, gcc 16.2.0, clang 19.1.5)
+        run: |
+          $py = (python --version); $gcc = (& "$env:MSYS2_ROOT\mingw32\bin\gcc.exe" --version | Select-Object -First 1)
+          $clang = $(if (Get-Command clang -ErrorAction SilentlyContinue) { (clang --version | Select-Object -First 1) } else { 'clang not on PATH (not needed for Level A)' })
+          $lines = @('### Tool versions', '', "- $py", "- $gcc", "- $clang", "- runner image: $env:ImageOS $env:ImageVersion", '',
+                     'Reference build: Python 3.13.0, gcc 16.2.0, clang 19.1.5. Differences are reported, not hidden.')
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $lines
+
+      - name: Setup (venv with pinned packages, pcrecomp at the pinned commit with the patch)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1
+
+      - name: Level A build (compiles every runtime C unit)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Level A
+
+      - name: Tests (PASS / BLOCKED / KNOWN_FAIL / FAIL; fails on any unexpected FAIL or TIMEOUT)
+        run: |
+          & .\.venv\Scripts\python.exe scripts\run_tests.py --jobs 4 --json ..\test-report.json --markdown ..\test-report.md
+          $code = $LASTEXITCODE
+          Get-Content ..\test-report.md -TotalCount 3 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          exit $code
+
+      - name: Levels B and C refuse to run without game files, naming the missing input
+        run: |
+          $out = (& powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Level B 2>&1 | Out-String)
+          $code = $LASTEXITCODE; Write-Host $out
+          if ($code -ne 2 -or $out -notmatch 'GENEWARS_INSTALL_DIR is not set') { throw "Level B did not fail as expected (exit $code)" }
+          $chk = (& .\.venv\Scripts\python.exe tools\rebuild\check_inputs.py 2>&1 | Out-String)
+          $code = $LASTEXITCODE; Write-Host $chk
+          if ($code -ne 1 -or $chk -notmatch 'MISSING') { throw "check_inputs did not report missing inputs (exit $code)" }
+
+      - name: Upload the test report
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: gwrecomp-level-a-test-report
+          path: |
+            test-report.json
+            test-report.md
+          if-no-files-found: ignore
