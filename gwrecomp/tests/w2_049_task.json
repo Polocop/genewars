@@ -1,0 +1,23 @@
+{
+  "id": "W2-049",
+  "title": "Map DPMI linear allocations lazily in the Unicorn host",
+  "description": "The W2-048 replay establishes sparse host backing for DPMI AX=0501, but tools/probes/unicorn_int21.py still maps and zero-writes every byte of each successful allocation into Unicorn immediately. Implement page-on-first-access mapping for guest DPMI allocation ranges. Initialize each newly mapped page from GuestAddressSpace, mirror guest writes back, and make backing checks cover only materialized pages. Keep non-allocation invalid accesses as explicit stops and preserve the same DPMI addresses, handles, zero-fill, and errors.",
+  "priority": 103,
+  "roles": ["WORK2"],
+  "deps": ["W2-048"],
+  "acceptance": [
+    "A guest DPMI allocation creates only a logical host range and does not eagerly mem_map or zero-write the whole block",
+    "First valid read/write in an allocated range maps only the touched pages and reads zero or prior host-backed bytes",
+    "Writes through Unicorn update GuestAddressSpace and survive a later access after page mapping",
+    "Invalid reads/writes outside all allocated ranges remain explicit unsupported-memory evidence",
+    "Original-byte -k replay preserves INT 2Fh AX=1500 and AX=0501 results, passes at least one million instructions, and records bounded materialized page count",
+    "Runtime and native guest-image regression suites pass"
+  ],
+  "tests": [
+    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\probe_real_mode_2f_work2.py"], "suite": "original-byte-runtime"},
+    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "-m", "unittest", "tests.test_guest_boot", "tests.test_dos_services", "tests.test_unicorn_services", "tests.test_native_guest_image"], "suite": "runtime"}
+  ],
+  "files": ["tools/probes/unicorn_int21.py", "runtime/guest_boot.py", "tests/", "evidence/", "reports/"],
+  "evidence": ["evidence/dpmi_0300_frame_work2.json"],
+  "derive": []
+}

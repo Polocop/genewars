@@ -1,0 +1,3 @@
+[
+ {"argv":["py","-3","tests/test_native_setup_config_frontier_work1.py"],"suite":"validation"}
+]

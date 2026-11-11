@@ -1,0 +1,36 @@
+{
+  "schema": "gwrecomp-toolchain-lock/1",
+  "note": "Read-only dependencies outside the repository. Verified by rebuild_v191.ps1 before building.",
+  "tools": {
+    "python": "Python 3.13.0",
+    "clang_x64": "clang version 19.1.5 | Target: x86_64-pc-windows-msvc",
+    "clang_x86": "clang version 19.1.5 | Target: i686-pc-windows-msvc",
+    "clang_x64_sha": "c5d3d309c036d1666d50500e87be514dc9916adc427e7aec267c95178bec14ff",
+    "clang_x86_sha": "2e0eef7cb0b202b786d07746003c83ee6251d97fd2896c00d7aea6a58c1a5162",
+    "ld": "GNU ld (GNU Binutils) 2.47.20260726",
+    "gcc": "gcc.exe (Rev4, Built by MSYS2 project) 16.2.0",
+    "msys_packages": "mingw-w64-i686-SDL2 2.32.10-1; mingw-w64-i686-gcc 16.2.0-4; mingw-w64-i686-crt 14.0.0.r426.g4564ee4b5-1; mingw-w64-i686-binutils 2.47-3",
+    "sdl2_dll_sha": "e9ea103d1981945670425c1603d7a069d807b85b07866b0a7b2857d7a4753b6f",
+    "libSDL2_sha": "14d60b7b6feb88df0ed27fc22eb569c6c653aef73db8fc408e6d69724af3b883"
+  },
+  "python_exe": "E:\\GWRecomp\\.venv\\Scripts\\python.exe",
+  "python_exe_sha256": "6f8c9878450765686ace476d2170b970761d68ace63f16092489c4c8bd5d7018",
+  "python_packages": [
+    "capstone==5.0.9",
+    "pip==24.2",
+    "unicorn==2.1.4"
+  ],
+  "external_inputs": {
+    "E:\\GeneWarsFX\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue": "1d417e3aed625d4f054b51054a1211562a19cd4f712b08e7846613517228a5b5",
+    "<GENEWARS_HDD_ROOT>\\GENEWARS\\DATA\\TITLESCR.DAT": "2548b024fede333b49fc4011541939fc8ce294cb95b48cdb41ed7d0cec54a0b9",
+    "<GENEWARS_HDD_ROOT>\\GENEWARS\\DATA\\IFTITLE.ANB": "c7d2dfc5d774c69337436249ec74e4d0fa6ae1d06bd5ae785f9f73ee2ac0f707",
+    "<GENEWARS_HDD_ROOT>\\GENEWARS\\CONFIG.INI": "e7a4728ff07332c2f04320fda202ac5521818a47453e670f9f2842767ef36798"
+  },
+  "pinned_hard_coded_paths_in_driver": [
+    "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\Llvm\\x64\\bin\\clang.exe",
+    "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\Llvm\\bin\\clang.exe",
+    "E:\\msys64\\mingw32\\{bin,lib,include\\SDL2,include\\c++\\16.2.0}",
+    "<GENEWARS_HDD_ROOT>\\GENEWARS",
+    "E:\\GeneWarsFX\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue"
+  ]
+}

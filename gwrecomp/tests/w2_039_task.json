@@ -1,0 +1,19 @@
+{
+  "id": "W2-039",
+  "title": "Model DOS INT 21h AH=35h and AH=25h interrupt vector services",
+  "description": "Continue original-byte DOS/4GW startup after DPMI AX=0200. Implement DOS get/set interrupt vector with an explicit real-mode vector table and ABI-correct ES:BX output. Capture the current target input (measured AX=3508 at 0x001C8CDF), test configured/unconfigured vectors and preservation/error behavior, then rerun the empty-config -k oracle to the next gate.",
+  "priority": 100,
+  "roles": ["WORK2"],
+  "deps": ["W2-038"],
+  "acceptance": [
+    "AH=35h vector 8 request returns the documented host vector pair with correct ES:BX and CF behavior",
+    "AH=25h updates explicit DOS vector state without changing unrelated vectors",
+    "Unit tests cover configured, unconfigured and round-trip cases",
+    "Original-byte -k resumes past 0x001C8CDF and records the next exact gate",
+    "No MENU/gameplay claim is made without corresponding target evidence"
+  ],
+  "tests": [],
+  "files": ["runtime/dos_services.py", "tests/test_dos_services.py", "evidence/", "reports/"],
+  "evidence": [],
+  "derive": []
+}

@@ -1,0 +1,3 @@
+[
+  {"argv":["E:\\GWRecomp\\.venv\\Scripts\\python.exe","-m","unittest","tests.test_mscdex_ioctl_sub04_work2","tests.test_mscdex_ioctl_sub0c_work2"],"suite":"MSCDEX channel control"}
+]

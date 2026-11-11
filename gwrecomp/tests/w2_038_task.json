@@ -1,0 +1,19 @@
+{
+  "id": "W2-038",
+  "title": "Model DPMI INT 31h AX=0200 protected-mode vector query",
+  "description": "Continue the original-byte -k DOS/4GW startup beyond the measured AX=0600 call. Implement the evidence-bounded AX=0200 Get Protected Mode Interrupt Vector contract with explicit configured vector state, correct register outputs and CF behavior; preserve unrelated register bits and trace unsupported/unseeded vector numbers rather than inventing handlers. Capture exact observed input registers from the native oracle, add unit tests for configured and unseeded vectors, then rerun the original-byte probe to the next startup gate.",
+  "priority": 100,
+  "roles": ["WORK2"],
+  "deps": ["W2-037"],
+  "acceptance": [
+    "DPMI AX=0200 inputs at the measured guest site 0x001C8CD2 are recorded from target execution",
+    "Configured protected-mode vectors return selector:offset and clear CF according to DPMI semantics",
+    "Unconfigured vectors have a documented conservative result and unit coverage",
+    "Original-byte -k advances beyond 0x001C8CD2 or records the next precise blocker",
+    "The gate remains truthful about MENU, mission and gameplay"
+  ],
+  "tests": [],
+  "files": ["runtime/dos_services.py", "tests/test_dos_services.py", "tests/probe_empty_config_overlay_work2.py", "evidence/", "reports/"],
+  "evidence": [],
+  "derive": []
+}

@@ -1,0 +1,3 @@
+[
+  {"argv":["E:\\GWRecomp\\.venv\\Scripts\\python.exe","-m","unittest","tests.test_iso9660_cue_work2"],"suite":"bounded ISO9660 reader over CueImage"}
+]

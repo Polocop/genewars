@@ -1,0 +1,3 @@
+[
+  {"argv":["E:\\GWRecomp\\.venv\\Scripts\\python.exe","-m","unittest","tests.test_mscdex_ioctl_input_work2"],"suite":"MSCDEX IOCTL 0A/0B regression"}
+]

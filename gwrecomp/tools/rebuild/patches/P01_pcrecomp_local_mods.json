@@ -1,0 +1,36 @@
+{
+    "base_commit":  "35548b8d0fd8aa853da67edcf7cd6134f6b9cdc7",
+    "base_repo":  "https://github.com/sp00nznet/pcrecomp.git (local clone E:\\GWRecomp\\third_party\\pcrecomp)",
+    "note":  "Five local modifications of the pcrecomp clone that v0.7 was built with (never committed upstream). Images taken with a CRLF working tree.",
+    "patch_sha256":  "34a1618f80b3734d866474e5d8bc2db0d025cafa74820f8c1abaedf8934a13c0",
+    "changed_tracked_files":  [
+                                  {
+                                      "file":  "runtime/recomp32/recomp_types.h",
+                                      "pre_sha256":  "35e13b876f2b7b9b270bbf667912e722369fde6da59867ece752c568b3e6383e",
+                                      "post_sha256":  "43bae5356693cfefa7784505c448d163117cf7481507a324dce5de276b36626a"
+                                  },
+                                  {
+                                      "file":  "tools/disasm/disasm32.py",
+                                      "pre_sha256":  "300c2cadcb6298fa9c9d6c1c890898033a1cdaaba074053b5dad1d4f11620f3d",
+                                      "post_sha256":  "ab5e6f62436076bc6458f67243f5eafb4b5385d342c89814184f5b21b456534c"
+                                  },
+                                  {
+                                      "file":  "tools/lift/difftest.py",
+                                      "pre_sha256":  "796c8534bec2d0016efa7e39471bd98521e44a615ab5e76a32c498bc2dbe5d09",
+                                      "post_sha256":  "6deaaf5330b3247edbe776995020b78b42b6e9673511337608171dbe061ee5cc"
+                                  },
+                                  {
+                                      "file":  "tools/lift/lift32.py",
+                                      "pre_sha256":  "7ac1b2cd08e337b474182082a6d679e211c28239b3e03837ae67c838a44d9baf",
+                                      "post_sha256":  "6cdbcb73c07e15c0eaf54e3beac12951176336be14c067a0f012620027e741cc"
+                                  },
+                                  {
+                                      "file":  "tools/lift/lift32_cpu.py",
+                                      "pre_sha256":  "c63a3c2e4bc6060d4c8f20db9a53563c6bf6a8a916ca1f4126243499a061ab59",
+                                      "post_sha256":  "ecb27f23ee5130c62bc30fff74b7a99298c3b2cb9558d5eb44bc1b36aed6b0b5"
+                                  }
+                              ],
+    "untracked_extra_files_in_v07_copy":  [
+
+                                          ]
+}

@@ -1,3 +1,5 @@
+> **GWRecomp (native Windows recompilation experiment)** lives in [`gwrecomp/`](gwrecomp/README.md) on this branch. It is a separate, experimental approach (static recompilation of the original binary) and does not change the re-implementation below. Status: research prototype, requires your own copy of the game.
+
 # Genewars engine re-implementation
 
 This is re-implementation of the game binary for Genewars produced by Bullfrog

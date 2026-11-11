@@ -1,0 +1,13 @@
+{
+  "id":"W3-033",
+  "title":"Trace guest handling after DOS AH=48h insufficient-memory return to the selector #GP",
+  "description":"WORK2-052 serves the measured AH=48h BX=1 request, then the guest requests BX=0x1000 and DOS correctly returns AX=8, BX=0x34, CF=1. Original-byte replay then raises #GP at 0x001C3D42 while loading selector 0x1100. Trace exact instructions and caller/control-flow around both AH=48h calls, determine whether this is the target's expected error path, a host/CPU-state issue, or a selector mapping gap. Do not change WORK2 runtime implementation; report a precise follow-up task to WORK1 or WORK2 if warranted.",
+  "priority":119,
+  "roles":["WORK3"],
+  "dependencies":[],
+  "acceptance":["Record original target hash, fixture, instruction bytes/registers around 0x001C3D21 and 0x001C3D35 through #GP at 0x001C3D42","Correlate the branch/selector with exact MAP or lifted function only where evidence supports attribution","Identify whether #GP follows the expected DOS insufficient-memory response or indicates a runtime register/descriptor defect","If a code change is needed, add a scoped task for the owning role; do not edit active WORK1/WORK2 files"],
+  "tests":[{"argv":["E:\\GWRecomp\\.venv\\Scripts\\python.exe","-m","unittest","tests.test_dos_ah48_work2"],"suite":"frontier-evidence"}],
+  "files":["evidence/dos_ah48_work2.json","reports/dos_ah48_49_work2.md","reports/coordination/"],
+  "evidence":["evidence/dos_ah48_work2.json","reports/dos_ah48_49_work2.md"],
+  "derive":[]
+}

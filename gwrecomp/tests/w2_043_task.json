@@ -1,0 +1,19 @@
+{
+  "id": "W2-043",
+  "title": "Implement DPMI INT 31h AX=0102 DOS memory block resize",
+  "description": "Complete the DPMI DOS-memory lifecycle needed by extender startup. Implement AX=0102 using BX paragraph count and DX live block selector, support shrink, contiguous grow, and truthful insufficient-memory reporting (AX=8/BX largest free paragraphs), update MCBs and descriptor limits, and reject invalid selectors. Add tests for grow/shrink boundaries and preservation of neighboring live allocations.",
+  "priority": 95,
+  "roles": ["WORK2"],
+  "deps": ["W2-042", "W2-041"],
+  "acceptance": [
+    "AX=0102 accepts only selectors returned by AX=0100 and uses BX as paragraph size",
+    "Shrink returns the tail to the free MCB set and updates the selector limit",
+    "Grow succeeds only into an adjacent free block and otherwise returns AX=8 with largest block in BX",
+    "Invalid selector returns AX=8022/CF and leaves memory unchanged",
+    "Allocation, free, resize and Unicorn descriptor regression tests pass"
+  ],
+  "tests": [],
+  "files": ["runtime/dos_services.py", "tools/probes/unicorn_int21.py", "tests/", "evidence/", "reports/"],
+  "evidence": [],
+  "derive": []
+}

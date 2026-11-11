@@ -1,0 +1,19 @@
+{
+  "id": "W2-041",
+  "title": "Model DPMI INT 31h AX=0100 DOS memory block allocation",
+  "description": "Advance the measured startup trap at guest 0x001D23A7: DPMI AX=0100 Allocate DOS Memory Block, BX=0x1000 paragraphs. Build an explicit bounded conventional-memory allocator that returns a real-mode segment in AX and protected-mode selector in DX, tracks ownership and exhaustion, and never aliases the PSP block or video memory. Add unit tests for backing, selectors, failure and allocation limits; rerun original-byte -k to the next gate. If available DOS arena cannot satisfy the measured request, record exact layout evidence and split independent layout/selector work rather than invent memory.",
+  "priority": 100,
+  "roles": ["WORK2"],
+  "deps": ["W2-040", "W2-033"],
+  "acceptance": [
+    "The AX=0100 request and 0x1000-paragraph size are verified from original target execution",
+    "Success returns consistent AX real-mode segment and DX protected selector over backed guest memory",
+    "Invalid size, selector exhaustion and arena exhaustion return errors without fabricated allocations",
+    "Unit tests cover allocation and boundary behavior",
+    "Original-byte -k advances past 0x001D23A7 or records a concrete layout blocker"
+  ],
+  "tests": [],
+  "files": ["runtime/dos_services.py", "runtime/guest_boot.py", "runtime/", "tests/", "evidence/", "reports/"],
+  "evidence": [],
+  "derive": []
+}

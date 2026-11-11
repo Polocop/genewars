@@ -1,0 +1,18 @@
+[
+  {
+    "argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\probe_real_mode_2f_work2.py"],
+    "suite": "original-byte-runtime"
+  },
+  {
+    "argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\test_dpmi_int2f_work2.py"],
+    "suite": "dpmi-0300-regression"
+  },
+  {
+    "argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\test_dpmi0501_sparse_work2.py"],
+    "suite": "original-byte-0501-assertions"
+  },
+  {
+    "argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "-m", "unittest", "tests.test_guest_boot", "tests.test_dos_services", "tests.test_unicorn_services", "tests.test_native_guest_image"],
+    "suite": "runtime"
+  }
+]

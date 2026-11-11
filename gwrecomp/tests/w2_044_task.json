@@ -1,0 +1,19 @@
+{
+  "id": "W2-044",
+  "title": "Add deterministic PIT counter progression for timer reads",
+  "description": "The measured startup now programs PIT channel 0 in mode 3 with a zero divisor, which the host normalizes to 65536. Current PIT reads return the reload value forever; that is insufficient for later timer polling in menu/gameplay. Add a deterministic guest-cycle counter advanced by the Unicorn instruction hook, implement 8253 low/high and latched count reads from the virtual counter, and test monotonic decrement, wrap, latching, reload reset, and unrelated-port traps. Preserve reproducibility without wall-clock dependence.",
+  "priority": 90,
+  "roles": ["WORK2"],
+  "deps": ["W2-040"],
+  "acceptance": [
+    "PIT counter reads change only as explicit guest virtual cycles advance",
+    "Low/high access and latched reads return the expected channel count bytes",
+    "Zero divisor wraps as 65536 and reload resets channel phase",
+    "The Unicorn original-byte probe remains deterministic and preserves PIT startup writes",
+    "Host-device, DOS service and Unicorn regression suites pass"
+  ],
+  "tests": [],
+  "files": ["runtime/host_devices.py", "tools/probes/unicorn_int21.py", "tests/", "evidence/", "reports/"],
+  "evidence": ["evidence/empty_config_overlay_work2.json"],
+  "derive": []
+}

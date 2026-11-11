@@ -1,0 +1,114 @@
+{
+  "task": "W3-056",
+  "source": {
+    "repository": "https://github.com/joncampbell123/dosbox-x",
+    "commit": "bd0f21e4becb263b2add0e160451f3c87a38c1b6",
+    "commit_time": "2026-10-06T20:33:53-07:00",
+    "debug_mode": "--enable-debug=heavy"
+  },
+  "fixture": {
+    "target_sha256": "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f",
+    "cue_sha256": "1d417e3aed625d4f054b51054a1211562a19cd4f712b08e7846613517228a5b5",
+    "profile": "build/dos_user_profile_w2_036/GENEWARS/config.ini",
+    "profile_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "command_tail": "-k"
+  },
+  "debugger_capabilities": {
+    "commands": [
+      "CPU",
+      "GDT",
+      "LDT",
+      "BPM",
+      "BPPM",
+      "BPLM",
+      "BPINT",
+      "BPLIST",
+      "BPDEL",
+      "MEMDUMP",
+      "MEMDUMPBIN",
+      "RUN"
+    ],
+    "mcp_port": 58991
+  },
+  "initial_resolution": [
+    "CPU",
+    "GDT",
+    "LDT",
+    "HELP"
+  ],
+  "setup_game": {
+    "map_link_va": "0x114CA8",
+    "map_object_offset": "0x14CA8",
+    "code_link_vas": {
+      "entry": "0x194AC0",
+      "this_read": "0x194B51",
+      "null_write": "0x194B5A"
+    },
+    "breakpoint_policy": "Resolve guest CS/DS/LDT/GDT descriptors and loaded LE object mapping in the live DOSBox session first. Translate each link VA via observed module/object base. Add BPM/BPLM for code points and BPPM <resolved-data-selector>:<object-relative-offset> only after the live selector/base/limit is established. Never reuse Unicorn 0x214CA8 as a DOSBox linear address."
+  },
+  "capture_at_each_stop": [
+    "CPU",
+    "GDT",
+    "LDT",
+    "BPLIST",
+    "MEMDUMP <resolved-data-selector> <resolved-object-offset-0x20> 0x60",
+    "MEMDUMP SS ESP-0x40 0x80",
+    "caller return chain from live stack",
+    "descriptor selector/base/limit/access/present",
+    "EFLAGS and all segment selectors",
+    "memory before and after write"
+  ],
+  "video_frontier": {
+    "control_flow": [
+      "setup_game return (main_ + 0x412)",
+      "PlayIntro link VA 0x94342",
+      "game link VA 0x94347",
+      "LbScreenSetupAnyMode_ 0x9FD40",
+      "LbVesaSetMode_ call 0x9FDCC",
+      "LbVesaSetPage_ 0xA3A5C"
+    ],
+    "int10_sites": [
+      "0xA3A91",
+      "0xA3AB7"
+    ],
+    "framebuffer_assignment": {
+      "site": "0x9FDEF",
+      "value": "0xA0000",
+      "global_link_va": "0x19CA58"
+    },
+    "required_first_events": [
+      "first INT10/VESA request (register input/output)",
+      "first mode set",
+      "framebuffer base assignment and resolved guest address",
+      "first guest write into framebuffer memory",
+      "first palette update",
+      "first blit/callback"
+    ],
+    "callback_slot": "0x1A029C",
+    "palette_observation_hook": {
+      "source": "third_party/dosbox-x/src/hardware/iohandler.cpp",
+      "patch": "tools/dosboxx_oracle/patches/first_vga_palette_event.patch",
+      "marker": "W3_FIRST_VGA_PALETTE_WRITE",
+      "ports": [
+        "0x3C8",
+        "0x3C9"
+      ],
+      "capture": [
+        "first DAC write only",
+        "CS:EIP",
+        "port/width/value",
+        "EAX..EDI",
+        "EBP/ESP",
+        "EFLAGS",
+        "DS/ES/FS/GS/SS"
+      ],
+      "semantics": "LOG_MSG only; original I/O handler receives unchanged port and value"
+    }
+  },
+  "process_exit": {
+    "no_cd_eip": "0x1AFC33",
+    "dos_service": "INT 21h AH=4Ch AL=0",
+    "expected_no_cd_control": true,
+    "menu_proven": false
+  }
+}

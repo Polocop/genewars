@@ -1,0 +1,19 @@
+{
+  "id": "W2-046",
+  "title": "Add native DPMI AX=0101/0102 DOS block lifecycle",
+  "description": "The native C callback now allocates configured DOS paragraph blocks but cannot free or resize them. Match the Python runtime by tracking bounded native DOS blocks, using first-fit free extents, implementing AX=0101 selector-checked free and AX=0102 shrink/contiguous-grow, coalescing through interval reuse, and updating descriptor ranges. Keep AX=0100 register behavior unchanged and never infer an arena default. Extend 32-bit C tests for allocate/free/reuse, grow/shrink, adjacent live-block protection, invalid selectors, largest-gap failure, and selector exhaustion.",
+  "priority": 95,
+  "roles": ["WORK2"],
+  "deps": ["W2-045"],
+  "acceptance": [
+    "AX=0101 releases only live DOS block selectors and removes their descriptors",
+    "AX=0102 resizes an owned block in the configured arena and updates descriptor limit",
+    "First-fit allocation reuses freed/shrunk gaps without overlapping live blocks",
+    "Insufficient or noncontiguous growth returns AX=8/BX largest gap/CF=1",
+    "Native DPMI DOS allocator and existing DOS callback harnesses pass"
+  ],
+  "tests": [],
+  "files": ["runtime/gw_dos_services.c", "runtime/gw_dos_services.h", "tests/test_native_dpmi_dos_alloc.c", "tests/test_native_dpmi_dos_alloc.py", "evidence/", "reports/"],
+  "evidence": [],
+  "derive": []
+}

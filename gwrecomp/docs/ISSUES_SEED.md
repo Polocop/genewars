@@ -1,0 +1,18 @@
+# Issue seeds and labels
+
+Suggested labels: `good first issue`, `help wanted`, `audio`, `video`, `rendering`, `reverse-engineering`, `gameplay`, `testing`, `documentation`, `build`.
+
+Each item lists labels and a definition of done.
+
+1. **Parameterise hard-coded build paths** — `build`, `help wanted`. Replace `E:\GWRecomp`, `E:\msys64`, `D:`/install paths with env vars/CLI args in `tools/rebuild/` and `tests/*.py`. *Done when* `rebuild.ps1` runs from any directory with documented variables.
+2. **Document each test's prerequisites** — `testing`, `documentation`, `good first issue`. Produce a table of tests vs. required external inputs. *Done when* every module under `tests/` is classified (self-contained / needs evidence / needs third_party) and self-contained ones pass on a clean checkout.
+3. **Fix tests that fail on a clean checkout due to missing directories** — `testing`, `good first issue`. Create `build/`/`cache/` on demand. *Done when* no test fails with `FileNotFoundError` for these.
+4. **Replace pcrecomp patch with a fork/pin** — `build`, `help wanted`. Follow "Migrating to an own fork" in `tools/rebuild/README_BUILD.md`.
+5. **Smacker audio and AIL timer/IRQ0 path** — `audio`, `video`, `reverse-engineering`. *Done when* an intro plays with audio and a bounded run records no mixer/DMA errors.
+6. **Miles background hiss** — `audio`, `help wanted`. A/B capture with `GW_VSB16_CAPTURE` and attribute the cause.
+7. **First-click-lost after screen change** (`title_unjugador_after_biolose`) — `gameplay`, `reverse-engineering`. *Done when* the first click after a transition is delivered in a reproducible test.
+8. **Creature order acceptance (picker gate)** — `gameplay`, `reverse-engineering`. *Done when* a selected creature accepts a move/research order with same-run guest evidence.
+9. **Original-byte boot path to menu** — `reverse-engineering`. *Done when* startup passes `setup_game` through intros to the menu without snapshots.
+10. **Save/load state restoration check** — `gameplay`, `testing`. *Done when* guest state after Load is compared to expectations by an automated check.
+11. **Rendering bit-exactness of terrain** — `rendering`, `help wanted`.
+12. **Portable CI smoke test (docs-only lint, scripts parse)** — `testing`, `good first issue`.

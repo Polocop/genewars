@@ -1,0 +1,16 @@
+[
+  {
+    "argv": [
+      "E:/GWRecomp/.venv/Scripts/python.exe",
+      "E:/GWRecomp/tests/test_native_guest_trap_propagation_work1.py"
+    ],
+    "suite": "native trap propagation"
+  },
+  {
+    "argv": [
+      "E:/GWRecomp/coordination/gw.cmd",
+      "build"
+    ],
+    "suite": "infrastructure"
+  }
+]

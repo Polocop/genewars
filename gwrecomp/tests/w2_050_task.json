@@ -1,0 +1,22 @@
+{
+  "id": "W2-050",
+  "title": "Add validated native DOS standard-stream callbacks",
+  "description": "The Python compatibility host implements DOS AH=3Fh read and AH=40h write over virtual handles, but runtime/gw_dos_services.c currently handles only DOS version/install checks plus DPMI memory. Add an opt-in native stdio handle layer for injected host stream callbacks on handles 0, 1, and 2. Validate DS:DX guest ranges before host callbacks, preserve short-read/EOF/write counts and DOS carry/error semantics, and keep unconfigured services fail-closed. Do not add file-open/path behavior in this task; WORK1 currently owns the native -k access-violation investigation.",
+  "priority": 99,
+  "roles": ["WORK2"],
+  "deps": [],
+  "acceptance": [
+    "Native DOS AH=3Fh reads from an explicitly configured handle into a validated DS:DX range and returns AX=count/CF clear",
+    "Native DOS AH=40h writes a validated DS:DX range through the configured callback and returns AX=count/CF clear",
+    "EOF, short reads, invalid/unconfigured handles, callback errors, and invalid guest ranges have explicit tested behavior",
+    "Unconfigured AH=3Fh/AH=40h remain trapped rather than reporting fabricated success",
+    "Existing native DOS/DPMI callback and Python DOS filesystem suites pass"
+  ],
+  "tests": [
+    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\test_native_dos_streams.py"], "suite": "native-dos-streams"},
+    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"], "suite": "python-runtime-regression"}
+  ],
+  "files": ["runtime/gw_dos_services.c", "runtime/gw_dos_services.h", "tests/test_native_dos_streams.c", "tests/test_native_dos_streams.py", "evidence/", "reports/"],
+  "evidence": [],
+  "derive": []
+}

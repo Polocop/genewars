@@ -1,0 +1,48 @@
+diff --git a/src/hardware/iohandler.cpp b/src/hardware/iohandler.cpp
+index 34222c4..ec3cd78 100644
+--- a/src/hardware/iohandler.cpp
++++ b/src/hardware/iohandler.cpp
+@@ -489,8 +489,23 @@ void log_io(Bitu width, bool write, Bitu port, Bitu val) {
+ #define log_io(W, X, Y, Z)
+ #endif
+ 
++#if C_DEBUG
++static bool w3_first_vga_palette_write_logged = false;
++static void W3_LogFirstVgaPaletteWrite(Bitu port, Bitu value, Bitu width) {
++	if (w3_first_vga_palette_write_logged || (port != 0x3c8 && port != 0x3c9)) return;
++	w3_first_vga_palette_write_logged = true;
++	LOG_MSG("W3_FIRST_VGA_PALETTE_WRITE port=%04x width=%u value=%08x CS:EIP=%04x:%08x EAX=%08x EBX=%08x ECX=%08x EDX=%08x ESI=%08x EDI=%08x EBP=%08x ESP=%08x EFLAGS=%08x DS=%04x ES=%04x FS=%04x GS=%04x SS=%04x",
++		(unsigned int)port, (unsigned int)width, (unsigned int)value, (unsigned int)SegValue(cs), (unsigned int)reg_eip,
++		(unsigned int)reg_eax, (unsigned int)reg_ebx, (unsigned int)reg_ecx, (unsigned int)reg_edx,
++		(unsigned int)reg_esi, (unsigned int)reg_edi, (unsigned int)reg_ebp, (unsigned int)reg_esp, (unsigned int)reg_flags,
++		(unsigned int)SegValue(ds), (unsigned int)SegValue(es), (unsigned int)SegValue(fs), (unsigned int)SegValue(gs), (unsigned int)SegValue(ss));
++}
++#endif
+ 
+ void IO_WriteB(Bitu port,uint8_t val) {
++#if C_DEBUG
++	W3_LogFirstVgaPaletteWrite(port, val, 1);
++#endif
+ 	log_io(0, true, port, val);
+ 	if (GCC_UNLIKELY(GETFLAG(VM) && (CPU_IO_Exception(port,1)))) {
+ 		CPU_ForceV86FakeIO_Out(port,val,1);
+@@ -502,6 +517,9 @@ void IO_WriteB(Bitu port,uint8_t val) {
+ }
+ 
+ void IO_WriteW(Bitu port,uint16_t val) {
++#if C_DEBUG
++	W3_LogFirstVgaPaletteWrite(port, val, 2);
++#endif
+ 	log_io(1, true, port, val);
+ 	if (GCC_UNLIKELY(GETFLAG(VM) && (CPU_IO_Exception(port,2)))) {
+ 		CPU_ForceV86FakeIO_Out(port,val,2);
+@@ -513,6 +531,9 @@ void IO_WriteW(Bitu port,uint16_t val) {
+ }
+ 
+ void IO_WriteD(Bitu port,uint32_t val) {
++#if C_DEBUG
++	W3_LogFirstVgaPaletteWrite(port, val, 4);
++#endif
+ 	log_io(2, true, port, val);
+ 	if (GCC_UNLIKELY(GETFLAG(VM) && (CPU_IO_Exception(port,4)))) {
+ 		CPU_ForceV86FakeIO_Out(port,val,4);

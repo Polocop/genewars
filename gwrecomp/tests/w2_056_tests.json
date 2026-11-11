@@ -1,0 +1,3 @@
+[
+ {"argv": ["py", "tests\\test_dos4gw_low_targets_work2.py"], "suite": "corrected indirect-call target audit"}
+]
