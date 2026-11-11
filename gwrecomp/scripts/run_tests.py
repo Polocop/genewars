@@ -90,6 +90,14 @@ def main():
     by_reason = {}
     for r in res:
         if r["status"] == "BLOCKED": by_reason.setdefault(r["reason"], []).append(r["module"])
+    known = [r for r in res if r["status"] == "KNOWN_FAIL"]
+    if known:
+        print("\nKNOWN_FAIL (triaged in scripts/test_triage.json; they fail even with every private input present):")
+        for r in known: print(f"  {r['module']}: {r['reason']}")
+    obsolete = [r["module"] for r in res if r["status"] == "PASS" and r["module"] in TRIAGE]
+    if obsolete:
+        print("\nOBSOLETE triage entries (the module now passes; remove them from scripts/test_triage.json):")
+        for m in obsolete: print(f"  {m}")
     print("\nBLOCKED by missing input:")
     for why, ms in sorted(by_reason.items(), key=lambda kv: -len(kv[1])): print(f"  {len(ms):4}  {why}")
     print(f"\nmodules={len(res)} pass={counts['PASS']} blocked={counts['BLOCKED']} known_fail={counts['KNOWN_FAIL']} fail={counts['FAIL']} timeout={counts['TIMEOUT']}")

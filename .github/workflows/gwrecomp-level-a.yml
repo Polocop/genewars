@@ -42,7 +42,7 @@ jobs:
         id: msys
         with:
           msystem: MINGW32
-          update: false
+          update: true   # the bundled package database is stale: without this the mirrors answer 404 for the old packages
           install: >-
             mingw-w64-i686-gcc
             mingw-w64-i686-SDL2
