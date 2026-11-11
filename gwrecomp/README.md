@@ -2,7 +2,7 @@
 
 **GWRecomp** is an experimental effort to run *Gene Wars* (Bullfrog Productions, 1996, v1.1 DOS4GW/Watcom LE executable) **natively on Windows, without DOSBox**, by statically lifting the original x86-32 code to C and running it on a modern host-platform layer (SDL2 video/audio/input, DOS/DPMI service emulation, a virtual SB16 for the original Miles mixer, CD-DA playback).
 
-> **Status: research prototype.** It is *not* a finished port and the full campaign has not been tested. **It cannot run without original game files that you must provide yourself**, and one required input (a save file the maintainers created, `SAVE0.SAV`) cannot currently be reproduced by outside contributors. See [PROGRESS.md](PROGRESS.md) for what is and is not verified and [tools/rebuild/README_BUILD.md](tools/rebuild/README_BUILD.md) for the exact build levels.
+> **Status: research prototype.** It is *not* a finished port and the full campaign has not been tested. **It cannot run without original game files that you must provide yourself.** No file created by the maintainers is required to build it any more. See [PROGRESS.md](PROGRESS.md) for what is and is not verified and [tools/rebuild/README_BUILD.md](tools/rebuild/README_BUILD.md) for the exact build levels.
 
 ## Relationship to the original project
 
@@ -41,7 +41,7 @@ Prerequisites you install yourself: Git, Python 3.10+ (reference 3.13), MSYS2 wi
 - **Level C** (needs a Level B build): bounded smoke run of the native executable: `scripts\build.ps1 -Level C`, or `scripts\play.ps1` to play.
 
 ### What you must provide (not distributed here)
-Your own Gene Wars **1.1 (Europe)** install folder and the `.cue` of your CD image, verified by SHA-256 (`python tools\rebuild\check_inputs.py` tells you which file differs and what role it has). **The symbol map is no longer needed**: the build is independent of it and produces the same code with or without it ([docs/SYMBOLS.md](docs/SYMBOLS.md)). **The remaining blocker for independent Level B/C is `SAVE0.SAV`**, a test save the maintainers made, which the build pins by digest ([docs/INPUTS.md](docs/INPUTS.md)); until that is resolved, Levels B and C are reproducible only by the maintainers.
+Your own Gene Wars **1.1 (Europe)** install folder (11 files byte-identical to the retail disc, 2 from the 1.1 update, the installer's `CONFIG.INI`) and the `.cue` of your CD image, verified by SHA-256 (`python tools\rebuild\check_inputs.py` tells you which file differs and what role it has). A fresh installation with an empty `SAVE` directory is supported; **the symbol map and any save file are not needed** ([docs/SYMBOLS.md](docs/SYMBOLS.md), [docs/INPUTS.md](docs/INPUTS.md)). Not verified: that the 1.1 update files are obtainable by everyone, and any second machine.
 
 ## Tests
 
@@ -49,7 +49,7 @@ Your own Gene Wars **1.1 (Europe)** install folder and the `.cue` of your CD ima
 
 ## Current limitations
 
-See [PROGRESS.md](PROGRESS.md) and [ROADMAP.md](ROADMAP.md). In short: no verified end-to-end native boot from the original executable; the playable demo path resumes from a snapshot; Smacker audio, IRQ0/AIL timer path and exact state restoration after *Load* are unverified; the full campaign is untested; the clean rebuild (Level B/C) has been reproduced from a fresh clone only on the maintainers' machine, using the maintainers' copies of the inputs.
+See [PROGRESS.md](PROGRESS.md) and [ROADMAP.md](ROADMAP.md). In short: no verified end-to-end native boot from the original executable; the playable demo path resumes from a snapshot; Smacker audio, IRQ0/AIL timer path and exact state restoration after *Load* are unverified; the full campaign is untested; the clean rebuild (Level B/C) has been reproduced from a fresh clone only on the maintainers' machine (inputs were the maintainers' copies, but none created by them any more); the driver's replay/regression mode still needs maintainers' artifacts.
 
 ## Contributing
 

@@ -64,7 +64,22 @@ The build no longer needs `genewars-1_1.map` (details and numbers: [docs/SYMBOLS
 | Previously published build vs new build | every PE section identical (`.text` 26,383,360 bytes included); the files differ only in the symbol table |
 | Level C smoke run of the build made without the map | exit 0, same bounded stop |
 
-The remaining blocker for independent Level B/C is no longer the map but `SAVE0.SAV`, a save the maintainers created ([docs/INPUTS.md](docs/INPUTS.md)). Nothing was verified on a second machine or VM.
+At that point the remaining blocker for independent Level B/C was `SAVE0.SAV`, a save the maintainers created; it was removed in the next section. Nothing was verified on a second machine or VM.
+
+## Save-file independence (verified 2026-11-11, on the maintainers' machine)
+
+`SAVE0.SAV` (a maintainers' test save) is no longer required: it was only a pre-flight digest check plus an assertion and evidence fields of the replay mode; the replay mode is not part of Levels B/C. The driver now has two explicit profiles, `no-saves` and `reference-save`, and refuses anything else ([docs/INPUTS.md](docs/INPUTS.md)).
+
+| Check | Result |
+|---|---|
+| Level B, `reference-save` vs `no-saves` (same commit, public mode) | identical lifted C, 16/16 objects, guest image and executable (all PE sections); only the install manifest differs, by one line (the save's digest) |
+| Level C smoke run of both | exit 0; same trace apart from values that vary between two runs of one build |
+| Original game without a save (replay with the original OPTIONS plug-in) | probes `SAVE0.SAV` twice, DOS file-not-found, reads nothing; the 14 probes of slots 1-7 unchanged |
+| Replay screen captures, 16 files | 14 identical; 2 differ in a few pixels (below) |
+| Replay mode as a whole | **not completed in either profile** outside the maintainers' machine: it needs `evidence/genewars_11_titlescreen_dac6.raw` (oracle capture, unpublished) and a capture file from an earlier run; the pre-change driver stops at the same points |
+| Tests | `tests/test_save_profiles.py` (9 self-contained tests) |
+
+Residual differences between the profiles, replay captures: the OPTIONS screen differs in 38 of 307,200 pixels (a 5x11 area) and the post-confirmation screen in 235 (a 14x31 area at the bottom left, where the specialist portrait is drawn). Two runs of the same profile give byte-identical captures (0 of 12 differ), so these two differences are deterministic and caused by the profile. In the OPTIONS screen the reference-save run draws a dark 4x11 marker that the no-saves run does not (a save-slot indicator, judging from the pixels); the cause of the portrait-area difference was not determined. Nothing was forced to match.
 
 ## What this document does not claim
 

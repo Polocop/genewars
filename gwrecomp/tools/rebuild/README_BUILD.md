@@ -64,7 +64,7 @@ None of these are distributed here and none may be committed. `python tools\rebu
 
 | Input | Variable | Notes |
 |---|---|---|
-| Your Gene Wars **1.1 (Europe)** `GENEWARS` folder | `GENEWARS_INSTALL_DIR` | 15 files are hashed: 11 are byte-identical to files on the retail Europe disc, 2 (`GW.EXE`, `DATA/TEXT.DAT`) come from the 1.1 update, `CONFIG.INI` is written by the installer, `SAVE/SAVE0.SAV` is a maintainers' test save (see below) |
+| Your Gene Wars **1.1 (Europe)** `GENEWARS` folder | `GENEWARS_INSTALL_DIR` | 15 files are hashed: 11 are byte-identical to files on the retail Europe disc, 2 (`GW.EXE`, `DATA/TEXT.DAT`) come from the 1.1 update, `CONFIG.INI` is written by the installer, `SAVE/SAVE0.SAV` is an optional maintainers' test save (see below) |
 | `.cue` of your Gene Wars CD image | `GENEWARS_CUE` | accepted if it is the verified cue text, or any cue whose five track images match the SHA-256 recorded in the profile |
 | Reference symbol map `genewars-1_1.map` | `GENEWARS_MAP` | **optional**. Not needed to build. Enables extra cross-checks only (see [`docs/SYMBOLS.md`](../../docs/SYMBOLS.md)) |
 
@@ -72,8 +72,8 @@ None of these are distributed here and none may be committed. `python tools\rebu
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1 -GenewarsInstall "<GENEWARS folder>" -GenewarsCue "<file.cue>"
 ```
 
-### Open problem: `SAVE0.SAV`
-The driver pins the digest of a save file the maintainers created while testing; it is not part of the game. Without a file with exactly that content, Level B stops while hashing it. Another user cannot produce it. This is currently the blocker for independent Level B/C reproduction (see `docs/INPUTS.md`, section 2). The symbol map, previously the main blocker, is no longer needed.
+### Save games
+You do not need a save file. The driver supports an installation whose `SAVE` directory is empty (profile `no-saves`, what a fresh install has) and the maintainers' reference save (profile `reference-save`, regression only); any other content of `SAVE` is refused. See [`docs/INPUTS.md`](../../docs/INPUTS.md), section 2.
 
 ## 4. Level B: generate and build the recompiled executable
 
@@ -123,7 +123,7 @@ Level C proves only that the executable starts and exits cleanly; it is not a ga
 | `clang not found` | install LLVM 19.1.5 or set `GWRECOMP_CLANG_X64` |
 | `pcrecomp patch failed: pre-image mismatch` | the pcrecomp checkout is not at the pinned commit or line endings differ; delete `third_party\pcrecomp` and re-run `setup.ps1` (it sets `core.autocrlf=true` as the patch images require) |
 | `input ... has SHA-256 X, expected Y` | your file is a different build/dump than the one the harness supports; see section 3 |
-| `check_inputs.py` MISSING `SAVE/SAVE0.SAV` | see "Open problem: `SAVE0.SAV`" |
+| `check_inputs.py` MISMATCH `SAVE directory` | the SAVE directory contains something other than nothing or the reference save; empty it (profile `no-saves`) |
 | toolchain warnings from `rebuild.ps1` | your versions differ from `toolchain.lock.json`; the build may still work; use `-Strict` to enforce |
 | test shows BLOCKED | a named input is missing; not a bug. KNOWN_FAIL entries are tracked in `scripts\test_triage.json` |
 | tests write into `evidence\`, `build\`, `cache\` | these are Git-ignored; delete them freely |

@@ -72,6 +72,7 @@ The sanitised sources differ from the frozen v0.7 tree, so the pinned executable
 - **The symbol map (`genewars-1_1.map`) is no longer a build input.** It is a disassembler export (Watcom layout) whose names come in large part from the Watcom linker map `GAME/MAIN.MAP` shipped on the retail Europe disc (1.0 build), transferred onto the 1.1 binary; the rest of its names have no documented source (`docs/SYMBOLS.md`). It is derived from proprietary media and is not published. The build uses address-based identifiers and runs the map cross-checks only when a user supplies a map. The build-path harness no longer refers to map-derived names (67 references replaced by addresses).
 - Residual map-derived text that remains public: about 14 literal map lines (names and addresses) used as anchors in the driver's cross-checks, and the older, non-build harnesses (`test_authentic_*`, `test_ifctitle_plugin_load_at.*`, ...) that still use map-derived identifiers. They were published before this change; removing them is a decision for the maintainers.
 - `tools/rebuild/profiles/gw11-europe.json` publishes digests only: the 15 install files (with their role), and the sizes and SHA-256 of the five CD track images.
+- `SAVE/SAVE0.SAV` is optional (profile `no-saves`); the maintainers' reference save is not published and not required.
 - `gwrecomp.local.json` (your own input locations) is Git-ignored.
 
 ## Sanitisation applied
