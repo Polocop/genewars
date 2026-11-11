@@ -84,6 +84,7 @@ foreach ($cand in @('py -3', 'python')) {
 }
 if (-not $basePython -and -not (Test-Path (Join-Path $root '.venv\Scripts\python.exe'))) { Warn 'Python 3.10+ is required (reference: 3.13): https://www.python.org/downloads/windows/' }
 if ($cfg.Msys2 -and (Test-Path (Join-Path $cfg.Mingw32Bin 'gcc.exe'))) { Ok "MSYS2 at $($cfg.Msys2) ($(& (Join-Path $cfg.Mingw32Bin 'gcc.exe') --version | Select-Object -First 1))" }
+elseif ($cfg.Msys2 -and $InstallMsys2Packages) { Write-Host "  MSYS2 found at $($cfg.Msys2); the pinned mingw32 toolchain is installed in step 3 and checked there." }
 elseif ($cfg.Msys2) { Warn "MSYS2 found at $($cfg.Msys2) without the mingw32 toolchain: re-run with -InstallMsys2Packages (installs pinned packages)." }
 else { Warn 'MSYS2 not found. Install MSYS2 (https://www.msys2.org/), then re-run with -InstallMsys2Packages, or set MSYS2_ROOT.' }
 if ($cfg.ClangX64) { Ok "clang: $($cfg.ClangX64) ($(& $cfg.ClangX64 --version | Select-Object -First 1)); reference: $($lock.tools.clang)" }
@@ -105,6 +106,7 @@ Step '3. MSYS2 packages'
 if ($cfg.Msys2) {
     $pacman = Join-Path $cfg.UsrBin 'pacman.exe'
     if ($InstallMsys2Packages) { $rc = Install-Msys2Pinned $cfg; if ($rc) { Warn "pacman -U of the pinned packages failed (exit $rc)" } }
+    if (-not (Test-Path (Join-Path $cfg.Mingw32Bin 'gcc.exe'))) { Warn 'mingw32 gcc is still missing after step 3' }
     $sdl = Join-Path $cfg.Msys2 'mingw32\include\SDL2\SDL.h'
     if (Test-Path $sdl) { Ok "SDL2 headers present ($(& $pacman -Q mingw-w64-i686-SDL2 2>&1)); reference: $($lock.tools.msys_packages)" }
     else { Warn 'SDL2 for mingw32 missing: re-run with -InstallMsys2Packages (pinned package list in tools\rebuild\msys2-mingw32-packages.json)' }
