@@ -146,3 +146,7 @@ The original build used a local clone of `github.com/sp00nznet/pcrecomp` at `355
 `patches\P01_pcrecomp_local_mods.patch` and pinned by SHA-256 in `P01_pcrecomp_local_mods.json`. To move to an own fork: fork pcrecomp,
 check out `35548b8`, apply P01 with `apply_pcrecomp_patch.py`, commit, point `pcrecomp.repository`/`commit` in the lock file at the fork,
 delete P01, rebuild and compare the results.
+
+## Second-machine verification
+
+See [docs/PORTABILITY.md](../../docs/PORTABILITY.md): `scriptserify-clean-machine.ps1` runs setup, Level A, the tests and, when you supply your own game files, Levels B and C, and writes a report without paths or game data. CI (`.github/workflows/gwrecomp-level-a.yml`) covers setup, Level A and the tests on a clean hosted Windows runner; B and C are never run on public runners.

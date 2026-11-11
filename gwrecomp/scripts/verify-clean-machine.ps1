@@ -52,8 +52,8 @@ if ($haveGame) {
         $latest = Get-ChildItem -LiteralPath $cfg.WorkRoot -Directory -Filter 'rebuild-*' | Sort-Object Name | Select-Object -Last 1
         if ($latest) {
             $m = Get-Content (Join-Path $latest.FullName 'rebuild_manifest.json') -Raw | ConvertFrom-Json
-            $lvlB += "- lifted C (`base.c`) SHA-256: $($m.outputs.base_c_sha256)"
-            $lvlB += "- `closure.c` SHA-256: $($m.outputs.closure_c_sha256)"
+            $lvlB += "- lifted C (base.c) SHA-256: $($m.outputs.base_c_sha256)"
+            $lvlB += "- closure.c SHA-256: $($m.outputs.closure_c_sha256)"
             $lvlB += "- objects: $(@($m.outputs.objects).Count)"
             $lvlB += "- deterministic executable SHA-256: $($m.outputs.exe_deterministic.sha256)"
             $lvlB += "- reference map: $($m.reference_map); toolchain differences from the reference: $(@($m.toolchain_differences).Count)"
