@@ -149,7 +149,72 @@ ENV={**os.environ,"PYTHONDONTWRITEBYTECODE":"1",
      "PATH":str(MINGW32_BIN)+";"+str(MINGW32.parent/"usr"/"bin")+";"+os.environ.get("PATH",""),
      "GW_ENABLE_WIDE_RASTER_PROBES":"1"}
 
+class ReferenceMap:
+    """Optional private reference symbol map (evidence/genewars-1_1.map).
+
+    The build never needs it: function boundaries come from explicit roots and closure traversal, and generated identifiers
+    are address-based. When the map IS supplied, the cross-checks below compare the reverse-engineering assumptions encoded
+    in this driver with it. When it is NOT supplied those cross-checks are SKIPPED (counted and reported), never passed.
+    """
+    path=ROOT/"evidence"/"genewars-1_1.map"
+    available=path.is_file()
+    text=path.read_text(encoding="utf-8",errors="replace") if available else ""
+    skipped=0
+    @classmethod
+    def _skip(cls):
+        cls.skipped+=1
+    @classmethod
+    def contains(cls,literal:str)->bool:
+        """Presence cross-check: the exact map text must contain `literal`."""
+        if not cls.available: cls._skip(); return True
+        return literal in cls.text
+    @classmethod
+    def has_line(cls,prefix:str)->bool:
+        """Presence cross-check: some map line must start with `prefix`."""
+        if not cls.available: cls._skip(); return True
+        return any(line.startswith(prefix) for line in cls.text.splitlines())
+    @classmethod
+    def has_unexpected_line(cls,prefix:str)->bool:
+        """Absence cross-check: True means a line that must NOT exist does exist."""
+        if not cls.available: cls._skip(); return False
+        return any(line.startswith(prefix) for line in cls.text.splitlines())
+    @classmethod
+    def line_with(cls,prefix:str,needle:str):
+        if not cls.available: cls._skip(); return "(reference map not supplied)"
+        return next((line.strip() for line in cls.text.splitlines() if line.startswith(prefix) and needle in line),None)
+    @classmethod
+    def code_symbols(cls)->dict:
+        symbols={}
+        for line in cls.text.splitlines():
+            fields=line.split()
+            if len(fields)>=2 and fields[0].startswith("0001:"):
+                try: symbols[int(fields[0].split(":",1)[1],16)]=fields[1]
+                except ValueError: pass
+        return symbols
+import atexit
+@atexit.register
+def _report_reference_map():
+    if ReferenceMap.available: print("TRACE reference_map present cross_checks=active",flush=True)
+    else: print(f"TRACE reference_map absent cross_checks_skipped={ReferenceMap.skipped}",flush=True)
+
+
 def sha(path:Path)->str: return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def cue_matches_profile(cue:Path)->bool:
+    """True when every track image of `cue` has the size and SHA-256 recorded in the version profile.
+
+    The text of a cue sheet depends on how the disc was ripped (file names, line endings) and says nothing about the audio
+    data; the track images do. This accepts the same disc content under a differently spelled cue sheet and still refuses any
+    other content. The layout derived from the cue is separately asserted below."""
+    profile=json.loads((ROOT/"tools"/"rebuild"/"profiles"/"gw11-europe.json").read_text(encoding="utf-8"))
+    expected=profile["disc"]["tracks"]
+    sys.path.insert(0,str(ROOT/"runtime"))
+    from dos_cdrom import CueImage
+    try: tracks=CueImage.from_cue(cue).tracks
+    except Exception: return False
+    if len(tracks)!=len(expected): return False
+    return all(t.path.stat().st_size==e["size"] and sha(t.path)==e["sha256"] for t,e in zip(tracks,expected))
+
 
 def create_install_manifest()->tuple[Path,dict]:
     root=INSTALL.resolve(strict=True)
@@ -673,7 +738,7 @@ def exact_slice(dis,va,count,name,synthetic_ret=False):
 
 def main()->None:
     if sha(TARGET)!=EXPECTED_TARGET: raise SystemExit("protected canonical 1.1 LE hash changed")
-    if not GENEWARS_CUE.is_file() or sha(GENEWARS_CUE)!=EXPECTED_GENEWARS_CUE:
+    if not GENEWARS_CUE.is_file() or (sha(GENEWARS_CUE)!=EXPECTED_GENEWARS_CUE and not cue_matches_profile(GENEWARS_CUE)):
         raise SystemExit("read-only GeneWars CUE is unavailable or its verified digest changed")
     sys.path.insert(0,str(ROOT/"runtime"))
     from dos_cdrom import CueImage
@@ -961,8 +1026,7 @@ def main()->None:
             bytes(image.object_data(1))[0x55CF0-image.objects[0].base:0x55CF0-image.objects[0].base+8]
                 !=_OrigDigest("ab0cfac86170350f06b49aa7dd533739d3f2e49e08db200b7990bdaa4b073e41",8)):
         raise SystemExit("packet call slot at 0x82F77 lacks its expected static LE fixup baseline")
-    map_text=(ROOT/"evidence"/"genewars-1_1.map").read_text(errors="replace")
-    if "0003:00111AE4       W?$Wvf0eo2i8:IFCLevel$$nx[]pn()v" not in map_text:
+    if not ReferenceMap.contains("0003:00111AE4       W?$Wvf0eo2i8:IFCLevel$$nx[]pn()v"):
         raise SystemExit("nearest MAP data symbol for the packet call slot changed")
     print("TRACE canonical packet call slots=00111CF8/00111CDC LE_fixups=object3->object1:00055CF0/000454E0 guests=002EBCF8/002EBCDC targets=00240CF0/002304E0; separate exact receiver contracts; MAP_nearest_named_data=IFCLevel method-array label at 00111AE4 extent_unproven")
     print("TRACE canonical process_packets creature-state call site=00056F3B bytes=FF-51-70 slot=00111F14 LE_fixup=object3->object1:0006EC70 runtime_guard=1")
@@ -1169,14 +1233,13 @@ def main()->None:
             "class_name":"unlabeled in canonical MAP"}}
     (ROOT/"evidence"/"native_ifclevel_phase9_interface_vtable.json").write_text(
         json.dumps(launch_static_evidence,indent=2)+"\n",encoding="utf-8")
-    map_text=(ROOT/"evidence"/"genewars-1_1.map").read_text(encoding="utf-8",errors="replace")
     for symbol in ("0001:00015710       W?PlugIn$:IFCLevel", "0001:00015CF0       W?PullOut$:IFCLevel",
                    "0001:000177C0       W?Draw$:IFCLevel", "0001:000179F0       W?Update$:IFCLevel",
                    "0003:00111AE4       W?$Wvf0eo2i8:IFCLevel"):
-        if symbol not in map_text:
+        if not ReferenceMap.contains(symbol):
             raise SystemExit(f"canonical MAP no longer identifies IFCLevel symbol {symbol!r}")
     # The MAP has no public symbol at 0x1869F1; retain that absence explicitly.
-    if any(line.startswith(" 0003:001869F1 ") for line in map_text.splitlines()):
+    if ReferenceMap.has_unexpected_line(" 0003:001869F1 "):
         raise SystemExit("unexpected public MAP label appeared at IFCLevel instance candidate 0x1869F1")
     print("TRACE canonical IFCLevel MAP/fixups class=IFCLevel instance_link=001869F1+20 vtable_link=00111AD4 methods=00015710/00015CF0/000179F0/000177C0 fixup_slots=8 global_symbol=unlabeled")
     level_static_evidence={"schema":"gw-ifclevel-static-map-fixups/v1",
@@ -1272,18 +1335,10 @@ def main()->None:
             bytes(original_code[0xA8D95-original_code_obj.base:
                                 0xA8D98-original_code_obj.base])!=bytes.fromhex("ff 52 22")):
         raise SystemExit(f"MyGadget callback/fixup set or A8D95 CALL [EDX+22] bytes changed: count={len(mygadget_rows)} targets={sorted(seen_callback_targets)}")
-    map_code_symbols={}
-    for line in (ROOT/"evidence"/"genewars-1_1.map").read_text(
-            encoding="utf-8",errors="replace").splitlines():
-        fields=line.split()
-        if len(fields)>=2 and fields[0].startswith("0001:"):
-            try: map_code_symbols[int(fields[0].split(":",1)[1],16)]=fields[1]
-            except ValueError: pass
-    if 0x24830 in map_code_symbols:
+    map_code_symbols=ReferenceMap.code_symbols()
+    if ReferenceMap.available and 0x24830 in map_code_symbols:
         raise SystemExit("canonical MAP unexpectedly acquired a direct symbol at callback 0x24830; re-review the callback identity")
-    map_text=(ROOT/"evidence"/"genewars-1_1.map").read_text(encoding="utf-8",errors="replace")
-    parent_vtable_symbol=next((line.strip() for line in map_text.splitlines()
-        if line.startswith(" 0003:00111AE4 ") and "W?$Wvf0eo2i8:IFCLevel" in line),None)
+    parent_vtable_symbol=ReferenceMap.line_with(" 0003:00111AE4 ","W?$Wvf0eo2i8:IFCLevel")
     if parent_vtable_symbol is None:
         raise SystemExit("canonical MAP no longer anchors the 0x111B04 address point in IFCLevel's vtable group")
     vtable_fixups={item.source_link:item for item in image.fixups
@@ -4273,7 +4328,7 @@ def main()->None:
             len(expected_state_fixups)!=27 or
             state_guard not in generated.read_text(encoding="utf-8")):
         raise SystemExit(f"FUN_000E19C0 state table is not bounded by its exact 27 LE fixups: {state_switch!r}")
-    if "0001:000E1B27       jpt_E1B20" not in map_text:
+    if not ReferenceMap.contains("0001:000E1B27       jpt_E1B20"):
         raise SystemExit("canonical MAP no longer names the E1B20 switch table at 0xE1B27")
     draw_switch=[row for row in lift_evidence.get("indexed_code_jump_tables",[])
                  if row.get("table_link")=="0x000E35D3"]
@@ -4292,7 +4347,7 @@ def main()->None:
                     [f"0x{0xE35D3+i*4:08X}" for i in range(27)] or
                 row.get("targets_link")!=expected_draw_targets
                 for row in draw_switch) or draw_guard not in generated.read_text(encoding="utf-8") or
-            "0001:000E35D3       jpt_E1DE1" not in map_text):
+            not ReferenceMap.contains("0001:000E35D3       jpt_E1DE1")):
         raise SystemExit(f"FUN_000E19C0 draw table is not bounded by all 27 exact LE fixups at all 24 sites: {draw_switch!r}")
     for site,table,count,index_reg in smack_static_tables:
         rows=[row for row in lift_evidence.get("indexed_code_jump_tables",[])
@@ -4314,8 +4369,7 @@ def main()->None:
                 rows[0].get("targets_link")!=targets or
                 row_guard not in generated.read_text(encoding="utf-8")):
             raise SystemExit(f"Smacker table at {table:#x} is not fully bounded by its {count} LE fixups at {site:#x}: {rows!r}")
-        if not any(line.startswith(f" 0001:{table:08X}       jpt_")
-                   for line in map_text.splitlines()):
+        if not ReferenceMap.has_line(f" 0001:{table:08X}       jpt_"):
             raise SystemExit(f"canonical MAP has no jpt symbol for Smacker dispatch {site:#x}/{table:#x}")
     entity_state_switch=[row for row in lift_evidence.get("indexed_code_jump_tables",[])
                          if row.get("instruction")=="0x0004AB28"]
@@ -4331,7 +4385,7 @@ def main()->None:
                 [f"0x{0x4AAA0+i*4:08X}" for i in range(28)] or
             entity_state_switch[0].get("targets_link")!=entity_state_targets or
             entity_state_targets.count("0x000490FB")!=2 or
-            "0001:0004AAA0       jpt_4AB28" not in map_text):
+            not ReferenceMap.contains("0001:0004AAA0       jpt_4AB28")):
         raise SystemExit(f"FUN_0004AB10 jpt_4AB28 is not bounded by all 28 exact LE fixups and its shared terminal blocks: {entity_state_switch!r}")
     print("TRACE canonical FUN_0004AB10 MAP=jpt_4AB28 table=0004AAA0 slots=28 LE_fixups=28 shared_target=000490FB bounds=0..27 runtime_guard=1")
     entity_type_switch=[row for row in lift_evidence.get("indexed_code_jump_tables",[])
@@ -4347,7 +4401,7 @@ def main()->None:
             [slot.get("source_link") for slot in entity_type_switch[0]["fixup_slots"]]!=
                 [f"0x{0x78B10+i*4:08X}" for i in range(7)] or
             entity_type_switch[0].get("targets_link")!=entity_type_targets or
-            "0001:00078B10       jpt_790AA" not in map_text):
+            not ReferenceMap.contains("0001:00078B10       jpt_790AA")):
         raise SystemExit(f"FUN_00078B30 jpt_790AA is not backed by all seven exact LE fixups: {entity_type_switch!r}")
     print("TRACE canonical FUN_00078B30 MAP=jpt_790AA table=00078B10 slots=7 LE_fixups=7 bounds=0..6 runtime_guard=1")
     effect_switch=[row for row in lift_evidence.get("indexed_code_jump_tables",[])
@@ -4367,7 +4421,7 @@ def main()->None:
             len(effect_switch[0].get("fixup_slots",[]))!=65 or
             effect_switch[0].get("targets_link")!=effect_targets or
             effect_targets[43]!="0x00087F38" or effect_guard not in generated.read_text(encoding="utf-8") or
-            "0001:00086704       jpt_8936F" not in map_text):
+            not ReferenceMap.contains("0001:00086704       jpt_8936F")):
         raise SystemExit(f"BioGame effect-type switch lacks its exact 65 LE slots, original bounds, or live index-43 target: {effect_switch!r}")
     print("TRACE canonical BioGame effect switch MAP=jpt_8936F table=00086704 slots=65 LE_fixups=65 bounds=0..64 live_index=43 target=00087F38 runtime_guard=1")
     system_switch=[row for row in lift_evidence.get("indexed_code_jump_tables",[])
@@ -4384,8 +4438,7 @@ def main()->None:
             gadget_switch[0].get("count")!=4 or
             gadget_switch[0].get("targets_link")!=expected_gadget_targets or
             len(gadget_fixups)!=4 or any(x.target_object!=1 for x in gadget_fixups) or
-            not any(line.startswith(" 0001:00075734       jpt_7583A")
-                    for line in map_text.splitlines())):
+            not ReferenceMap.has_line(" 0001:00075734       jpt_7583A")):
         raise SystemExit(f"gadget-kind switch is not fully backed by jpt_7583A and its four LE fixups: {gadget_switch!r}")
     glyph_switch=[row for row in lift_evidence.get("indexed_code_jump_tables",[])
                   if row.get("instruction")=="0x00083F60"]
@@ -4394,8 +4447,7 @@ def main()->None:
             glyph_switch[0].get("count")!=70 or len(glyph_fixups)!=70 or
             any(x.target_object!=1 for x in glyph_fixups) or
             sorted(x.source_link for x in glyph_fixups)!=[0x83AD4+i*4 for i in range(70)] or
-            not any(line.startswith(" 0001:00083AD4       jpt_83F60")
-                    for line in map_text.splitlines())):
+            not ReferenceMap.has_line(" 0001:00083AD4       jpt_83F60")):
         raise SystemExit(f"glyph-render table jpt_83F60 is not fully backed by all 70 contiguous LE fixups: {glyph_switch!r}")
     level_switch=[row for row in lift_evidence.get("indexed_code_jump_tables",[])
                   if row.get("instruction")=="0x000159CF"]
@@ -4416,7 +4468,7 @@ def main()->None:
             len(edge_scroll_fixups)!=8 or any(item.target_object!=1 for item in edge_scroll_fixups) or
             [item.source_link for item in edge_scroll_fixups]!=[0x79DA4+4*i for i in range(8)] or
             edge_scroll_switch[0].get("targets_link")!=edge_scroll_targets or
-            not any(line.startswith(" 0001:00079DA4       jpt_7A0C4") for line in map_text.splitlines())):
+            not ReferenceMap.has_line(" 0001:00079DA4       jpt_7A0C4")):
         raise SystemExit(f"MapDisplay edge-scroll table is not bounded by its exact eight LE fixups: {edge_scroll_switch!r}")
     planetside_action_switch=[row for row in lift_evidence.get("indexed_code_jump_tables",[])
                               if row.get("instruction")=="0x00021AEB"]
@@ -4435,7 +4487,7 @@ def main()->None:
             [item.source_link for item in planetside_action_fixups]!=[0x21354+4*i for i in range(8)] or
             planetside_action_targets!=expected_planetside_targets or
             planetside_action_switch[0].get("targets_link")!=expected_planetside_targets or
-            not any(line.startswith(" 0001:00021354       jpt_21AEB") for line in map_text.splitlines())):
+            not ReferenceMap.has_line(" 0001:00021354       jpt_21AEB")):
         raise SystemExit(f"IFCPlanetside action table jpt_21AEB is not backed by its exact eight contiguous Object 1 LE fixups: {planetside_action_switch!r}")
     print("TRACE canonical IFCPlanetside::Update MAP=jpt_21AEB table=00021354 slots=8 LE_fixups=8 bounds=0..7 runtime_guard=1")
     observed_switch_sites={row["callsite"] for row in lift_evidence.get("verified_indirect_targets",[])
@@ -4507,7 +4559,7 @@ def main()->None:
     if (len(close_callback_rows)!=1 or
             close_callback_rows[0].get("link_target")!="0x000D7220" or
             close_callback_rows[0].get("guest_target")!="0x002C2220" or
-            "{ 0x002C2220u, recomp_gw_partial_nullsub_7 }" not in lifted_text):
+            "{ 0x002C2220u, recomp_gw_partial_0x000D7220 }" not in lifted_text):
         raise SystemExit("SMACKCLOSE's fixup-backed callback is not mapped to the lifted nullsub_7 body")
     # Bound the original setup_game body at the continuation after the
     # BIOINTRO file handle is closed. Every instruction from the function's
@@ -4723,11 +4775,11 @@ def main()->None:
         raise SystemExit("original IFCOptions::PullOut body is missing from generated closure")
     pullout_body=lifted_text[pullout_start:pullout_end]
     for marker,label in (
-            ("RECOMP_CALL(recomp_gw_partial_W_FreeMyGadgets_n_pn_MyGadget_v);",
+            ("RECOMP_CALL(recomp_gw_partial_0x000A8B30);",
              "after_FreeMyGadgets"),
-            ("RECOMP_CALL(recomp_gw_partial_LbDataFree);",
+            ("RECOMP_CALL(recomp_gw_partial_0x00098B94);",
              "after_LbDataFree_FILESCR"),
-            ("RECOMP_CALL(recomp_gw_partial_LbFileLoadAt);",
+            ("RECOMP_CALL(recomp_gw_partial_0x000150D0);",
              "after_LbFileLoadAt_MAIN_GLA")):
         if pullout_body.count(marker)!=1:
             raise SystemExit(f"original IFCOptions::PullOut call boundary missing: {label}")
@@ -4741,15 +4793,15 @@ def main()->None:
         raise SystemExit("expected both emitted copies of the original LbMemoryFree store")
     lifted_text=lifted_text.replace(free_store,free_store+
         '\n    gw_trace_lbm_free_store(0x0009205Cu,DS_BASE,edx,eax);')
-    title_pullout_start=lifted_text.find("void gw_partial_W_PullOut_IFCTitle_n_v(void) {")
+    title_pullout_start=lifted_text.find("void gw_partial_0x00070E30(void) {")
     title_pullout_end=lifted_text.find("\nvoid gw_partial_0x00070EB0(void)",title_pullout_start+1)
     if title_pullout_start<0 or title_pullout_end<0:
         raise SystemExit("original IFCTitle::PullOut emitted body is missing")
     title_pullout_body=lifted_text[title_pullout_start:title_pullout_end]
     for marker,label in (
-        ("RECOMP_CALL(recomp_gw_partial_W_FreeMyGadgets_n_pn_MyGadget_v); /* 0x00070E72: call 0xa8b30 */",
+        ("RECOMP_CALL(recomp_gw_partial_0x000A8B30); /* 0x00070E72: call 0xa8b30 */",
          "after_TITLE_FreeMyGadgets"),
-        ("RECOMP_CALL(recomp_gw_partial_LbDataFree); /* 0x00070E8A: call 0x98b94 */",
+        ("RECOMP_CALL(recomp_gw_partial_0x00098B94); /* 0x00070E8A: call 0x98b94 */",
          "after_TITLE_LbDataFree")):
         if title_pullout_body.count(marker)==1:
             title_pullout_body=title_pullout_body.replace(marker,marker+
@@ -4762,8 +4814,8 @@ def main()->None:
         # inserting a duplicate observer.
         callsite=0x70E72 if label=="after_TITLE_FreeMyGadgets" else 0x70E8A
         target=0xA8B30 if label=="after_TITLE_FreeMyGadgets" else 0x98B94
-        callee=("recomp_gw_partial_W_FreeMyGadgets_n_pn_MyGadget_v" if target==0xA8B30
-                else "recomp_gw_partial_LbDataFree")
+        callee=("recomp_gw_partial_0x000A8B30" if target==0xA8B30
+                else "recomp_gw_partial_0x00098B94")
         return_eip=callsite+5
         addressed=(f"GW_RECOMP_CALL_AT(0x{callsite:08X}u,0x{target:x}u,0x{return_eip:08X}u,{callee}); "
                    f"/* 0x{callsite:08X}: call 0x{target:x} */")
@@ -4791,14 +4843,14 @@ def main()->None:
         site=int(re.search(r'0x([0-9A-Fa-f]{8}):',store).group(1),16)
         lifted_text=lifted_text.replace(store,store+
             f'\n    gw_trace_gadget_free_store(0x{site:08X}u,DS_BASE+({address}),edx,ebx,esi,edi);',1)
-    free_gadget_body_start=lifted_text.find("void gw_partial_W_FreeMyGadgets_n_pn_MyGadget_v(void) {")
+    free_gadget_body_start=lifted_text.find("void gw_partial_0x000A8B30(void) {")
     free_gadget_body_end=lifted_text.find("\nvoid ",free_gadget_body_start+1)
     if free_gadget_body_start<0 or free_gadget_body_end<0:
         raise SystemExit("original FreeMyGadgets body is missing")
     free_gadget_body=lifted_text[free_gadget_body_start:free_gadget_body_end]
-    free_gadget_call="RECOMP_CALL(recomp_gw_partial_LbMemoryFree); /* 0x000A8BA8: call 0x92030 */"
+    free_gadget_call="RECOMP_CALL(recomp_gw_partial_0x00092030); /* 0x000A8BA8: call 0x92030 */"
     free_gadget_call_at=("GW_RECOMP_CALL_AT(0x000A8BA8u,0x92030u,0x000A8BADu,"
-        "recomp_gw_partial_LbMemoryFree); /* 0x000A8BA8: call 0x92030 */")
+        "recomp_gw_partial_0x00092030); /* 0x000A8BA8: call 0x92030 */")
     if free_gadget_body.count(free_gadget_call)==1:
         free_gadget_call_text=free_gadget_call
     elif free_gadget_body.count(free_gadget_call_at)==1:
@@ -4830,9 +4882,9 @@ def main()->None:
     # CRT DPMI callback. Count original guest instruction hooks and stop the
     # replay promptly instead of relying on a wall-clock timeout.
     memset_call_pattern=re.compile(
-        r'^(    (?:RECOMP_CALL\(recomp_gw_partial_memset\)|'
+        r'^(    (?:RECOMP_CALL\(recomp_gw_partial_0x00096C10\)|'
         r'GW_RECOMP_CALL_AT\(0x[0-9A-Fa-f]{8}u,0x96c10u,0x[0-9A-Fa-f]{8}u,'
-        r'recomp_gw_partial_memset\)); /\* (0x[0-9A-Fa-f]{8}): call 0x96c10 \*/)$',
+        r'recomp_gw_partial_0x00096C10\)); /\* (0x[0-9A-Fa-f]{8}): call 0x96c10 \*/)$',
         re.MULTILINE)
     lifted_text,memset_calls=memset_call_pattern.subn(
         lambda m:f'    gw_watch_memset_call({m.group(2)}u,eax,ebx,edx);\n{m.group(1)}',lifted_text)
@@ -4859,7 +4911,7 @@ def main()->None:
         setup_epilogue_site)
     strstr_pop_site=("    recomp_begin_memory_access_ex(RECOMP_SEG_SS, 4u, 0x000AA0CCu, RECOMP_MEM_ACCESS_READ, 585u, \"pop\");\n"
         "    { uint32_t _seg_value = POP32_VAL(esp); if (!recomp_write_segment(RECOMP_SEG_ES, (uint16_t)(_seg_value), 0x000AA0CCu)) return; } /* 0x000AA0CC: pop es */")
-    strstr_start=lifted_text.find("void gw_partial_strstr(void) {")
+    strstr_start=lifted_text.find("void gw_partial_0x000AA079(void) {")
     strstr_end=lifted_text.find("\nvoid ",strstr_start+1)
     if strstr_start<0 or strstr_end<0:
         raise SystemExit("original strstr_ body is unavailable")
@@ -4989,8 +5041,8 @@ def main()->None:
         {0x92B71:BasicBlock(0x92B71,0x92B88,alloc_ins,is_exit=True)},size=0x17)
     alloc_c=Lifter().lift_function(alloc_slice)
     alloc_c=alloc_c.replace("RECOMP_CALL(sub_00091E00)",
-                            "RECOMP_CALL(recomp_gw_partial_LbMemoryAlloc)")
-    if "RECOMP_CALL(recomp_gw_partial_LbMemoryAlloc)" not in alloc_c or "0x00092B82" not in alloc_c:
+                            "RECOMP_CALL(recomp_gw_partial_0x00091E00)")
+    if "RECOMP_CALL(recomp_gw_partial_0x00091E00)" not in alloc_c or "0x00092B82" not in alloc_c:
         raise SystemExit("original b_screen block no longer calls allocator then stores b_screen")
     lifted_text += "\n"+alloc_c+"\n"
     # Exercise the exact virtual dispatch instructions from control_game that
@@ -5169,8 +5221,8 @@ def main()->None:
         raise SystemExit("original draw_game -> IFCTitle::Draw dispatch bytes changed")
     lifted_text += "\n"+draw_thunk+"\n"+draw_dispatch+"\n"
     rnc_calls=(
-        '    RECOMP_CALL(recomp_gw_partial_UnpackM1); /* 0x00097EE0: call 0xb9cfc */',
-        '    GW_RECOMP_CALL_AT(0x00097EE0u,0xb9cfcu,0x00097EE5u,recomp_gw_partial_UnpackM1); /* 0x00097EE0: call 0xb9cfc */',
+        '    RECOMP_CALL(recomp_gw_partial_0x000B9CFC); /* 0x00097EE0: call 0xb9cfc */',
+        '    GW_RECOMP_CALL_AT(0x00097EE0u,0xb9cfcu,0x00097EE5u,recomp_gw_partial_0x000B9CFC); /* 0x00097EE0: call 0xb9cfc */',
     )
     rnc_payload='    esi = edi; /* 0x000B9DA1: mov esi, edi */'
     rnc_call=next((candidate for candidate in rnc_calls if candidate in lifted_text),None)
@@ -5189,12 +5241,12 @@ def main()->None:
             rnc_payload+'\n    gw_capture_lbdataload_relocated_payload(esi);')
     options_fileload_calls={
         0x6A481: (
-            '    RECOMP_CALL(recomp_gw_partial_LbFileLoadAt); /* 0x0006A481: call 0x150d0 */',
-            '    GW_RECOMP_CALL_AT(0x0006A481u,0x150d0u,0x0006A486u,recomp_gw_partial_LbFileLoadAt); /* 0x0006A481: call 0x150d0 */',
+            '    RECOMP_CALL(recomp_gw_partial_0x000150D0); /* 0x0006A481: call 0x150d0 */',
+            '    GW_RECOMP_CALL_AT(0x0006A481u,0x150d0u,0x0006A486u,recomp_gw_partial_0x000150D0); /* 0x0006A481: call 0x150d0 */',
         ),
         0x6A495: (
-            '    RECOMP_CALL(recomp_gw_partial_LbFileLoadAt); /* 0x0006A495: call 0x150d0 */',
-            '    GW_RECOMP_CALL_AT(0x0006A495u,0x150d0u,0x0006A49Au,recomp_gw_partial_LbFileLoadAt); /* 0x0006A495: call 0x150d0 */',
+            '    RECOMP_CALL(recomp_gw_partial_0x000150D0); /* 0x0006A495: call 0x150d0 */',
+            '    GW_RECOMP_CALL_AT(0x0006A495u,0x150d0u,0x0006A49Au,recomp_gw_partial_0x000150D0); /* 0x0006A495: call 0x150d0 */',
         ),
     }
     for site,candidates in options_fileload_calls.items():
@@ -5291,14 +5343,14 @@ def main()->None:
                   'recomp_eflags(_flag_k,_flag_a,_flag_b,_cf,_df));')
             text=text[:insert_at]+hook+text[insert_at:]
         return text
-    rational_start=lifted_text.find('void gw_partial_RationalAlloc(void) {')
-    rational_end=lifted_text.find('void gw_partial_CreateNewNHeap(void) {',rational_start)
+    rational_start=lifted_text.find('void gw_partial_0x000C3CA9(void) {')
+    rational_end=lifted_text.find('void gw_partial_0x000C3D7A(void) {',rational_start)
     if rational_start<0 or rational_end<0:
         raise SystemExit("RationalAlloc/CreateNewNHeap generated bodies are absent")
     lifted_text=(lifted_text[:rational_start]+
         add_stack_trace_to_span(lifted_text[rational_start:rational_end],0xC3CA9,0xC3D79)+
         lifted_text[rational_end:])
-    create_start=lifted_text.find('void gw_partial_CreateNewNHeap(void) {',rational_start)
+    create_start=lifted_text.find('void gw_partial_0x000C3D7A(void) {',rational_start)
     create_end=lifted_text.find('\nvoid gw_partial_',create_start+1)
     if create_end<0: create_end=len(lifted_text)
     lifted_text=(lifted_text[:create_start]+
@@ -5371,8 +5423,8 @@ def main()->None:
             stack_guard_call+'\n    gw_trace_stack_remaining(0x000BAD98u,eax,esp);')
     lifted_text='void gw_trace_stack_remaining(unsigned int,unsigned int,unsigned int);\n'+lifted_text
     fatal_calls=(
-        '    RECOMP_CALL(recomp_gw_partial_do_exit_with_msg); /* 0x000C8A3B: call 0xafbfd */',
-        '    GW_RECOMP_CALL_AT(0x000C8A3Bu,0xafbfdu,0x000C8A40u,recomp_gw_partial_do_exit_with_msg); /* 0x000C8A3B: call 0xafbfd */',
+        '    RECOMP_CALL(recomp_gw_partial_0x000AFBFD); /* 0x000C8A3B: call 0xafbfd */',
+        '    GW_RECOMP_CALL_AT(0x000C8A3Bu,0xafbfdu,0x000C8A40u,recomp_gw_partial_0x000AFBFD); /* 0x000C8A3B: call 0xafbfd */',
     )
     fatal_call=next((candidate for candidate in fatal_calls if candidate in lifted_text),None)
     if fatal_call is None:
@@ -5380,18 +5432,18 @@ def main()->None:
     if 'gw_trace_fatal_message(eax,edx);' not in lifted_text:
         lifted_text=lifted_text.replace(fatal_call,
             '    gw_trace_fatal_message(eax,edx);\n'+fatal_call)
-    exit_entry='void gw_partial_do_exit_with_msg(void) {'
+    exit_entry='void gw_partial_0x000AFBFD(void) {'
     if lifted_text.count(exit_entry)!=1:
         raise SystemExit("original Watcom do_exit_with_msg entry changed")
     lifted_text=lifted_text.replace(exit_entry,
         exit_entry+'\n    gw_trace_do_exit(eax,edx,esp);',1)
-    fini_entry='void gw_partial_FiniRtns(void) {'
+    fini_entry='void gw_partial_0x000C8767(void) {'
     if lifted_text.count(fini_entry)!=1:
         raise SystemExit("original Watcom FiniRtns entry changed")
     lifted_text=lifted_text.replace(fini_entry,
         fini_entry+'\n    gw_trace_fini_rtns(eax,edx,esp);',1)
-    for va,entry in ((0x98C19,"void gw_partial_exit(void)"),
-                     (0x98C31,"void gw_partial_exit_0x00098C31(void)"),
+    for va,entry in ((0x98C19,"void gw_partial_0x00098C19(void)"),
+                     (0x98C31,"void gw_partial_0x00098C31(void)"),
                      (0xD226E,"void gw_partial_0x000D226E(void)")):
         pos=lifted_text.find(entry)
         brace=lifted_text.find("{",pos) if pos>=0 else -1
@@ -6286,7 +6338,7 @@ def main()->None:
     # GW_V18_SMK_TIMED_CALLS: time only the original RAD calls, with host QPC.
     smk_timed=[]
     for line in lifted_text.splitlines():
-        for site,target,symbol,phase in [('0x000AE3CBu', '0xc5140u', 'recomp_gw_partial_SMACKTOBUFFER', 2), ('0x000AE42Au', '0xc5bd0u', 'recomp_gw_partial_SMACKDOFRAME', 3), ('0x000AE461u', '0xc5bd0u', 'recomp_gw_partial_SMACKDOFRAME', 3), ('0x000AE485u', '0xc5900u', 'recomp_gw_partial_SMACKNEXTFRAME', 4), ('0x000AE48Bu', '0xc47f0u', 'recomp_gw_partial_SMACKWAIT', 5), ('0x000AE57Cu', '0xc5140u', 'recomp_gw_partial_SMACKTOBUFFER', 2), ('0x000AE5B9u', '0xc5bd0u', 'recomp_gw_partial_SMACKDOFRAME', 3), ('0x000AE5E4u', '0xc5900u', 'recomp_gw_partial_SMACKNEXTFRAME', 4), ('0x000AE5EAu', '0xc47f0u', 'recomp_gw_partial_SMACKWAIT', 5)]:
+        for site,target,symbol,phase in [('0x000AE3CBu', '0xc5140u', 'recomp_gw_partial_0x000C5140', 2), ('0x000AE42Au', '0xc5bd0u', 'recomp_gw_partial_0x000C5BD0', 3), ('0x000AE461u', '0xc5bd0u', 'recomp_gw_partial_0x000C5BD0', 3), ('0x000AE485u', '0xc5900u', 'recomp_gw_partial_0x000C5900', 4), ('0x000AE48Bu', '0xc47f0u', 'recomp_gw_partial_0x000C47F0', 5), ('0x000AE57Cu', '0xc5140u', 'recomp_gw_partial_0x000C5140', 2), ('0x000AE5B9u', '0xc5bd0u', 'recomp_gw_partial_0x000C5BD0', 3), ('0x000AE5E4u', '0xc5900u', 'recomp_gw_partial_0x000C5900', 4), ('0x000AE5EAu', '0xc47f0u', 'recomp_gw_partial_0x000C47F0', 5)]:
             if f"GW_RECOMP_CALL_AT({site},{target}," in line and symbol in line:
                 smk_timed.append((line,phase,site))
     if len(smk_timed)!=9:

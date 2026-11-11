@@ -1,6 +1,6 @@
 {
   "schema": "gwrecomp-evidence-inputs/2",
-  "note": "Files the build reads from evidence/. They are user supplied and never distributed; rebuild.ps1 copies each from the location you configured and verifies its SHA-256.",
+  "note": "Files the build reads from evidence/. They are user supplied and never distributed. GW.EXE is required; the symbol map is OPTIONAL (reference only). rebuild.ps1 copies each supplied file from the location you configured and verifies its SHA-256.",
   "files": [
     {
       "path": "evidence/genewars-1_1.exe",
@@ -12,9 +12,10 @@
     {
       "path": "evidence/genewars-1_1.map",
       "sha256": "30e06c203154904740c4ff3f1fcc4971fb6c0ef10ace2f4f9dc63367d45b99b3",
-      "source": "file named by GENEWARS_MAP (symbol map; not part of the game install)",
+      "source": "optional private reference map named by GENEWARS_MAP (cross-checks and labels only; never needed to build)",
       "source_env": "GENEWARS_MAP",
-      "source_relative": ""
+      "source_relative": "",
+      "optional": true
     }
   ]
 }

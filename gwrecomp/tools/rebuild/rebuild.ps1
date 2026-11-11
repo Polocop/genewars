@@ -56,7 +56,7 @@ if($DryRun){
 foreach($need in @(@('Python','GWRECOMP_PYTHON'),@('Msys2','MSYS2_ROOT'),@('ClangX64','GWRECOMP_CLANG_X64'))){
   if(-not $Cfg[$need[0]]){ throw "$($need[1]) is not configured and could not be auto-detected. Run scripts\setup.ps1 (see tools\rebuild\README_BUILD.md)." }
 }
-foreach($need in @(@('Install','GENEWARS_INSTALL_DIR'),@('Cue','GENEWARS_CUE'),@('Map','GENEWARS_MAP'))){
+foreach($need in @(@('Install','GENEWARS_INSTALL_DIR'),@('Cue','GENEWARS_CUE'))){
   if(-not $Cfg[$need[0]]){ throw "$($need[1]) is not set. This input comes from your own copy of the game; see tools\rebuild\README_BUILD.md 'Inputs you must supply'." }
 }
 $Python = $Cfg.Python
@@ -169,6 +169,7 @@ Phase '4_pcrecomp' {
 Phase '5_inputs' {
   $ev = Get-Content "$here\evidence_inputs.json" -Raw | ConvertFrom-Json
   foreach($e in $ev.files){
+    if($e.optional -and -not $Cfg.Map -and $e.source_env -eq 'GENEWARS_MAP'){ Write-Host "  optional input $($e.path) not supplied: building without the reference symbol map (identifiers are address-based; map cross-checks are skipped)"; $M.reference_map = 'absent'; continue }
     $source = if($e.source_env -eq 'GENEWARS_INSTALL_DIR'){ Join-Path $Cfg.Install $e.source_relative } elseif($e.source_env -eq 'GENEWARS_MAP'){ $Cfg.Map } else { throw "unknown input source $($e.source_env)" }
     $dst = Join-Path $buildRoot $e.path
     if(-not (Test-Path -LiteralPath $source)){ throw "input missing for $($e.path): $source ($($e.source_env))" }
@@ -177,6 +178,7 @@ Phase '5_inputs' {
   }
   New-Item -ItemType Directory -Force "$buildRoot\work", "$buildRoot\bin" | Out-Null
   $M.inputs_placed = @($ev.files).Count
+  if(-not $M.Contains('reference_map')){ $M.reference_map = 'present' }
 }
 $env:GWRECOMP_BUILD_SDL2_INTERACTIVE = '1'
 if($Lift -eq 'reuse'){ $env:GWRECOMP_REUSE_EXISTING_LIFT = '1' }

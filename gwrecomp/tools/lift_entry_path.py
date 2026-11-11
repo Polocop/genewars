@@ -136,14 +136,28 @@ if args.partial_root:
 elif rebases is not None and unknown:
     raise SystemExit(f"refusing full entry-path lift with incomplete runtime map; unknown LE objects: {unknown}")
 
+# The symbol map is OPTIONAL. Function boundaries come from the explicit roots and the closure traversal below, never from
+# the map. When a reference map is present it is used only (a) to cross-check expectations (symbol identity at known
+# addresses) and (b) to label records in the report. It never influences the generated identifiers, which are
+# address-based, so the generated C is identical with or without it.
+# GWRECOMP_SYMBOL_STEMS=map restores the historical map-derived identifiers (only for comparing with older output).
+_MAP_PATH = ROOT / "evidence" / "genewars-1_1.map"
+REFERENCE_MAP = _MAP_PATH.is_file()
+SYMBOL_STEMS = os.environ.get("GWRECOMP_SYMBOL_STEMS", "address")
+if SYMBOL_STEMS not in ("address", "map"):
+    raise SystemExit("GWRECOMP_SYMBOL_STEMS must be 'address' or 'map'")
+if SYMBOL_STEMS == "map" and not REFERENCE_MAP:
+    raise SystemExit("GWRECOMP_SYMBOL_STEMS=map needs the reference map evidence/genewars-1_1.map")
 map_rows = {}
-for line in (ROOT / "evidence" / "genewars-1_1.map").read_text(errors="replace").splitlines():
-    fields = line.split()
-    if len(fields) >= 2 and fields[0].startswith("0001:"):
-        try:
-            map_rows[int(fields[0].split(":")[1], 16)] = fields[1]
-        except ValueError:
-            pass
+if REFERENCE_MAP:
+    for line in _MAP_PATH.read_text(errors="replace").splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0].startswith("0001:"):
+            try:
+                map_rows[int(fields[0].split(":")[1], 16)] = fields[1]
+            except ValueError:
+                pass
+print("TRACE symbols reference_map=%s stems=%s entries=%d" % ("present" if REFERENCE_MAP else "absent", SYMBOL_STEMS, len(map_rows)), flush=True)
 
 code_obj = image.objects[0]
 code = bytes(image.object_data(1))
@@ -253,7 +267,7 @@ else:
     stop_after_call = None
     matched_stop_after_call = False
     for name, address in EXPECTED.items():
-        if map_rows.get(address) != name:
+        if REFERENCE_MAP and map_rows.get(address) != name:
             raise SystemExit(f"MAP root mismatch {name} {address:#x}: {map_rows.get(address)}")
 
 # Optional callback edges are intentionally scoped to exact indirect
@@ -1290,7 +1304,7 @@ for row in args.runtime_indexed_code_jump_table:
         if target_obj is None or target_obj.index!=1 or not target_obj.executable or not target_obj.linear_base_verified:
             raise SystemExit(f"Smacker jump-table target 0x{target:08X} is outside verified object-1 code")
         targets.append(target)
-    if [map_rows.get(target) for target in targets]!=contract["symbols"]:
+    if REFERENCE_MAP and [map_rows.get(target) for target in targets]!=contract["symbols"]:
         raise SystemExit(f"Smacker table target MAP symbols changed: {[map_rows.get(x) for x in targets]!r}")
     runtime_indexed_code_jump_tables[site]={
         "table_link":table_link,"table_guest":table_guest,"count":count,
@@ -1611,7 +1625,7 @@ if args.partial_root:
                 original_function.size = sum(block.end-block.start
                                              for block in original_function.blocks.values())
             function = original_function
-        lift_stem = "gw_partial_" + re.sub(r"\W+", "_", map_rows.get(address, f"0x{address:08X}")).strip("_")
+        lift_stem = "gw_partial_" + re.sub(r"\W+", "_", (map_rows.get(address, f"0x{address:08X}") if SYMBOL_STEMS == "map" else f"0x{address:08X}")).strip("_")
         # Watcom MAP aliases are not guaranteed unique (for example the
         # int386x public name labels both its wrapper and the internal thunk).
         # Keep dispatcher identity address-based when the MAP stem collides.

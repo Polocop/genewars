@@ -104,7 +104,7 @@ Step '5. Inputs from your own copy of the game (Levels B and C)'
 $cfg = Get-GwConfig
 Write-GwConfigSummary $cfg
 if ($cfg.Install -or $cfg.Cue -or $cfg.Map) {
-    if (Test-Path $venvPy) { & $venvPy (Join-Path $root 'tools\rebuild\check_inputs.py') --install $cfg.Install --cue $cfg.Cue --map $cfg.Map }
+    if (Test-Path $venvPy) { & $venvPy (Join-Path $root 'tools\rebuild\check_inputs.py') --install $cfg.Install --cue $cfg.Cue @(if ($cfg.Map) { '--map'; $cfg.Map }) }
 } else {
     Write-Host '  No game inputs configured. Level A does not need them. For levels B/C re-run with:'
     Write-Host '    scripts\setup.ps1 -GenewarsInstall <GENEWARS folder> -GenewarsCue <cue file> -GenewarsMap <genewars-1_1.map>'

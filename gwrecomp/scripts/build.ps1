@@ -46,8 +46,8 @@ if ($Level -eq 'A') {
 }
 
 # levels B and C need game inputs
-foreach ($pair in @(@('Install','GENEWARS_INSTALL_DIR'),@('Cue','GENEWARS_CUE'),@('Map','GENEWARS_MAP'))) { if (-not $cfg[$pair[0]]) { Fail "$($pair[1]) is not set. Levels B and C need your own game files: see tools\rebuild\README_BUILD.md 'Inputs you must supply'." } }
-& $cfg.Python (Join-Path $root 'tools\rebuild\check_inputs.py') --install $cfg.Install --cue $cfg.Cue --map $cfg.Map
+foreach ($pair in @(@('Install','GENEWARS_INSTALL_DIR'),@('Cue','GENEWARS_CUE'))) { if (-not $cfg[$pair[0]]) { Fail "$($pair[1]) is not set. Levels B and C need your own game files: see tools\rebuild\README_BUILD.md 'Inputs you must supply'." } }
+& $cfg.Python (Join-Path $root 'tools\rebuild\check_inputs.py') --install $cfg.Install --cue $cfg.Cue @(if ($cfg.Map) { '--map'; $cfg.Map })
 if ($LASTEXITCODE) { Fail 'required game inputs are missing or differ from the supported build (see list above).' }
 
 if ($Level -eq 'B') {

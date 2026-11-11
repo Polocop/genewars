@@ -24,19 +24,19 @@
 
 /* The generated closure defines this original entry in a separate C unit;
    the exact indirect dispatcher below needs its declaration here. */
-extern void gw_partial_LbMemoryFree(void);
-extern void recomp_gw_partial_W_setup_host_n_v(void);
+extern void gw_partial_0x00092030(void);
+extern void recomp_gw_partial_0x00093BD0(void);
 /* These are the eight original, no-argument setup_game world-array
    initializers called at 0x95434..0x95457. The closure already contains
    their exact LE bodies; keep them as original calls, not host-side memset. */
-extern void recomp_gw_partial_W_InitArray_Creature_n_v(void);
-extern void recomp_gw_partial_W_InitArray_Plant_n_v(void);
-extern void recomp_gw_partial_W_InitArray_PlSpec_n_v(void);
-extern void recomp_gw_partial_W_InitArray_Building_n_v(void);
-extern void recomp_gw_partial_W_InitArray_Effect_n_v(void);
-extern void recomp_gw_partial_W_InitArray_Event_n_v(void);
-extern void recomp_gw_partial_W_InitArray_Drone_n_v(void);
-extern void recomp_gw_partial_W_InitArray_UnknArr01_n_v(void);
+extern void recomp_gw_partial_0x000471C0(void);
+extern void recomp_gw_partial_0x00056FE0(void);
+extern void recomp_gw_partial_0x00043A20(void);
+extern void recomp_gw_partial_0x00039CB0(void);
+extern void recomp_gw_partial_0x00085030(void);
+extern void recomp_gw_partial_0x00089830(void);
+extern void recomp_gw_partial_0x000139B0(void);
+extern void recomp_gw_partial_0x00010010(void);
 
 #define DOS_CONVENTIONAL_TOP 0x0000A000u
 static uint8_t vga_dac[768];
@@ -122,8 +122,8 @@ static LONG WINAPI gw_capture_unhandled_exception(EXCEPTION_POINTERS *info) {
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
-void gw_partial_LbDataLoad(void);
-void gw_partial_LbDataLoadAll(void);
+void gw_partial_0x00014FF0(void);
+void gw_partial_0x00015090(void);
 void gw_original_getconfigs_entry(void);
 void gw_original_text_parser_entry(void);
 void gw_original_text_clip_entry(void);
@@ -134,40 +134,40 @@ void gw_original_setup_game_record_table_entry(void);
 void gw_original_setup_game_startup_resources_entry(void);
 void gw_original_setup_game_font_initializers_entry(void);
 void gw_original_setup_game_vector_init_entry(void);
-void recomp_gw_partial_W_setup_game_n_v(void);
+void recomp_gw_partial_0x00094AC0(void);
 void gw_original_draw_game_level_palette_fade_entry(void);
 void gw_original_setup_controller_entry(void);
 void gw_original_game_frame_timer_tick_entry(void);
 void gw_partial_0x00092860(void);
 void gw_partial_0x000927E9(void);
-void gw_partial_LbMemorySetup(void);
-void gw_partial_LbMemoryAlloc(void);
-void gw_partial_LbMemoryAllocLow(void);
-void gw_partial_UnpackM1(void);
+void gw_partial_0x000921F0(void);
+void gw_partial_0x00091E00(void);
+void gw_partial_0x00091E90(void);
+void gw_partial_0x000B9CFC(void);
 void gw_partial_0x00092670(void);
 void gw_partial_0x00014BB0(void);
-void gw_partial_mem_putc(void);
+void gw_partial_0x00096B10(void);
 void gw_partial_0x000830F0(void);
-void gw_partial_InitRtns(void);
+void gw_partial_0x000C871C(void);
 void gw_partial_0x000AF9E4(void);
 void gw_partial_0x0001C440(void);
-void gw_partial_delay_init(void);
-void gw_partial_setEFGfmt(void);
-void gw_partial_j___sys_init_387_emulator(void);
-void gw_partial_chk8087(void);
-void gw_partial_clock_init(void);
+void gw_partial_0x000BAAC2(void);
+void gw_partial_0x000BBE29(void);
+void gw_partial_0x000A38DC(void);
+void gw_partial_0x000BC0E3(void);
+void gw_partial_0x000BC19F(void);
 void gw_partial_0x000AC3B4(void);
-void gw_partial_Init_Argv(void);
-void gw_partial_InitFiles(void);
-void gw_partial_W_init_n_v(void);
-void gw_partial_checkIsDBCS(void);
-void gw_partial_W_init_n_v_0(void);
-void gw_partial_W_init_n_v_1(void);
+void gw_partial_0x000C87B6(void);
+void gw_partial_0x000D1FBC(void);
+void gw_partial_0x000BC1F6(void);
+void gw_partial_0x000BC65D(void);
+void gw_partial_0x000C3584(void);
+void gw_partial_0x000C3882(void);
 void gw_partial_0x000D21EE(void);
-void gw_partial_init(void);
-void gw_partial_setenvp(void);
-void gw_partial_W_longjmpInit_n_v(void);
-void gw_partial_verify_pentium_fdiv_bug(void);
+void gw_partial_0x000D5DB5(void);
+void gw_partial_0x000DFDC1(void);
+void gw_partial_0x000DCED5(void);
+void gw_partial_0x000E165E(void);
 void gw_partial_0x0002C3D0(void);
 void gw_partial_0x0002C520(void);
 void gw_partial_0x0002C560(void);
@@ -186,18 +186,18 @@ void gw_partial_0x0001B650(void);
 void gw_partial_0x0001B640(void);
 void gw_partial_0x0001B630(void);
 void gw_partial_0x0001B620(void);
-void gw_partial_W_PlugIn_IFCLevel_n_v(void);
-void gw_partial_W_PullOut_IFCLevel_n_v(void);
-void gw_partial_W_Draw_IFCLevel_n_v(void);
-void gw_partial_W_Update_IFCLevel_n_v(void);
-void gw_partial_file_putc(void);
-void gw_partial_W_PlugIn_IFCTitle_n_v(void);
-void gw_partial_W_PullOut_IFCTitle_n_v(void);
+void gw_partial_0x00015710(void);
+void gw_partial_0x00015CF0(void);
+void gw_partial_0x000177C0(void);
+void gw_partial_0x000179F0(void);
+void gw_partial_0x000BA9FE(void);
+void gw_partial_0x00070D10(void);
+void gw_partial_0x00070E30(void);
 void gw_original_bscreen_alloc_store(void);
 void gw_original_ifctitle_update_adjustment_thunk(void);
 void gw_original_control_game_update_dispatch(void);
-void recomp_gw_partial_W_control_game_n_v(void);
-void recomp_gw_partial_W_process_packets_n_v(void);
+void recomp_gw_partial_0x0005AE60(void);
+void recomp_gw_partial_0x00093010(void);
 void gw_original_game_interface_transition_entry(void);
 void gw_original_full_game_entry(void);
 void gw_original_ifctitle_pullout_adjustment_thunk(void);
@@ -219,29 +219,29 @@ void gw_partial_0x0006AB30(void);
 void gw_partial_0x0006A700(void);
 void gw_partial_0x0006A600(void);
 void gw_partial_0x000710B0(void);
-void gw_partial_LbPaletteSet(void);
+void gw_partial_0x000ADEAC(void);
 void gw_original_install_resource_callback(void);
 int gw_partial_install_code_map(void);
 recomp_func_t gw_partial_lookup_guest(uint32_t va);
 void gw_original_null_callback_98c18(void);
-void gw_partial_LbScreenSetup(void);
+void gw_partial_0x000962F0(void);
 void recomp_gw_partial_0x000D2344(void);
 void recomp_gw_partial_0x000CA560(void); /* V20: original Miles DIG mixer service routine (AIL timer callback) */
 void recomp_gw_partial_0x000D23A7(void);
 void recomp_gw_partial_0x000D23AD(void);
 void recomp_gw_partial_0x000D71E0(void);
 void recomp_gw_partial_0x000D7230(void);
-void gw_partial_SmackInternal010(void);
-void gw_partial_SmackInternal011(void);
-void gw_partial_SmackInternal012(void);
-void gw_partial_SmackInternal013(void);
-void gw_partial_SmackInternalSwitch1_case000(void);
+void gw_partial_0x000ECCF0(void);
+void gw_partial_0x000ED030(void);
+void gw_partial_0x000ED840(void);
+void gw_partial_0x000ED990(void);
+void gw_partial_0x000EBF60(void);
 void gw_partial_0x000EC040(void);
 void gw_partial_0x000EBFD0(void);
 void gw_partial_0x000EC5C4(void);
 void gw_partial_0x000EC000(void);
 void gw_partial_0x000ECC04(void);
-void gw_partial_SmackInternalSwitch1_case255(void);
+void gw_partial_0x000ECCE4(void);
 void gw_partial_0x000EC284(void);
 void gw_partial_0x000EC030(void);
 
@@ -10956,15 +10956,15 @@ recomp_func_t recomp_lookup(uint32_t va) {
     /* The bounded, live-verified _Unsmack table at LE 0x10C950 selects one
        of these four original helpers after its index is masked to 0..3.
        The generated closure's runtime guard validates the exact entry value. */
-    if (va==0x002D7CF0u || va==0x000ECCF0u) return gw_partial_SmackInternal010;
-    if (va==0x002D8030u || va==0x000ED030u) return gw_partial_SmackInternal011;
-    if (va==0x002D8840u || va==0x000ED840u) return gw_partial_SmackInternal012;
-    if (va==0x002D8990u || va==0x000ED990u) return gw_partial_SmackInternal013;
+    if (va==0x002D7CF0u || va==0x000ECCF0u) return gw_partial_0x000ECCF0;
+    if (va==0x002D8030u || va==0x000ED030u) return gw_partial_0x000ED030;
+    if (va==0x002D8840u || va==0x000ED840u) return gw_partial_0x000ED840;
+    if (va==0x002D8990u || va==0x000ED990u) return gw_partial_0x000ED990;
     /* RADFREE reaches LbMemoryFree_ through the Smacker allocator slot at
        0x10C4E0. Its live value is guarded by the generated exact-callsite
        allowlist at 0xAE65C; expose the already lifted original routine to
        the common dispatcher in both LE and rebased object-1 coordinates. */
-    if (va==0x00092030u || va==0x0027D030u) return gw_partial_LbMemoryFree;
+    if (va==0x00092030u || va==0x0027D030u) return gw_partial_0x00092030;
     if (va==0x00098C18u) return gw_original_null_callback_98c18;
     if (va==0x000AF9E4u) return gw_partial_0x000AF9E4;
     if (va==0x000013620u) return gw_original_ifcoptions_plugin_adjustment_thunk;
@@ -10979,13 +10979,13 @@ recomp_func_t recomp_lookup(uint32_t va) {
     if (va==0x0001B640u) return gw_partial_0x0001B640;
     if (va==0x0001B630u) return gw_partial_0x0001B630;
     if (va==0x0001B620u) return gw_partial_0x0001B620;
-    if (va==0x00015710u) return gw_partial_W_PlugIn_IFCLevel_n_v;
-    if (va==0x00015CF0u) return gw_partial_W_PullOut_IFCLevel_n_v;
-    if (va==0x000177C0u) return gw_partial_W_Draw_IFCLevel_n_v;
-    if (va==0x000179F0u) return gw_partial_W_Update_IFCLevel_n_v;
+    if (va==0x00015710u) return gw_partial_0x00015710;
+    if (va==0x00015CF0u) return gw_partial_0x00015CF0;
+    if (va==0x000177C0u) return gw_partial_0x000177C0;
+    if (va==0x000179F0u) return gw_partial_0x000179F0;
     if (va==0x000070EB0u) return gw_partial_0x00070EB0;
-    if (va==0x000070D10u) return gw_partial_W_PlugIn_IFCTitle_n_v;
-    if (va==0x000070E30u) return gw_partial_W_PullOut_IFCTitle_n_v;
+    if (va==0x000070D10u) return gw_partial_0x00070D10;
+    if (va==0x000070E30u) return gw_partial_0x00070E30;
     if (va==0x0006A3D0u) return gw_partial_0x0006A3D0;
     if (va==0x0006AB30u) return gw_partial_0x0006AB30;
     if (va==0x0006A700u) return gw_partial_0x0006A700;
@@ -11006,12 +11006,12 @@ recomp_func_t recomp_lookup(uint32_t va) {
     if (va==0x00095890u) return gw_partial_0x00095890;
     if (va==0x000958E0u) return gw_partial_0x000958E0;
     if (va==0x00092670u) { comparator_calls++; return gw_partial_0x00092670; }
-    if (va==0x00091E00u) return gw_partial_LbMemoryAlloc;
-    if (va==0x00091E90u) return gw_partial_LbMemoryAllocLow;
+    if (va==0x00091E00u) return gw_partial_0x00091E00;
+    if (va==0x00091E90u) return gw_partial_0x00091E90;
     /* Original 0x96B23 stores the object-1-relocated address 0x281B10 in
      * ECX; the code-range map resolves that guest pointer back to this LE VA. */
-    if (va==0x00096B10u) return gw_partial_mem_putc;
-    if (va==0x000BA9FEu) return gw_partial_file_putc;
+    if (va==0x00096B10u) return gw_partial_0x00096B10;
+    if (va==0x000BA9FEu) return gw_partial_0x000BA9FE;
     if (va==0x00014BB0u || va==0x001FFBB0u) return gw_partial_0x00014BB0;
     if ((va==0x000D23A7u || va==0x002BD3A7u) && guest_memory &&
         guest_memory[0x002BD3A7u]==0xCDu && guest_memory[0x002BD3A8u]==0x31u &&
@@ -11032,23 +11032,23 @@ recomp_func_t recomp_lookup_manual(uint32_t va) {
      * table. Keep its 19 targets available to the same indirect dispatcher. */
     if (va==0x0001C440u) return gw_partial_0x0001C440;
     if (va==0x000830F0u) return gw_partial_0x000830F0;
-    if (va==0x000BAAC2u) return gw_partial_delay_init;
-    if (va==0x000BBE29u) return gw_partial_setEFGfmt;
-    if (va==0x000A38DCu) return gw_partial_j___sys_init_387_emulator;
-    if (va==0x000BC0E3u) return gw_partial_chk8087;
-    if (va==0x000BC19Fu) return gw_partial_clock_init;
+    if (va==0x000BAAC2u) return gw_partial_0x000BAAC2;
+    if (va==0x000BBE29u) return gw_partial_0x000BBE29;
+    if (va==0x000A38DCu) return gw_partial_0x000A38DC;
+    if (va==0x000BC0E3u) return gw_partial_0x000BC0E3;
+    if (va==0x000BC19Fu) return gw_partial_0x000BC19F;
     if (va==0x000AC3B4u) return gw_partial_0x000AC3B4;
-    if (va==0x000C87B6u) return gw_partial_Init_Argv;
-    if (va==0x000D1FBCu) return gw_partial_InitFiles;
-    if (va==0x000BC1F6u) return gw_partial_W_init_n_v;
-    if (va==0x000BC65Du) return gw_partial_checkIsDBCS;
-    if (va==0x000C3584u) return gw_partial_W_init_n_v_0;
-    if (va==0x000C3882u) return gw_partial_W_init_n_v_1;
+    if (va==0x000C87B6u) return gw_partial_0x000C87B6;
+    if (va==0x000D1FBCu) return gw_partial_0x000D1FBC;
+    if (va==0x000BC1F6u) return gw_partial_0x000BC1F6;
+    if (va==0x000BC65Du) return gw_partial_0x000BC65D;
+    if (va==0x000C3584u) return gw_partial_0x000C3584;
+    if (va==0x000C3882u) return gw_partial_0x000C3882;
     if (va==0x000D21EEu) return gw_partial_0x000D21EE;
-    if (va==0x000D5DB5u) return gw_partial_init;
-    if (va==0x000DFDC1u) return gw_partial_setenvp;
-    if (va==0x000DCED5u) return gw_partial_W_longjmpInit_n_v;
-    if (va==0x000E165Eu) return gw_partial_verify_pentium_fdiv_bug;
+    if (va==0x000D5DB5u) return gw_partial_0x000D5DB5;
+    if (va==0x000DFDC1u) return gw_partial_0x000DFDC1;
+    if (va==0x000DCED5u) return gw_partial_0x000DCED5;
+    if (va==0x000E165Eu) return gw_partial_0x000E165E;
     return recomp_lookup(va);
 }
 recomp_func_t recomp_lookup_import(uint32_t va) { (void)va; return NULL; }
@@ -11848,7 +11848,7 @@ static int invoke_screen_setup(uint8_t *memory) {
     *(uint32_t *)(memory+STACK_TOP)=RECOMP_RETADDR;
     c.mem_base=(ptrdiff_t)(uintptr_t)memory; c.mem_guest_base=0; c.mem_size=GUEST_LIMIT;
     c.pit_initialized=1;
-    if (gw_recomp_invoke(gw_partial_LbScreenSetup,&c)!=GW_RECOMP_OK ||
+    if (gw_recomp_invoke(gw_partial_0x000962F0,&c)!=GW_RECOMP_OK ||
         c.eax!=1u || c.interrupt_trap_pending || c.segment_fault_pending ||
         c.memory_fault.pending || c.port_io_trap.pending) {
         fprintf(stderr,"original LbScreenSetup failed eax=%08x eip=%08x int=%u/%08x mem=%u/%08x port=%x\n",
@@ -16670,7 +16670,7 @@ int main(int argc,char **argv) {
     fclose(fixture);
     guest_memory=pristine;
     gw_recomp_context pristine_context;
-    if(!invoke(gw_partial_UnpackM1,&pristine_context,0xB9CFCu,pristine,
+    if(!invoke(gw_partial_0x000B9CFC,&pristine_context,0xB9CFCu,pristine,
                RNC_INPLACE,RNC_INPLACE) || pristine_context.eax!=0xE349u) {
         fprintf(stderr,"pristine in-place original RNC control failed eax=%08x eip=%08x mem=%u/%08x\n",
                 pristine_context.eax,pristine_context.eip,
@@ -16798,7 +16798,7 @@ int main(int argc,char **argv) {
         fprintf(stderr,"unexpected pre-setup value for original *SCRATCH destination this=%08x\n",
                 *(uint32_t *)(memory+0x002EECA8u)); free(memory); return 76;
     }
-    if(!invoke(gw_partial_LbMemorySetup,&c,0x921F0u,memory,0,0) || c.eax!=1u) {
+    if(!invoke(gw_partial_0x000921F0,&c,0x921F0u,memory,0,0) || c.eax!=1u) {
         fprintf(stderr,"LbMemorySetup failed eax=%08x ebx=%08x ecx=%08x edx=%08x eip=%08x last_guest=%08x func=%08x esp=%08x mem=%u/%08x seg=%u:%04x:%08x int=%u/%08x vector=%02x dpmi_cursor=%08x..%08x next_handle=%u dos_blocks=%u stack=%08x/%08x/%08x/%08x\n",
                 c.eax,c.ebx,c.ecx,c.edx,c.eip,startup_budget_last_va,startup_budget_last_func,c.esp,c.memory_fault.pending,c.memory_fault.linear,
                 c.segment_fault_pending,c.segment_fault_selector,c.segment_fault_instruction_va,
@@ -16852,7 +16852,7 @@ int main(int argc,char **argv) {
         startup_budget_last_func=0u; startup_budget_exhausted=0;
         gw_recomp_trace_set_enabled(1);
         gw_recomp_trace_set_boundary_stop(1);
-        int full_setup_ok=invoke(recomp_gw_partial_W_setup_game_n_v,
+        int full_setup_ok=invoke(recomp_gw_partial_0x00094AC0,
             &full_setup,0x94AC0u,memory,0u,0u);
         int full_setup_exit_boundary=gw_recomp_trace_boundary_hit();
         startup_budget_remaining=0u;
@@ -16954,7 +16954,7 @@ int main(int argc,char **argv) {
                 (char *)(memory+text_record),*(uint32_t *)(memory+text_record+28u),
                 *(uint32_t *)(memory+text_start_cell)); free(memory); return 49;
     }
-    if(!invoke(gw_partial_LbDataLoadAll,&c,0x15090u,memory,0x002EF498u,text_record) ||
+    if(!invoke(gw_partial_0x00015090,&c,0x15090u,memory,0x002EF498u,text_record) ||
        (c.eax&0xffu)!=0u) {
         fprintf(stderr,"original TEXT.DAT LbDataLoadAll failed eax=%08x eip=%08x fault=%u/%08x path='%s' denied=%u\n",
                 c.eax,c.eip,c.memory_fault.pending,c.memory_fault.linear,vfs.last_path,vfs.denied);
@@ -17037,7 +17037,7 @@ int main(int argc,char **argv) {
         }
         gw_recomp_context memory_load_context;
         uint32_t opens_before=vfs.opens,denied_before=vfs.denied;
-        if(!invoke(gw_partial_LbDataLoadAll,&memory_load_context,0x15090u,memory,
+        if(!invoke(gw_partial_0x00015090,&memory_load_context,0x15090u,memory,
                    0x002EF498u,memory_records) || memory_load_context.eax!=0u ||
            memory_load_context.memory_fault.pending || memory_load_context.segment_fault_pending ||
            memory_load_context.interrupt_trap_pending || memory_load_context.port_io_trap.pending) {
@@ -17080,7 +17080,7 @@ int main(int argc,char **argv) {
     {
         gw_recomp_context graphics_init_context;
         uint32_t mode_ready_before=read_guest_u32(0x00376E28u);
-        int graphics_init_returned=invoke(recomp_gw_partial_W_setup_host_n_v,
+        int graphics_init_returned=invoke(recomp_gw_partial_0x00093BD0,
             &graphics_init_context,0x93BD0u,memory,0u,0u);
         uint8_t run_flags=guest_memory[0x002F1661u];
         int audio_frontier_after_graphics=
@@ -17312,14 +17312,14 @@ int main(int argc,char **argv) {
        initializer subset, not a claim that the full setup_game ran. */
     {
         static const struct { const char *name; void (*entry)(void); uint32_t link; } init[] = {
-            {"Creature",recomp_gw_partial_W_InitArray_Creature_n_v,0x471C0u},
-            {"Plant",recomp_gw_partial_W_InitArray_Plant_n_v,0x56FE0u},
-            {"PlSpec",recomp_gw_partial_W_InitArray_PlSpec_n_v,0x43A20u},
-            {"Building",recomp_gw_partial_W_InitArray_Building_n_v,0x39CB0u},
-            {"Effect",recomp_gw_partial_W_InitArray_Effect_n_v,0x85030u},
-            {"Event",recomp_gw_partial_W_InitArray_Event_n_v,0x89830u},
-            {"Drone",recomp_gw_partial_W_InitArray_Drone_n_v,0x139B0u},
-            {"UnknArr01",recomp_gw_partial_W_InitArray_UnknArr01_n_v,0x10010u},
+            {"Creature",recomp_gw_partial_0x000471C0,0x471C0u},
+            {"Plant",recomp_gw_partial_0x00056FE0,0x56FE0u},
+            {"PlSpec",recomp_gw_partial_0x00043A20,0x43A20u},
+            {"Building",recomp_gw_partial_0x00039CB0,0x39CB0u},
+            {"Effect",recomp_gw_partial_0x00085030,0x85030u},
+            {"Event",recomp_gw_partial_0x00089830,0x89830u},
+            {"Drone",recomp_gw_partial_0x000139B0,0x139B0u},
+            {"UnknArr01",recomp_gw_partial_0x00010010,0x10010u},
         };
         for(unsigned i=0;i<sizeof(init)/sizeof(init[0]);i++) {
             gw_recomp_context init_context;
@@ -17487,7 +17487,7 @@ int main(int argc,char **argv) {
         free(vfs.manifest); free(memory); return 0;
     }
     g_icall_trace_idx=g_icall_count=0;
-    if(!invoke(gw_partial_W_PlugIn_IFCTitle_n_v,&c,0x70D10u,memory,0x0035EAB8u,0) ||
+    if(!invoke(gw_partial_0x00070D10,&c,0x70D10u,memory,0x0035EAB8u,0) ||
        c.esp!=STACK_TOP+4u ||
        *(uint8_t *)(memory+0x0035EAB8u+0x20u)!=2u || vfs.denied!=0u ||
        *(uint8_t *)(memory+0x002F165Cu)!=2u) {
@@ -17910,7 +17910,7 @@ int main(int argc,char **argv) {
     uint8_t *saved_guest_memory=guest_memory;
     ptrdiff_t saved_mem_base=g_mem_base;
     guest_memory=rnc_test; g_mem_base=(ptrdiff_t)(uintptr_t)rnc_test;
-    if(!invoke(gw_partial_UnpackM1,&c,0xB9CFCu,rnc_test,RNC_SOURCE,RNC_OUT) || c.eax!=length) {
+    if(!invoke(gw_partial_0x000B9CFC,&c,0xB9CFCu,rnc_test,RNC_SOURCE,RNC_OUT) || c.eax!=length) {
         fprintf(stderr,"out-of-place original RNC decode failed eax=%08x eip=%08x mem=%u/%08x\n",
                 c.eax,c.eip,c.memory_fault.pending,c.memory_fault.linear);
         guest_memory=saved_guest_memory; g_mem_base=saved_mem_base; free(rnc_test); free(memory); return 17;
@@ -17922,7 +17922,7 @@ int main(int argc,char **argv) {
     }
     fclose(out);
     memcpy(rnc_test+RNC_INPLACE,rnc_test+RNC_SOURCE,30050u);
-    if(!invoke(gw_partial_UnpackM1,&c,0xB9CFCu,rnc_test,RNC_INPLACE,RNC_INPLACE) || c.eax!=length) {
+    if(!invoke(gw_partial_0x000B9CFC,&c,0xB9CFCu,rnc_test,RNC_INPLACE,RNC_INPLACE) || c.eax!=length) {
         fprintf(stderr,"in-place original RNC decode failed eax=%08x eip=%08x mem=%u/%08x\n",
                 c.eax,c.eip,c.memory_fault.pending,c.memory_fault.linear);
         guest_memory=saved_guest_memory; g_mem_base=saved_mem_base; free(rnc_test); free(memory); return 19;
@@ -21055,7 +21055,7 @@ int main(int argc,char **argv) {
                                                                called setup_controller plus only the 3-instruction virtual
                                                                dispatch slice, omitting the controller's surrounding work. */
                                                             int pu_ok=command_ok && clear_ok &&
-                                                                invoke_from_context(recomp_gw_partial_W_control_game_n_v,
+                                                                invoke_from_context(recomp_gw_partial_0x0005AE60,
                                                                     &pu,0x5AE60u,memory,&clear_context,0,0u);
                                                             const char *abort_state_env=getenv("GWRECOMP_IFCLEVEL_ABORT_MOVE_PROBE");
                                                             if(abort_state_env && abort_state_env[0]=='1' &&
@@ -21093,7 +21093,7 @@ int main(int argc,char **argv) {
                                                                 !pu.segment_fault_pending && !pu.interrupt_trap_pending &&
                                                                 !pu.port_io_trap.pending;
                                                             if(pp_ok && !surface_ui_only)
-                                                                pp_ok=invoke_from_context(recomp_gw_partial_W_process_packets_n_v,
+                                                                pp_ok=invoke_from_context(recomp_gw_partial_0x00093010,
                                                                     &pp,0x93010u,memory,&pu,0,0u);
                                                             if(!surface_ui_only)
                                                                 fprintf(interaction,"TRACE original_packet tick=%u phase=after_process_packets packet=%08x action=%02x\n",

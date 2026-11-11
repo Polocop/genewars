@@ -71,6 +71,7 @@
   "map": {
     "env": "GENEWARS_MAP",
     "sha256": "30e06c203154904740c4ff3f1fcc4971fb6c0ef10ace2f4f9dc63367d45b99b3",
-    "note": "Symbol map (Watcom link map with disassembler-generated names). Not part of the game install and not distributable; see README_BUILD.md"
+    "note": "OPTIONAL private reference map (Watcom-format map with disassembler-generated names). Not needed to build: boundaries come from explicit roots and closure traversal and identifiers are address-based. If supplied it enables extra cross-checks (symbol identity at known addresses). Not part of the game install and not distributable.",
+    "optional": true
   }
 }
