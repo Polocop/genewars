@@ -41,8 +41,8 @@ function Install-Msys2Pinned($cfg) {
         if ((Get-FileHash $f -Algorithm SHA256).Hash.ToLower() -ne $p.sha256) { throw "SHA-256 mismatch for $($p.file); refusing to install" }
         $paths += (ConvertTo-MsysPath $f)
     }
-    & (Join-Path $cfg.UsrBin 'pacman.exe') -U --noconfirm --needed @paths
-    return $LASTEXITCODE
+    & (Join-Path $cfg.UsrBin 'pacman.exe') -U --noconfirm --needed @paths 2>&1 | Out-Host   # Out-Host: keep pacman's text out of the function's return value
+    return [int]$LASTEXITCODE
 }
 
 # persist any game input locations first so that later steps see them
