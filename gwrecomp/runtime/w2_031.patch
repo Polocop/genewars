@@ -1,5 +1,5 @@
 *** Begin Patch
-*** Update File: E:/GWRecomp/runtime/gw_dos_services.h
+*** Update File: runtime/gw_dos_services.h
 @@
  typedef struct gw_dos_services {
      uint8_t major;
@@ -26,7 +26,7 @@
  gw_interrupt_result gw_dos_services_callback(uint8_t vector,
 *** End Patch
 *** Begin Patch
-*** Update File: E:/GWRecomp/runtime/gw_dos_services.c
+*** Update File: runtime/gw_dos_services.c
 @@
  #include "gw_dos_services.h"
  #include "gw_interrupts.h"

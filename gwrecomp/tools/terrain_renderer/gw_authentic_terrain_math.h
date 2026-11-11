@@ -6,9 +6,9 @@
 //
 // Sources:
 //   - E:/CODEX/gw_65f20_capstone.txt            (Capstone disassembly)
-//   - E:/GWRecomp/evidence/fun_65f20_authentic_pipeline_reconstruction.json
-//   - E:/GWRecomp/evidence/fun_65f20_e19c0_before_after_samples.json
-//   - E:/GWRecomp/tests/test_65f20_x86_math_vectors.py  (verified vectors)
+//   - evidence/fun_65f20_authentic_pipeline_reconstruction.json
+//   - evidence/fun_65f20_e19c0_before_after_samples.json
+//   - tests/test_65f20_x86_math_vectors.py  (verified vectors)
 //
 // WHAT THE ORIGINAL DOES (faithful reading of the x86):
 //
