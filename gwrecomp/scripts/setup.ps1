@@ -23,6 +23,21 @@ function Ok($m) { Write-Host "  [ok]   $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "  [todo] $m" -ForegroundColor Yellow; $script:problems += $m }
 
 function ConvertTo-MsysPath([string]$p) { '/' + $p.Substring(0, 1).ToLower() + ($p.Substring(2) -replace '\\', '/') }
+function Get-RemoteFile([string]$url, [string]$out, [string]$method) {
+    # The MSYS2 host sometimes answers automated clients with an HTML 'Verification Required' page. The package SHA-256 is
+    # checked by the caller, so a wrong download is detected; two download methods are tried.
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+        if ($method -eq 'curl') {
+            $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+            if (-not (Test-Path $curl)) { return $false }
+            & $curl -fsSL --retry 3 --retry-delay 2 -A 'curl/8.4.0' -o $out $url 2>$null
+            return ($LASTEXITCODE -eq 0 -and (Test-Path $out))
+        }
+        Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -UserAgent 'curl/8.4.0'
+        return (Test-Path $out)
+    } catch { return $false } finally { $ErrorActionPreference = $prev }
+}
 function Install-Msys2Pinned($cfg) {
     # MSYS2 retired its i686 (mingw32) environment: the package database no longer lists these packages, so
     # 'pacman -S <name>' fails. The exact package files are still on the mirror; install the pinned list with
@@ -34,11 +49,14 @@ function Install-Msys2Pinned($cfg) {
     $paths = @()
     foreach ($p in $man.packages) {
         $f = Join-Path $dir $p.file
-        if (-not (Test-Path $f) -or (Get-FileHash $f -Algorithm SHA256).Hash.ToLower() -ne $p.sha256) {
-            Invoke-WebRequest -Uri $p.url -OutFile $f -UseBasicParsing
-            Invoke-WebRequest -Uri ($p.url + '.sig') -OutFile ($f + '.sig') -UseBasicParsing
+        $good = (Test-Path $f) -and ((Get-FileHash $f -Algorithm SHA256).Hash.ToLower() -eq $p.sha256) -and (Test-Path ($f + '.sig'))
+        foreach ($method in @('curl', 'webrequest')) {
+            if ($good) { break }
+            Remove-Item -LiteralPath $f, ($f + '.sig') -ErrorAction SilentlyContinue
+            $a = Get-RemoteFile $p.url $f $method; $b = Get-RemoteFile ($p.url + '.sig') ($f + '.sig') $method
+            $good = $a -and $b -and ((Get-FileHash $f -Algorithm SHA256).Hash.ToLower() -eq $p.sha256)
         }
-        if ((Get-FileHash $f -Algorithm SHA256).Hash.ToLower() -ne $p.sha256) { throw "SHA-256 mismatch for $($p.file); refusing to install" }
+        if (-not $good) { throw "could not obtain $($p.file) with the pinned SHA-256 from $($p.url) (the mirror may be answering with a verification page instead of the file); refusing to install" }
         $paths += (ConvertTo-MsysPath $f)
     }
     & (Join-Path $cfg.UsrBin 'pacman.exe') -U --noconfirm --needed @paths 2>&1 | Out-Host   # Out-Host: keep pacman's text out of the function's return value
