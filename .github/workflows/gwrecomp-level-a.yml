@@ -87,6 +87,7 @@ jobs:
           $chk = (& .\.venv\Scripts\python.exe tools\rebuild\check_inputs.py 2>&1 | Out-String)
           $code = $LASTEXITCODE; Write-Host $chk
           if ($code -ne 1 -or $chk -notmatch 'MISSING') { throw "check_inputs did not report missing inputs (exit $code)" }
+          exit 0   # both expected non-zero exit codes were verified above; do not let the last one fail the step
 
       - name: Upload the test report
         if: always()
