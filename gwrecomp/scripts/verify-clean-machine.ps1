@@ -18,7 +18,7 @@ $logs = Join-Path $root 'build\verify-logs'; New-Item -ItemType Directory -Force
 $ps = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File')
 $rows = New-Object System.Collections.Generic.List[string]
 function Run-Step($name, [string[]]$scriptArgs, [string]$file) {
-    $log = Join-Path $logs ($name -replace '[^A-Za-z0-9]+', '_') + '.log'
+    $log = Join-Path $logs (($name -replace '[^A-Za-z0-9]+', '_') + '.log')
     $t = Get-Date
     & powershell @ps (Join-Path $root $file) @scriptArgs *> $log
     $code = $LASTEXITCODE

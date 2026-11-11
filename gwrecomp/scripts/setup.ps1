@@ -22,6 +22,29 @@ function Step($m) { Write-Host "`n== $m" -ForegroundColor Cyan }
 function Ok($m) { Write-Host "  [ok]   $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "  [todo] $m" -ForegroundColor Yellow; $script:problems += $m }
 
+function ConvertTo-MsysPath([string]$p) { '/' + $p.Substring(0, 1).ToLower() + ($p.Substring(2) -replace '\\', '/') }
+function Install-Msys2Pinned($cfg) {
+    # MSYS2 retired its i686 (mingw32) environment: the package database no longer lists these packages, so
+    # 'pacman -S <name>' fails. The exact package files are still on the mirror; install the pinned list with
+    # 'pacman -U' from downloads whose SHA-256 is checked against tools\rebuild\msys2-mingw32-packages.json.
+    $man = Get-Content (Join-Path $root 'tools\rebuild\msys2-mingw32-packages.json') -Raw | ConvertFrom-Json
+    $dir = Join-Path $root 'build\msys2-cache'; New-Item -ItemType Directory -Force $dir | Out-Null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $ProgressPreference = 'SilentlyContinue'
+    $paths = @()
+    foreach ($p in $man.packages) {
+        $f = Join-Path $dir $p.file
+        if (-not (Test-Path $f) -or (Get-FileHash $f -Algorithm SHA256).Hash.ToLower() -ne $p.sha256) {
+            Invoke-WebRequest -Uri $p.url -OutFile $f -UseBasicParsing
+            Invoke-WebRequest -Uri ($p.url + '.sig') -OutFile ($f + '.sig') -UseBasicParsing
+        }
+        if ((Get-FileHash $f -Algorithm SHA256).Hash.ToLower() -ne $p.sha256) { throw "SHA-256 mismatch for $($p.file); refusing to install" }
+        $paths += (ConvertTo-MsysPath $f)
+    }
+    & (Join-Path $cfg.UsrBin 'pacman.exe') -U --noconfirm --needed @paths
+    return $LASTEXITCODE
+}
+
 # persist any game input locations first so that later steps see them
 if ($GenewarsInstall -or $GenewarsCue -or $GenewarsMap) {
     $local = @{}
@@ -43,7 +66,8 @@ foreach ($cand in @('py -3', 'python')) {
 }
 if (-not $basePython -and -not (Test-Path (Join-Path $root '.venv\Scripts\python.exe'))) { Warn 'Python 3.10+ is required (reference: 3.13): https://www.python.org/downloads/windows/' }
 if ($cfg.Msys2 -and (Test-Path (Join-Path $cfg.Mingw32Bin 'gcc.exe'))) { Ok "MSYS2 at $($cfg.Msys2) ($(& (Join-Path $cfg.Mingw32Bin 'gcc.exe') --version | Select-Object -First 1))" }
-else { Warn 'MSYS2 with mingw32 gcc not found. Install MSYS2 (https://www.msys2.org/), then re-run with -InstallMsys2Packages, or set MSYS2_ROOT.' }
+elseif ($cfg.Msys2) { Warn "MSYS2 found at $($cfg.Msys2) without the mingw32 toolchain: re-run with -InstallMsys2Packages (installs pinned packages)." }
+else { Warn 'MSYS2 not found. Install MSYS2 (https://www.msys2.org/), then re-run with -InstallMsys2Packages, or set MSYS2_ROOT.' }
 if ($cfg.ClangX64) { Ok "clang: $($cfg.ClangX64) ($(& $cfg.ClangX64 --version | Select-Object -First 1)); reference: $($lock.tools.clang)" }
 else { Warn "clang not found. Install LLVM $($lock.tools.clang -replace 'clang version ','') (for example: winget install --id LLVM.LLVM --version 19.1.5 -e) or set GWRECOMP_CLANG_X64." }
 
@@ -62,11 +86,10 @@ if (Test-Path $venvPy) {
 Step '3. MSYS2 packages'
 if ($cfg.Msys2) {
     $pacman = Join-Path $cfg.UsrBin 'pacman.exe'
-    $pkgs = 'mingw-w64-i686-gcc', 'mingw-w64-i686-SDL2', 'mingw-w64-i686-binutils', 'mingw-w64-i686-crt-git'
-    if ($InstallMsys2Packages) { & $pacman -S --needed --noconfirm @pkgs; if ($LASTEXITCODE) { Warn 'pacman failed' } }
+    if ($InstallMsys2Packages) { $rc = Install-Msys2Pinned $cfg; if ($rc) { Warn "pacman -U of the pinned packages failed (exit $rc)" } }
     $sdl = Join-Path $cfg.Msys2 'mingw32\include\SDL2\SDL.h'
     if (Test-Path $sdl) { Ok "SDL2 headers present ($(& $pacman -Q mingw-w64-i686-SDL2 2>&1)); reference: $($lock.tools.msys_packages)" }
-    else { Warn "SDL2 for mingw32 missing: pacman -S --needed $($pkgs -join ' ')   (or re-run with -InstallMsys2Packages)" }
+    else { Warn 'SDL2 for mingw32 missing: re-run with -InstallMsys2Packages (pinned package list in tools\rebuild\msys2-mingw32-packages.json)' }
 } else { Warn 'skipped: MSYS2 not found' }
 
 Step '4. pcrecomp (pinned commit + documented patch)'

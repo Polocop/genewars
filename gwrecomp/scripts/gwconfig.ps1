@@ -47,6 +47,7 @@ function Get-GwConfig {
         $g = Get-Command gcc.exe -ErrorAction SilentlyContinue
         if ($g -and (Split-Path -Leaf (Split-Path -Parent (Split-Path -Parent $g.Source))) -eq 'mingw32') { Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $g.Source)) }
         elseif (Test-Path 'C:\msys64\mingw32\bin\gcc.exe') { 'C:\msys64' }
+        elseif (Test-Path 'C:\msys64\usr\bin\pacman.exe') { 'C:\msys64' }   # MSYS2 without the mingw32 packages yet (setup.ps1 -InstallMsys2Packages adds them)
     }
     $cfg.ClangX64 = Pick 'GWRECOMP_CLANG_X64' {
         $c = Get-Command clang.exe -ErrorAction SilentlyContinue

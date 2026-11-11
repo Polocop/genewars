@@ -38,22 +38,23 @@ jobs:
         with:
           python-version: '3.13'
 
+      # MSYS2 retired its i686 (mingw32) environment, so the toolchain packages cannot be installed by name any more.
+      # setup-msys2 provides a current base MSYS2 (with a fresh keyring); scripts\setup.ps1 installs the PINNED mingw32
+      # packages (gcc 16.2.0, SDL2 2.32.10, binutils 2.47, ...) from the MSYS2 mirror, checking their SHA-256.
       - uses: msys2/setup-msys2@d44ca8e88d8b43d56cf5670f91747359d5537f97 # v2.26.0
         id: msys
         with:
-          msystem: MINGW32
-          update: true   # the bundled package database is stale: without this the mirrors answer 404 for the old packages
-          install: >-
-            mingw-w64-i686-gcc
-            mingw-w64-i686-SDL2
-            mingw-w64-i686-binutils
-            mingw-w64-i686-crt-git
+          msystem: MSYS
+          update: true
 
       - name: Point the scripts at this MSYS2
         run: |
           $root = '${{ steps.msys.outputs.msys2-location }}'
-          if (-not (Test-Path (Join-Path $root 'mingw32\bin\gcc.exe'))) { $root = Split-Path -Parent $root }
+          if (-not (Test-Path (Join-Path $root 'usrin\pacman.exe'))) { $root = Split-Path -Parent $root }
           "MSYS2_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install the pinned mingw32 toolchain packages
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1 -InstallMsys2Packages -SkipPcrecomp
 
       - name: Tool versions (reference build used Python 3.13.0, gcc 16.2.0, clang 19.1.5)
         run: |
