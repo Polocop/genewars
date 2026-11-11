@@ -64,6 +64,7 @@ jobs:
                      'Reference build: Python 3.13.0, gcc 16.2.0, clang 19.1.5. Differences are reported, not hidden.')
           $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           $lines
+          exit 0   # informational step: a piped native call can leave a non-zero $LASTEXITCODE
 
       - name: Setup (venv with pinned packages, pcrecomp at the pinned commit with the patch)
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1
