@@ -16,3 +16,5 @@ Each item lists labels and a definition of done.
 10. **Save/load state restoration check** — `gameplay`, `testing`. *Done when* guest state after Load is compared to expectations by an automated check.
 11. **Rendering bit-exactness of terrain** — `rendering`, `help wanted`.
 12. **Portable CI smoke test (docs-only lint, scripts parse)** — `testing`, `good first issue`.
+13. **`SAVE0.SAV` dependency** - `build`, `testing`, `reverse-engineering`, `help wanted`. The driver pins the digest of a save file the maintainers created. *Done when* the replays have a validated profile that does not need it (or another reproducible solution is documented), and Level B runs on an install without it.
+14. **Readable name overlay from the user's own disc** - `reverse-engineering`, `help wanted`. Rebuild names for the 1.1 binary from the retail disc's `MAIN.MAP` with the existing matchers, as a local optional tool (nothing derived is published). *Done when* precision against the private reference map is measured and reported as counts.

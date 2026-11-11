@@ -2,7 +2,7 @@
 
 **GWRecomp** is an experimental effort to run *Gene Wars* (Bullfrog Productions, 1996, v1.1 DOS4GW/Watcom LE executable) **natively on Windows, without DOSBox**, by statically lifting the original x86-32 code to C and running it on a modern host-platform layer (SDL2 video/audio/input, DOS/DPMI service emulation, a virtual SB16 for the original Miles mixer, CD-DA playback).
 
-> **Status: research prototype.** It is *not* a finished port and the full campaign has not been tested. **It cannot run without original game files that you must provide yourself**, and one required build input (the symbol map) is currently not obtainable by outside contributors. See [PROGRESS.md](PROGRESS.md) for what is and is not verified and [tools/rebuild/README_BUILD.md](tools/rebuild/README_BUILD.md) for the exact build levels.
+> **Status: research prototype.** It is *not* a finished port and the full campaign has not been tested. **It cannot run without original game files that you must provide yourself**, and one required input (a save file the maintainers created, `SAVE0.SAV`) cannot currently be reproduced by outside contributors. See [PROGRESS.md](PROGRESS.md) for what is and is not verified and [tools/rebuild/README_BUILD.md](tools/rebuild/README_BUILD.md) for the exact build levels.
 
 ## Relationship to the original project
 
@@ -41,7 +41,7 @@ Prerequisites you install yourself: Git, Python 3.10+ (reference 3.13), MSYS2 wi
 - **Level C** (needs a Level B build): bounded smoke run of the native executable: `scripts\build.ps1 -Level C`, or `scripts\play.ps1` to play.
 
 ### What you must provide (not distributed here)
-Your own Gene Wars **1.1 (Europe)** install folder, the `.cue` of your CD image, and the symbol map `genewars-1_1.map`. The first two are verified by SHA-256 (`python tools\rebuild\check_inputs.py` tells you which file differs). **The symbol map is derived from the original binary, is not part of the install, and cannot currently be obtained or redistributed**; until that is resolved, Levels B and C are reproducible only by the maintainers. Details: [README_BUILD.md](tools/rebuild/README_BUILD.md#3-inputs-you-must-supply-levels-b-and-c).
+Your own Gene Wars **1.1 (Europe)** install folder and the `.cue` of your CD image, verified by SHA-256 (`python tools\rebuild\check_inputs.py` tells you which file differs and what role it has). **The symbol map is no longer needed**: the build is independent of it and produces the same code with or without it ([docs/SYMBOLS.md](docs/SYMBOLS.md)). **The remaining blocker for independent Level B/C is `SAVE0.SAV`**, a test save the maintainers made, which the build pins by digest ([docs/INPUTS.md](docs/INPUTS.md)); until that is resolved, Levels B and C are reproducible only by the maintainers.
 
 ## Tests
 

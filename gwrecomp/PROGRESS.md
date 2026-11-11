@@ -51,6 +51,21 @@ Procedure: `git clone` of the repository, then `scripts\setup.ps1`, `scripts\bui
 
 Tests in a clean clone after setup: 466 modules, 94 pass, 358 blocked by a named missing input, 14 known failures (triaged; they also fail with every private input present), 0 unexpected. One module passes only when files written by an earlier test run exist, which is a test-hygiene issue.
 
+## Symbol map independence (verified 2026-11-11, on the maintainers' machine)
+
+The build no longer needs `genewars-1_1.map` (details and numbers: [docs/SYMBOLS.md](docs/SYMBOLS.md)). Boundaries of lifted functions never came from the map; it supplied names, 23 cross-check evaluations and report labels. Identifiers are now address-based and the map is optional.
+
+| Check | Result |
+|---|---|
+| New lifter in legacy-name mode vs previous lifter | byte-identical output |
+| Lifter output with vs without the map | byte-identical |
+| Old (map-named) vs new output after rewriting 538 identifiers | same multiset of lines, same 2176 function definitions in the same order; only the order of 1355 forward declarations differs |
+| Level B, new code with vs without the map | identical lifted C, 16/16 identical objects, identical executable |
+| Previously published build vs new build | every PE section identical (`.text` 26,383,360 bytes included); the files differ only in the symbol table |
+| Level C smoke run of the build made without the map | exit 0, same bounded stop |
+
+The remaining blocker for independent Level B/C is no longer the map but `SAVE0.SAV`, a save the maintainers created ([docs/INPUTS.md](docs/INPUTS.md)). Nothing was verified on a second machine or VM.
+
 ## What this document does not claim
 
 The game is not complete. Not every item marked *Reported (manual)* has been re-verified for this publication, and the clean rebuild has not been reproduced outside the maintainer's machine.

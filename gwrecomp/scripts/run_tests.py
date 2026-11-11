@@ -28,7 +28,7 @@ BLOCK_RULES = [
     (r"No module named '(coordination|taskq|autopilot|dashboard_view)[\w.]*'|coordination[\\/](taskq|task_|autopilot)", "needs the maintainers' internal task-queue files (not published)"),
     (r"third_party[\\/]+(dosbox|pcrecomp|le_disasm|syndwarsfx|recoil|xboxrecomp|3dsrecomp|SR|M-HT)", "needs a third_party clone (not published; see README_BUILD.md)"),
     (r"dosboxx_oracle|oracle_guard|GWORACLE|oracle sandbox", "needs the DOSBox-X reference oracle sandbox (maintainer-only)"),
-    (r"evidence[\\/]+genewars-1_1\.(exe|map)|authentic GW\.EXE|GW\.EXE size is absent", "needs the game executable/map under evidence/ (build input, user supplied)"),
+    (r"evidence[\\/]+genewars-1_1\.(exe|map)|authentic GW\.EXE|GW\.EXE size is absent", "needs the game executable or the optional private reference map under evidence/ (user supplied)"),
     (r"<GENEWARS_(HDD_ROOT|INSTALL_DIR)>|GENEWARS_INSTALL_DIR|set GENEWARS|GeneWars 1\.1 installation", "needs your Gene Wars 1.1 install (set GENEWARS_INSTALL_DIR)"),
     (r"snapshots?[\\/]|\.snap\b", "needs a guest snapshot (not published)"),
     (r"evidence[\\/]", "needs evidence/ files produced by maintainers' runs (not published)"),
