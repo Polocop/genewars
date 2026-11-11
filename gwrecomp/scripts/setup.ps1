@@ -74,11 +74,17 @@ if (-not $SkipPcrecomp -and (Get-Command git.exe -ErrorAction SilentlyContinue) 
     $pc = Join-Path $root 'third_party\pcrecomp'
     if (-not (Test-Path (Join-Path $pc '.git'))) {
         New-Item -ItemType Directory -Force (Split-Path $pc) | Out-Null
+        if (Test-Path -LiteralPath $pc) { Remove-Item -LiteralPath $pc -Recurse -Force }   # leftover of an interrupted clone
         & git clone --no-checkout $lock.pcrecomp.repository $pc
-        & git -C $pc config core.autocrlf true
-        & git -C $pc checkout --detach $lock.pcrecomp.commit
-        if ($LASTEXITCODE) { Warn "could not check out pcrecomp $($lock.pcrecomp.commit)" }
+        if ($LASTEXITCODE) { Warn "git clone of $($lock.pcrecomp.repository) failed (network or proxy problem?). Re-run scripts\setup.ps1; nothing else is affected."; if (Test-Path -LiteralPath $pc) { Remove-Item -LiteralPath $pc -Recurse -Force } }
+        else {
+            & git -C $pc config core.autocrlf true
+            & git -C $pc checkout --detach $lock.pcrecomp.commit
+            if ($LASTEXITCODE) { Warn "could not check out pcrecomp $($lock.pcrecomp.commit); delete third_party\pcrecomp and re-run scripts\setup.ps1" }
+        }
     }
+    if (-not (Test-Path (Join-Path $pc '.git'))) { Write-Host '  pcrecomp not available; skipping the patch step' }
+    else {
     $head = (& git -C $pc rev-parse HEAD).Trim()
     if ($head -ne $lock.pcrecomp.commit) { Warn "pcrecomp is at $head, expected $($lock.pcrecomp.commit)" }
     else {
@@ -90,6 +96,7 @@ if (-not $SkipPcrecomp -and (Get-Command git.exe -ErrorAction SilentlyContinue) 
             $o = & $venvPy -I (Join-Path $root 'tools\rebuild\apply_pcrecomp_patch.py') $pc (Join-Path $root "tools\rebuild\$($lock.pcrecomp.patch)") (Join-Path $root "tools\rebuild\$($lock.pcrecomp.patch_manifest)") 2>&1
             if ($LASTEXITCODE) { Warn "pcrecomp patch failed: $($o -join ' ')" } else { Ok ($o -join ' ') }
         }
+    }
     }
 } else { Write-Host '  skipped (needs git and the Python environment)' }
 
