@@ -39,6 +39,18 @@ History below is from the maintainer's private working repository (24 commits, 2
 | 1 Nov | v0.7 demo sources brought under version control (Krell harness, Smacker V13/V18.1, save/load V15/V16, CD-DA); reproducible rebuild procedure and acceptance data |
 | 2 Nov | Miles mixer dispatch verified; virtual SB16 sink; opt-in reusable object cache; build fixes |
 
+## Reproducible build (verified 2026-11-11, on the maintainers' machine)
+
+Procedure: `git clone` of the repository, then `scripts\setup.ps1`, `scripts\build.ps1 -Level A|B|C`, `scripts\test.ps1` (see `tools/rebuild/README_BUILD.md`). Inputs for B/C were the maintainers' own copies, read from their locations through the documented variables.
+
+| Level | Result | What this does and does not show |
+|---|---|---|
+| A (no game files) | **Achieved** in a fresh clone: setup (venv with pinned packages, pcrecomp cloned from GitHub at `35548b8` with the patch hash-verified), all 14 runtime C units compiled, test suite run | Not yet reproduced on another machine |
+| B (game inputs) | **Achieved** in a fresh clone: all 8 phases exit 0, lifted C generated, 16 objects compiled, executable linked. A second clean build produced identical lifted C and 16/16 identical objects. The lifted C is byte-identical to the maintainers' latest generated file | Same machine, same toolchain, same inputs. The symbol map input is not obtainable by outsiders, so independent reproduction is currently impossible |
+| C (smoke) | **Achieved**: the built executable opens the intro file through the virtual file system, initialises the virtual SB16 and runs the native game loop to the harness' own bound (Turn 420, 120 frames), exit code 0 | A bounded smoke run, not a gameplay test; nothing about the rest of the game |
+
+Tests in a clean clone after setup: 466 modules, 94 pass, 358 blocked by a named missing input, 14 known failures (triaged; they also fail with every private input present), 0 unexpected. One module passes only when files written by an earlier test run exist, which is a test-hygiene issue.
+
 ## What this document does not claim
 
 The game is not complete. Not every item marked *Reported (manual)* has been re-verified for this publication, and the clean rebuild has not been reproduced outside the maintainer's machine.

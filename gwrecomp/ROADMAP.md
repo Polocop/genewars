@@ -2,7 +2,7 @@
 
 Priorities derived from the audit; ordered roughly by blocking impact.
 
-1. **Portable, reproducible build.** Parameterise hard-coded paths (`E:\GWRecomp`, `E:\msys64`, install and disc locations); provide a documented "bring your own game files" setup; replace the pinned `pcrecomp` patch with a fork.
+1. **Portable, reproducible build.** Done so far: paths are configurable, `scripts\setup.ps1`/`build.ps1`/`test.ps1` exist, Level A is reproducible from a clean clone. Open: obtain or regenerate the symbol map so outsiders can run Levels B and C; decide which binary `expected_v07.json` should validate; replace the pinned `pcrecomp` patch with a fork.
 2. **Boot and state transitions.** Make the original-byte path reach intros → menu → game without a snapshot; investigate state differences across those transitions; fix first-click-lost after a screen change.
 3. **Smacker intros.** Full integration including audio, IRQ0 and the AIL timer path (currently gated off).
 4. **Miles audio and music.** Resolve the background hiss, validate the virtual SB16 against more scenarios, harden CD-DA.

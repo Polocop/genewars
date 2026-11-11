@@ -4,7 +4,7 @@ Suggested labels: `good first issue`, `help wanted`, `audio`, `video`, `renderin
 
 Each item lists labels and a definition of done.
 
-1. **Parameterise hard-coded build paths** — `build`, `help wanted`. Replace `E:\GWRecomp`, `E:\msys64`, `D:`/install paths with env vars/CLI args in `tools/rebuild/` and `tests/*.py`. *Done when* `rebuild.ps1` runs from any directory with documented variables.
+1. **Parameterise hard-coded build paths** — `build`, `help wanted`. Largely done (see `scripts/gwconfig.ps1`); remaining: maintainers-only oracle tools and residual literals. *Done when* a second machine reproduces Levels A and B.
 2. **Document each test's prerequisites** — `testing`, `documentation`, `good first issue`. Produce a table of tests vs. required external inputs. *Done when* every module under `tests/` is classified (self-contained / needs evidence / needs third_party) and self-contained ones pass on a clean checkout.
 3. **Fix tests that fail on a clean checkout due to missing directories** — `testing`, `good first issue`. Create `build/`/`cache/` on demand. *Done when* no test fails with `FileNotFoundError` for these.
 4. **Replace pcrecomp patch with a fork/pin** — `build`, `help wanted`. Follow "Migrating to an own fork" in `tools/rebuild/README_BUILD.md`.

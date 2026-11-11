@@ -11,17 +11,19 @@ Thanks for helping. Please read this first.
 
 ## Building and running
 
-See [README.md](README.md) and [`tools/rebuild/README_BUILD.md`](tools/rebuild/README_BUILD.md). You need your own copy of the game. The build currently assumes the author's Windows layout; making it portable is a welcome contribution.
+See [README.md](README.md) and [`tools/rebuild/README_BUILD.md`](tools/rebuild/README_BUILD.md). In short, from the `gwrecomp` directory:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Level A
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test.ps1
+```
+
+Levels B and C need your own game files (see the README). Do not hard-code machine paths: use the variables documented in `scripts/gwconfig.ps1` / `README_BUILD.md`.
 
 ## Tests
 
-Tests are `unittest` modules under `tests/`, run from this directory:
-
-```
-python -m unittest tests.test_<name>
-```
-
-Create `build/` and `cache/` directories first. Many tests need local inputs that are deliberately not published. [docs/TEST_STATUS.md](docs/TEST_STATUS.md) separates, for all 466 modules, those that pass on a clean checkout (92), those blocked by missing external inputs (364, not counted as failures) and those needing triage (10).
+`scripts\test.ps1` (or `python scripts/run_tests.py`) runs every `tests/test_*.py` module and classifies it as PASS, BLOCKED (a named input is missing), KNOWN_FAIL (triaged in `scripts/test_triage.json`) or FAIL (unexpected). A PR must not add unexpected FAILs. If you fix a KNOWN_FAIL, remove its entry; if you add a test that needs private inputs, make it fail with a message naming the missing file so the runner can classify it. Do not delete or weaken tests to get a green result. Current numbers: [docs/TEST_STATUS.md](docs/TEST_STATUS.md).
 
 ## Reporting bugs
 
