@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """L-CDVOLDESC: extract the ISO 9660 volume descriptor from the original
-GeneWars CD-ROM (read-only reference E:\\GeneWarsFX) and emit the exact 16-byte
+GeneWars CD-ROM (read-only reference <GENEWARSFX_ROOT>) and emit the exact 16-byte
 MSCDEX AH=1500 drive-parameter buffer that WORK2's W2-MSCDEXRESP handler must
 return to serve a REAL drive-parameters response (not just no-CD) and back the
 post-MENU AH=1510 data reads.
@@ -17,9 +17,13 @@ Method (per cd-image-iso9660 skill — standard reader, never hand-rolled):
   6. Extract the disc TOC (for AH=150C) and map to the MSCDEX AH=1500 buffer.
   7. Emit evidence/gw_cdrom_volume_descriptor.json (deterministic) + a report.
 
-Read-only w.r.t. E:\\GeneWarsFX (hashes it to prove unchanged). No GUI. Does NOT
+Read-only w.r.t. <GENEWARSFX_ROOT> (hashes it to prove unchanged). No GUI. Does NOT
 implement the MSCDEX runtime handler (that is W2-MSCDEXRESP/WORK2).
 """
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import os as _gw_os
 from pathlib import Path as _GwPath
 _GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
@@ -283,7 +287,7 @@ def main():
     os.makedirs(REP, exist_ok=True)
     L=[]; L.append("# LOCAL CD-ROM Volume Descriptor (L-CDVOLDESC)")
     L.append("")
-    L.append("Extracted from the read-only original disc `E:\\GeneWarsFX` (5-track BIN/CUE; Track 1 = MODE1/2352 data volume, Tracks 2-5 = audio). Machine-readable companion: `evidence/gw_cdrom_volume_descriptor.json` (deterministic).")
+    L.append(('Extracted from the read-only original disc `' + _GW_FX + '` (5-track BIN/CUE; Track 1 = MODE1/2352 data volume, Tracks 2-5 = audio). Machine-readable companion: `evidence/gw_cdrom_volume_descriptor.json` (deterministic).'))
     L.append("")
     L.append("Feeds WORK2's `W2-MSCDEXRESP` to return a **real** MSCDEX AH=1500 drive-parameters response (not just no-CD) and to back the post-MENU AH=1510 data reads.")
     L.append("")
@@ -340,16 +344,16 @@ def main():
     L.append("")
     L.append("## Preservation")
     L.append("")
-    L.append("- Original `E:\\GeneWarsFX` BIN/CUE: **read-only, unmodified** (sha256 %s before == after: %s)." % (orig_sha[:16], ref_unchanged))
-    L.append("- Working ISO kept on `E:\\GWRecomp\\build\\cdrom\\` (separate from the reference).")
+    L.append(('- Original `' + _GW_FX + '` BIN/CUE: **read-only, unmodified** (sha256 %s before == after: %s).') % (orig_sha[:16], ref_unchanged))
+    L.append(('- Working ISO kept on `' + _GW_ROOT + '\\build\\cdrom\\` (separate from the reference).'))
     L.append("")
     L.append("## Sources")
     L.append("")
-    L.append("- CUE/BIN: `E:\\GeneWarsFX\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue` + Track 1 BIN (read-only reference).")
+    L.append(('- CUE/BIN: `' + _GW_FX + '\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue` + Track 1 BIN (read-only reference).'))
     L.append("- Standard ISO 9660 reader: pycdlib (per cd-image-iso9660 skill; no hand-rolled parser).")
     L.append("- MSCDEX buffer layout: `evidence/mscdex_response_contract.json` (L-MSCDEXRESPCONTRACT).")
     L.append("")
-    L.append("_Generated deterministically by `py -3 tools/cdrom_volume_descriptor.py`. Does not modify E:\\GeneWarsFX; does not implement the MSCDEX runtime handler._")
+    L.append(('_Generated deterministically by `py -3 tools/cdrom_volume_descriptor.py`. Does not modify ' + _GW_FX + '; does not implement the MSCDEX runtime handler._'))
     out_md = os.path.join(REP, "LOCAL_CDROM_VOLUME_DESCRIPTOR.md")
     open(out_md,"w",encoding="utf-8").write("\n".join(L)+"\n")
     log(f"WROTE {out_md}")

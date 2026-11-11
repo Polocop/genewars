@@ -2,10 +2,13 @@
 import os as _gw_os
 from pathlib import Path as _GwPath
 _GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import os,pathlib,subprocess,json,hashlib
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 cache=ROOT/'cache'; cache.mkdir(exist_ok=True)
-env={**os.environ,'TEMP':str(cache),'TMP':str(cache),'TMPDIR':str(cache),'PATH':r'E:\\msys64\\mingw32\\bin;E:\\msys64\\usr\\bin;'+os.environ.get('PATH','')}
+env={**os.environ,'TEMP':str(cache),'TMP':str(cache),'TMPDIR':str(cache),'PATH':(_GW_MSYS2 + '\\\\mingw32\\\\bin;' + _GW_MSYS2 + '\\\\usr\\\\bin;')+os.environ.get('PATH','')}
 src=(ROOT/'build'/'recomp_catalog_100.c').read_text(encoding='utf-8')
 name='gw_lift_0000'; start=src.index('void '+name+'('); brace=src.index('{',start); depth=0; end=None
 for i in range(brace,len(src)):

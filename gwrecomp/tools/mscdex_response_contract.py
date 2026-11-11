@@ -19,6 +19,10 @@ Outputs:
 This task does NOT implement the runtime handler (that is W2-MSCDEXRESP/WORK2)
 and does NOT touch <GENEWARSFX_ROOT> (read-only reference only).
 """
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import json, hashlib, os, re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -260,7 +264,7 @@ def build_result():
         "schema": "mscdex_response_contract/v1",
         "generated_by": "tools/mscdex_response_contract.py (L-MSCDEXRESPCONTRACT, LOCAL)",
         "deterministic": True,
-        "target": "GeneWars 1.1 genewars-1_1.exe via E:\\GWRecomp build runtime",
+        "target": ('GeneWars 1.1 genewars-1_1.exe via ' + _GW_ROOT + ' build runtime'),
         "oracle_sources": {
             "blocker_frame": "evidence/dpmi_0300_frame_work2.json (WORK2)",
             "no_cd_pass_and_next_frontier": "evidence/startup_after_mscdex_work3.json (WORK3 W3-029)",
@@ -316,7 +320,7 @@ def build_result():
                 "Do NOT require a real CD image or a drive-parameter buffer to pass MENU (no-CD 1500 response is sufficient per W3-029).",
                 "Do NOT implement AH codes 0x1501-0x150B / 0x150D-0x150F: they are not real MSCDEX AH values and the game never issues them.",
                 "Do NOT assume a generic MMC/SCSI command set for AH=1510. Implement only what W2-055 captured from the real code.",
-                "Do NOT modify E:\\GeneWarsFX (read-only reference).",
+                ('Do NOT modify ' + _GW_FX + ' (read-only reference).'),
             ],
         },
     }
@@ -430,7 +434,7 @@ def main():
     for k, v in c["oracle_sources"].items():
         L.append("- %s: %s" % (k, v))
     L.append("")
-    L.append("_Generated deterministically by `py -3 tools/mscdex_response_contract.py`. Does not modify E:\\GeneWarsFX; does not implement the runtime handler._")
+    L.append(('_Generated deterministically by `py -3 tools/mscdex_response_contract.py`. Does not modify ' + _GW_FX + '; does not implement the runtime handler._'))
 
     out_md = os.path.join(REP, "LOCAL_MSCDEX_RESPONSE_CONTRACT.md")
     with open(out_md, "w", encoding="utf-8") as f:

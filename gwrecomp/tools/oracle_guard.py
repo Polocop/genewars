@@ -38,7 +38,7 @@ Exit code: the child's exit code when it finishes normally; 0 when the guard its
 trips a limit (the abort is *expected* behaviour, not a crash) but the run is marked
 ABORTED_BY_DISK_GUARD in the evidence; non-zero on guard-side error.
 
-This module NEVER reads or writes E:\\GeneWarsFX (read-only reference library) and
+This module NEVER reads or writes <GENEWARSFX_ROOT> (read-only reference library) and
 never launches an oracle directly -- callers pass the already-decided argv.
 """
 from __future__ import annotations

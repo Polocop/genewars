@@ -1,3 +1,7 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import hashlib, importlib.util, json, pathlib, sys
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'.venv'/'Lib'/'site-packages'))
@@ -65,7 +69,7 @@ config_attempts=[i for i in no_config.get('interrupts',[]) if i.get('dos_filenam
 if not config_attempts or config_attempts[-1].get('service')!='dos21.open_file.error' or not no_config.get('process_exit') or not missing_returns or (int(missing_returns[0]['eax'],16)&0xff)!=0:
     raise AssertionError('no-config behavior changed')
 gwerr_hash=hashlib.sha256((stage/'GENEWARS'/'GW.ERR').read_bytes()).hexdigest()
-source_root=pathlib.Path(r'E:\\GeneWarsFX\\work\\disc_extracted\\GAME')
+source_root=pathlib.Path((_GW_FX + '\\\\work\\\\disc_extracted\\\\GAME'))
 source_gwerr=hashlib.sha256((source_root/'GW.ERR').read_bytes()).hexdigest()
 if gwerr_hash!=expected_gwerr or source_gwerr!=expected_gwerr: raise AssertionError('staged reference GW.ERR changed')
 summary={

@@ -1,6 +1,6 @@
 {
     "base_commit":  "35548b8d0fd8aa853da67edcf7cd6134f6b9cdc7",
-    "base_repo":  "https://github.com/sp00nznet/pcrecomp.git (local clone E:\\GWRecomp\\third_party\\pcrecomp)",
+    "base_repo":  "https://github.com/sp00nznet/pcrecomp.git (local clone third_party\\pcrecomp)",
     "note":  "Five local modifications of the pcrecomp clone that v0.7 was built with (never committed upstream). Images taken with a CRLF working tree.",
     "patch_sha256":  "34a1618f80b3734d866474e5d8bc2db0d025cafa74820f8c1abaedf8934a13c0",
     "changed_tracked_files":  [

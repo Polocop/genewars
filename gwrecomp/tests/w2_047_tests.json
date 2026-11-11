@@ -1,14 +1,14 @@
 [
   {
-    "argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\probe_real_mode_2f_work2.py"],
+    "argv": ["python", "tests\\probe_real_mode_2f_work2.py"],
     "suite": "original-byte-runtime"
   },
   {
-    "argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\test_dpmi_int2f_work2.py"],
+    "argv": ["python", "tests\\test_dpmi_int2f_work2.py"],
     "suite": "original-byte-assertions"
   },
   {
-    "argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "-m", "unittest", "tests.test_unicorn_services"],
+    "argv": ["python", "-m", "unittest", "tests.test_unicorn_services"],
     "suite": "runtime"
   }
 ]

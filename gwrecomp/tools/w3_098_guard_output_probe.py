@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Audit W3-095 empty guard output and verify console child stream capture only."""
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 import hashlib,json,subprocess,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -39,7 +42,7 @@ def main():
   },
   'windows_association':{'assoc_py':assoc.stdout.strip(),'assoc_returncode':assoc.returncode,'ftype_python_file':ftype.stdout.strip(),'ftype_returncode':ftype.returncode},
   'explicit_console_python':{'executable':sys.executable,'captured_child':child,'stdout_json_preserved':child['parsed']=={'stdout_probe':'preserved'},'stderr_preserved':child['stderr'].strip()=='stderr_probe_preserved'},
-  'safe_future_invocation':'& E:\\GWRecomp\\.venv\\Scripts\\python.exe -B E:\\GWRecomp\\tools\\<runner>.py; require non-empty guard stdout JSON and persist stdout/stderr before parsing.',
+  'safe_future_invocation':('& ' + _GW_ROOT + '\\.venv\\Scripts\\python.exe -B ' + _GW_ROOT + '\\tools\\<runner>.py; require non-empty guard stdout JSON and persist stdout/stderr before parsing.'),
   'scope':{'dosbox_invoked':False,'oracle_guard_invoked':False,'vhdx_touched':False,'w3_095_artifacts_modified':False}
  }
  out=ROOT/'evidence/w3_098_guard_output_capture.json'

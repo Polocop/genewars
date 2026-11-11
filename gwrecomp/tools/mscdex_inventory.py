@@ -22,6 +22,9 @@ a current blocker.
 Usage:  py -3 tools/mscdex_inventory.py
 Read-only over build/*.c and evidence/*.json; writes two artifacts only.
 """
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
 import json, re, sys, io, os, hashlib
 from pathlib import Path
 
@@ -317,7 +320,7 @@ def main():
     result = {
         "task": "L-MSCDEXINV",
         "generated_by": "tools/mscdex_inventory.py",
-        "target_note": "GeneWars 1.1 genewars-1_1.exe via E:\\GWRecomp build closures",
+        "target_note": ('GeneWars 1.1 genewars-1_1.exe via ' + _GW_ROOT + ' build closures'),
         "current_gate": current_blocker,
         "trace_inputs_walked": sorted(walked),
         "static_closures": static,

@@ -13,8 +13,8 @@
     "Existing native DOS/DPMI callback and Python DOS filesystem suites pass"
   ],
   "tests": [
-    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\test_native_dos_streams.py"], "suite": "native-dos-streams"},
-    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"], "suite": "python-runtime-regression"}
+    {"argv": ["python", "tests\\test_native_dos_streams.py"], "suite": "native-dos-streams"},
+    {"argv": ["python", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"], "suite": "python-runtime-regression"}
   ],
   "files": ["runtime/gw_dos_services.c", "runtime/gw_dos_services.h", "tests/test_native_dos_streams.c", "tests/test_native_dos_streams.py", "evidence/", "reports/"],
   "evidence": [],

@@ -1,10 +1,10 @@
 [
   {
-    "argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"],
+    "argv": ["python", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"],
     "suite": "general"
   },
   {
-    "argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\probe_empty_config_overlay_work2.py"],
+    "argv": ["python", "tests\\probe_empty_config_overlay_work2.py"],
     "suite": "general"
   }
 ]

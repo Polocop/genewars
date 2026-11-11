@@ -1,4 +1,7 @@
 """Lift the actual __save_8087_ bytes and compare saved x87 state against x86."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import hashlib,json,os,pathlib,subprocess,sys
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'third_party'/'pcrecomp'))
@@ -17,8 +20,8 @@ assert 'recomp_fnsave_image' in body and 'recomp_fwait' in body and 'UNIMPLEMENT
 src='#define RECOMP_GENERATED_CODE\n#include "recomp_types.h"\n#include "recomp_x87.h"\n'+body+'\n'
 (ROOT/'build'/'fnsave_lift.c').write_text(src,encoding='utf-8')
 cache=ROOT/'cache';cache.mkdir(exist_ok=True)
-env={**os.environ,'TEMP':str(cache),'TMP':str(cache),'TMPDIR':str(cache),'PATH':r'E:\\msys64\\mingw32\\bin;E:\\msys64\\usr\\bin;'+os.environ.get('PATH','')}
-cmd=[r'E:\\msys64\\mingw32\\bin\\gcc.exe','-std=gnu11','-m32','-O0','-I',str(ROOT/'runtime'),'-I',str(ROOT/'third_party'/'pcrecomp'/'runtime'/'recomp32'),'-o',str(ROOT/'build'/'test_fnsave.exe'),str(ROOT/'tests'/'test_fnsave.c'),str(ROOT/'runtime'/'recomp_x87.c'),str(ROOT/'build'/'fnsave_lift.c')]
+env={**os.environ,'TEMP':str(cache),'TMP':str(cache),'TMPDIR':str(cache),'PATH':(_GW_MSYS2 + '\\\\mingw32\\\\bin;' + _GW_MSYS2 + '\\\\usr\\\\bin;')+os.environ.get('PATH','')}
+cmd=[(_GW_MSYS2 + '\\\\mingw32\\\\bin\\\\gcc.exe'),'-std=gnu11','-m32','-O0','-I',str(ROOT/'runtime'),'-I',str(ROOT/'third_party'/'pcrecomp'/'runtime'/'recomp32'),'-o',str(ROOT/'build'/'test_fnsave.exe'),str(ROOT/'tests'/'test_fnsave.c'),str(ROOT/'runtime'/'recomp_x87.c'),str(ROOT/'build'/'fnsave_lift.c')]
 p=subprocess.run(cmd,cwd=ROOT,env=env,text=True,capture_output=True)
 if p.returncode: print(p.stdout,p.stderr); raise SystemExit(p.returncode)
 r=subprocess.run([str(ROOT/'build'/'test_fnsave.exe')],cwd=ROOT,env=env,text=True,capture_output=True)

@@ -1,3 +1,3 @@
 [
-  {"argv":["E:\\GWRecomp\\.venv\\Scripts\\python.exe","tests\\test_startup_runtime_current_work2.py"],"suite":"fresh current-runtime original-byte startup replay"}
+  {"argv":["python","tests\\test_startup_runtime_current_work2.py"],"suite":"fresh current-runtime original-byte startup replay"}
 ]

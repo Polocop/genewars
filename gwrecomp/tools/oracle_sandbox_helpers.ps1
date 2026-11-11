@@ -85,10 +85,10 @@ function Enable-OracleConfigs {
     if ($files.Count -eq 0) { throw 'No official oracle configs found to enable.' }
     foreach ($file in $files) {
         $text = [IO.File]::ReadAllText($file.FullName)
-        if ($text -match '(?im)^\s*mount\s+C\s+E:\\GWRecomp\\build\\dosboxx_oracle\\__VHDX_REQUIRED__\s*$') {
+        if ($text -match '(?im)^\s*mount\s+C\s+[^\r\n]*\\build\\dosboxx_oracle\\__VHDX_REQUIRED__\s*$') {
             $backup = "$($file.FullName).vhdx-disabled.bak"
             if (-not (Test-Path -LiteralPath $backup)) { Copy-Item -LiteralPath $file.FullName -Destination $backup }
-            $text = [regex]::Replace($text, '(?im)^\s*mount\s+C\s+E:\\GWRecomp\\build\\dosboxx_oracle\\__VHDX_REQUIRED__\s*$', "mount C $Stage")
+            $text = [regex]::Replace($text, '(?im)^\s*mount\s+C\s+[^\r\n]*\\build\\dosboxx_oracle\\__VHDX_REQUIRED__\s*$', "mount C $Stage")
             [IO.File]::WriteAllText($file.FullName, $text, [Text.Encoding]::ASCII)
         }
         $mounts = @([regex]::Matches($text, '(?im)^\s*mount\s+C\s+(\S+)\s*$'))

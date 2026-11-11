@@ -6,7 +6,7 @@
   "roles":["WORK3"],
   "dependencies":[],
   "acceptance":["Correct AX=150C and AX=1510 names/semantics in the MSCDEX inventory and related queue-derived report","Classify exact 1510 command code and required response fields from request packet at evidence/mscdex_driver_request_work2.json","Distinguish services measured before MENU from static/post-MENU callsites; do not describe 150C as TOC or 1510 as ISO directory listing","Create a narrowly scoped Runtime follow-up for any remaining measured 1510 behavior"],
-  "tests":[{"argv":["E:\\GWRecomp\\.venv\\Scripts\\python.exe","-m","unittest","tests.test_mscdex_response_work2"],"suite":"frame-evidence"}],
+  "tests":[{"argv":["python","-m","unittest","tests.test_mscdex_response_work2"],"suite":"frame-evidence"}],
   "files":["reports/LOCAL_MSCDEX_INVENTORY.md","evidence/mscdex_inventory.json","evidence/mscdex_driver_request_work2.json"],
   "evidence":["evidence/mscdex_driver_request_work2.json","reports/mscdex_startup_work2.md"],
   "derive":[]

@@ -1,4 +1,7 @@
 """Continue every case in the WORK3 CFG differential corpus and record divergences."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import collections,json,os,pathlib,re,subprocess
 ROOT=pathlib.Path(__file__).resolve().parents[1]; test=ROOT/"tests"/"test_recomp_cfg_leaf_work3.c"
 s=test.read_text(encoding="utf-8")
@@ -16,8 +19,8 @@ if "unsigned divergences=0,cases=0;" not in s:
  s=s.replace('cases++; printf("BEGIN fn=%u pattern=%u\\n",i,pattern); fflush(stdout);', 'cases++;')
  test.write_text(s,encoding="utf-8")
 # Keep this as a meaningful test: all cases must run and be categorized; semantic mismatches are recorded for Core.
-env=dict(os.environ); env["PATH"]=r"E:\\msys64\\mingw32\\bin;E:\\msys64\\usr\\bin;"+env.get("PATH",""); (ROOT/"cache").mkdir(exist_ok=True); env["TEMP"]=env["TMP"]=env["TMPDIR"]=str(ROOT/"cache")
-compiler=r"E:\\msys64\\mingw32\\bin\\gcc.exe"; exe=ROOT/"build"/"test_recomp_cfg_leaf_work3.exe"; hdr=ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32"
+env=dict(os.environ); env["PATH"]=(_GW_MSYS2 + '\\\\mingw32\\\\bin;' + _GW_MSYS2 + '\\\\usr\\\\bin;')+env.get("PATH",""); (ROOT/"cache").mkdir(exist_ok=True); env["TEMP"]=env["TMP"]=env["TMPDIR"]=str(ROOT/"cache")
+compiler=(_GW_MSYS2 + '\\\\mingw32\\\\bin\\\\gcc.exe'); exe=ROOT/"build"/"test_recomp_cfg_leaf_work3.exe"; hdr=ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32"
 cp=subprocess.run([compiler,"-std=gnu11","-m32","-O0","-w","-I",str(hdr),"-I",str(ROOT/"build"),"-o",str(exe),str(test)],capture_output=True,text=True,cwd=ROOT,env=env)
 if cp.returncode: raise SystemExit("compile failed:\\n"+cp.stdout[-5000:]+cp.stderr[-5000:])
 run=subprocess.run([str(exe)],capture_output=True,text=True,cwd=ROOT)

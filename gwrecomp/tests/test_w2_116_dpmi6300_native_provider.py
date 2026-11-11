@@ -2,6 +2,9 @@
 import os as _gw_os
 from pathlib import Path as _GwPath
 _GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import os
 import pathlib
 import subprocess
@@ -20,7 +23,7 @@ class NativeDbcsProviderTests(unittest.TestCase):
             "TEMP": str(ROOT / "cache"),
             "TMP": str(ROOT / "cache"),
             "TMPDIR": str(ROOT / "cache"),
-            "PATH": str(GCC.parent) + ";E:\\msys64\\usr\\bin;" + os.environ.get("PATH", ""),
+            "PATH": str(GCC.parent) + (';' + _GW_MSYS2 + '\\usr\\bin;') + os.environ.get("PATH", ""),
         }
         command = [
             str(GCC), "-std=gnu11", "-m32", "-O0",

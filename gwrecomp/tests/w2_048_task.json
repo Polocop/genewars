@@ -13,8 +13,8 @@
     "Existing DPMI AX=0100, AX=0102, AX=0300/INT 2F, and runtime suites remain passing"
   ],
   "tests": [
-    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\probe_real_mode_2f_work2.py"], "suite": "original-byte-runtime"},
-    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"], "suite": "runtime"}
+    {"argv": ["python", "tests\\probe_real_mode_2f_work2.py"], "suite": "original-byte-runtime"},
+    {"argv": ["python", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"], "suite": "runtime"}
   ],
   "files": ["runtime/dos_services.py", "runtime/guest_boot.py", "tools/probes/unicorn_int21.py", "tests/", "evidence/", "reports/"],
   "evidence": ["evidence/dpmi_0300_frame_work2.json"],

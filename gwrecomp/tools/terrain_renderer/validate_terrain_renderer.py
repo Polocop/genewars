@@ -1,6 +1,9 @@
 import os as _gw_os
 from pathlib import Path as _GwPath
 _GW_ROOT=str(_GwPath(__file__).resolve().parents[2])
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[2])
 import argparse, csv, hashlib, json, struct
 from pathlib import Path
 
@@ -83,8 +86,8 @@ for r in rows(out/'conq001_854x480.cells.csv'):
     if (int(r['world_x']),int(r['world_y'])) in [(94,38),(95,38)]:
         extra.append({'world_xy':[int(r['world_x']),int(r['world_y'])],'cell_offset':r['scenario_cell_offset'],'height':int(r['height_s16']),'block_id':int(r['block_id']),'orientation_byte':r['topology_orientation_byte'],'atlas_offset':r['atlas_offset'],'screen_center':[int(r['screen_center_x']),int(r['screen_center_y'])],'covered_pixels':int(r['covered_pixels'])})
 report={'schema':'gwrecomp.standalone-terrain-renderer/v1','result':'snapshot_backed_terrain_rendered_with_additional_widescreen_cells','scope':'offline independent renderer; no LE execution or simulation changes',
- 'implementation':{'renderer_source':'E:\\GWRecomp\\tools\\terrain_renderer\\gw_terrain_data_renderer.cpp','renderer_exe':'E:\\GWRecomp\\work\\terrain_renderer\\gw_terrain_data_renderer.exe',
-  'snapshot_extractor':'E:\\GWRecomp\\tools\\terrain_renderer\\prepare_snapshot_scenario.py','runner':'E:\\GWRecomp\\tools\\terrain_renderer\\run_terrain_renderer.ps1','validator':'E:\\GWRecomp\\tools\\terrain_renderer\\validate_terrain_renderer.py',
+ 'implementation':{'renderer_source':(_GW_ROOT + '\\tools\\terrain_renderer\\gw_terrain_data_renderer.cpp'),'renderer_exe':(_GW_ROOT + '\\work\\terrain_renderer\\gw_terrain_data_renderer.exe'),
+  'snapshot_extractor':(_GW_ROOT + '\\tools\\terrain_renderer\\prepare_snapshot_scenario.py'),'runner':(_GW_ROOT + '\\tools\\terrain_renderer\\run_terrain_renderer.ps1'),'validator':(_GW_ROOT + '\\tools\\terrain_renderer\\validate_terrain_renderer.py'),
   'renderer_source_sha256':sha(Path((_GW_ROOT + '\\tools\\terrain_renderer\\gw_terrain_data_renderer.cpp'))),'renderer_exe_sha256':sha(Path((_GW_ROOT + '\\work\\terrain_renderer\\gw_terrain_data_renderer.exe'))),
   'snapshot_extractor_sha256':sha(Path((_GW_ROOT + '\\tools\\terrain_renderer\\prepare_snapshot_scenario.py'))),'runner_sha256':sha(Path((_GW_ROOT + '\\tools\\terrain_renderer\\run_terrain_renderer.ps1'))),
   'validator_sha256':sha(Path((_GW_ROOT + '\\tools\\terrain_renderer\\validate_terrain_renderer.py')))},
@@ -99,7 +102,7 @@ report={'schema':'gwrecomp.standalone-terrain-renderer/v1','result':'snapshot_ba
  'preservation':{'canonical_LE_modified':False,'canonical_LE_sha256':sha(Path((_GW_ROOT + '\\evidence\\genewars-1_1.exe'))),
   'original_scenario_modified':False,'original_scenario_sha256':sha(level),'original_B32_modified':False,'original_B32_sha256':sha(bank),
   'original_palette_modified':False,'original_palette_sha256':sha(pal),'snapshot_modified':False,'snapshot_sha256':sha(snap_path),
-  'GeneWarsFX_modified':False,'note':'Renderer and extraction pipeline only read the original LE/resources/snapshot; the temporary CONQ overlay and outputs are under E:\\GWRecomp\\work and evidence.'}}
+  'GeneWarsFX_modified':False,'note':('Renderer and extraction pipeline only read the original LE/resources/snapshot; the temporary CONQ overlay and outputs are under ' + _GW_ROOT + '\\work and evidence.')}}
 p=out/'standalone_terrain_renderer_report.json'; p.write_text(json.dumps(report,indent=2),encoding='utf-8')
 print(json.dumps({'report':str(p),'overlap_exact':eq==640*480,'side_bands':bands,'extra_cells':extra,'views':{k:{'dimensions':v['dimensions'],'visible_cells':v['visible_world_cells'],'covered_pixels':v['covered_pixels'],'bmp_sha256':v['bmp_sha256']} for k,v in views.items()}},indent=2))
 

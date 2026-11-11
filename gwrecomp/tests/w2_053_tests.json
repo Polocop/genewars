@@ -1,4 +1,4 @@
 [
- {"argv":["E:\\GWRecomp\\.venv\\Scripts\\python.exe","-m","unittest","tests.test_dos_ah48_selector_reuse_work2"],"suite":"original-byte-ah48-selector-reuse"},
- {"argv":["E:\\GWRecomp\\.venv\\Scripts\\python.exe","-m","unittest","tests.test_unicorn_services","tests.test_dos_services"],"suite":"runtime-regression"}
+ {"argv":["python","-m","unittest","tests.test_dos_ah48_selector_reuse_work2"],"suite":"original-byte-ah48-selector-reuse"},
+ {"argv":["python","-m","unittest","tests.test_unicorn_services","tests.test_dos_services"],"suite":"runtime-regression"}
 ]

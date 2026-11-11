@@ -1,4 +1,7 @@
 """Patch, run and record the 30-function WORK3 CFG differential harness."""
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_MSYS2=_gw_os.environ.get("MSYS2_ROOT",r"C:\msys64")
 import collections, hashlib, json, os, pathlib, re, subprocess, sys
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/"src"))
@@ -106,8 +109,8 @@ end_match=re.search(end_re,source)
 if not end_match: raise AssertionError("nested differential loop closure differs from expected fixture")
 source=source[:end_match.start()]+'  }\n  }\n  printf("COMPLETED %u cases; divergences=%u\\n",cases,divergences); return 0;'+source[end_match.end():]
 test_path=ROOT/"tests"/"test_recomp_cfg_leaf_work3.c"; test_path.write_text(source,encoding="utf-8")
-env=dict(os.environ); env["PATH"]=r"E:\\msys64\\mingw32\\bin;E:\\msys64\\usr\\bin;"+env.get("PATH",""); (ROOT/"cache").mkdir(exist_ok=True); env["TEMP"]=env["TMP"]=env["TMPDIR"]=str(ROOT/"cache")
-compiler=r"E:\\msys64\\mingw32\\bin\\gcc.exe"; exe=ROOT/"build"/"test_recomp_cfg_leaf_work3.exe"; hdr=ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32"
+env=dict(os.environ); env["PATH"]=(_GW_MSYS2 + '\\\\mingw32\\\\bin;' + _GW_MSYS2 + '\\\\usr\\\\bin;')+env.get("PATH",""); (ROOT/"cache").mkdir(exist_ok=True); env["TEMP"]=env["TMP"]=env["TMPDIR"]=str(ROOT/"cache")
+compiler=(_GW_MSYS2 + '\\\\mingw32\\\\bin\\\\gcc.exe'); exe=ROOT/"build"/"test_recomp_cfg_leaf_work3.exe"; hdr=ROOT/"third_party"/"pcrecomp"/"runtime"/"recomp32"
 cmd=[compiler,"-std=gnu11","-m32","-O0","-w","-I",str(hdr),"-I",str(ROOT/"build"),"-o",str(exe),str(test_path),str(ROOT/"runtime"/"recomp_x87.c")]
 cp=subprocess.run(cmd,capture_output=True,text=True,cwd=ROOT,env=env)
 if cp.returncode: raise SystemExit("compile failed:\\n"+cp.stdout[-6000:]+cp.stderr[-6000:])

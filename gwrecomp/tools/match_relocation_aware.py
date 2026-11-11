@@ -37,7 +37,7 @@ Output:
                                      target function x reference, ranked).
   reports/L_BFLIB_MATCH.md          brief human report + HIGH-VALUE HANDOFFs.
 
-Read-only against E:\\GeneWarsFX.  Writes only under E:\\GWRecomp.
+Read-only against <GENEWARSFX_ROOT>.  Writes only under <gwrecomp>.
 """
 from __future__ import annotations
 import os as _gw_os

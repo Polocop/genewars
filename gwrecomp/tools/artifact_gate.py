@@ -8,7 +8,7 @@ only an allow-list of safe output types ever leaves the machine:
     BLOCKED  : *.exe  *.dll  *.bin  *.cue  *.iso  *.nrg  *.img  *.sub
                *.idb  *.id0  *.id1  *.bytes  *.map  *.s  *.o  *.obj  *.a
                *.lib  *.so  *.pyc  *.dmp  *.stack  and anything under
-               E:\\GeneWarsFX (original read-only library) or under build/
+               <GENEWARSFX_ROOT> (original read-only library) or under build/
                or cache/ or .venv/ or third_party/.
 
 Usage:
@@ -21,6 +21,10 @@ the workflow explicitly lists it in --allow-extensions.
 """
 
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 
 import argparse
 import os
@@ -29,7 +33,7 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-GENEWARSFX = pathlib.Path(os.environ.get("GWRECOMP_GENEWARSFX", "E:\\GeneWarsFX"))
+GENEWARSFX = pathlib.Path(os.environ.get("GWRECOMP_GENEWARSFX", (_GW_FX)))
 
 # Only these extensions may ever become a GitHub artifact.
 ALLOWED_EXT = {

@@ -12,8 +12,8 @@
     "Unknown DOS services remain trapped and native DPMI/stream plus Python DOS suites pass"
   ],
   "tests": [
-    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\test_native_dos_vectors.py"], "suite": "native-dos-vectors"},
-    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"], "suite": "python-runtime-regression"}
+    {"argv": ["python", "tests\\test_native_dos_vectors.py"], "suite": "native-dos-vectors"},
+    {"argv": ["python", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"], "suite": "python-runtime-regression"}
   ],
   "files": ["runtime/gw_dos_services.c", "runtime/gw_dos_services.h", "tests/test_native_dos_vectors.c", "tests/test_native_dos_vectors.py", "evidence/", "reports/"],
   "evidence": [],

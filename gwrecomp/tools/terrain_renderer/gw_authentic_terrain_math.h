@@ -5,7 +5,7 @@
 // (0x65F20..0x665A0) from GeneWarsFX 1.1 (genewars-1_1.exe, LE base 0).
 //
 // Sources:
-//   - E:/CODEX/gw_65f20_capstone.txt            (Capstone disassembly)
+//   - gw_65f20_capstone.txt            (Capstone disassembly)
 //   - evidence/fun_65f20_authentic_pipeline_reconstruction.json
 //   - evidence/fun_65f20_e19c0_before_after_samples.json
 //   - tests/test_65f20_x86_math_vectors.py  (verified vectors)

@@ -13,9 +13,9 @@
     "Original-byte -k replay passes AH=48h and records the next exact service or fault; no MENU claim without root evidence"
   ],
   "tests": [
-    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\probe_dos_ah48_work2.py"], "suite": "original-byte-ah48"},
-    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "tests\\test_dos_ah48_work2.py"], "suite": "original-byte-ah48-assertions"},
-    {"argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services", "tests.test_guest_boot"], "suite": "runtime"}
+    {"argv": ["python", "tests\\probe_dos_ah48_work2.py"], "suite": "original-byte-ah48"},
+    {"argv": ["python", "tests\\test_dos_ah48_work2.py"], "suite": "original-byte-ah48-assertions"},
+    {"argv": ["python", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services", "tests.test_guest_boot"], "suite": "runtime"}
   ],
   "files": ["runtime/dos_services.py", "tools/probes/unicorn_int21.py", "tests/", "evidence/", "reports/"],
   "evidence": ["evidence/startup_continuation_work3.json", "reports/coordination/startup_continuation_work3.md"],

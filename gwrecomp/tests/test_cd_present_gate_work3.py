@@ -1,3 +1,7 @@
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 import hashlib as _hashlib
 
 
@@ -42,7 +46,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "evidence" / "cd_present_gate_work3.json"
-CUE = Path(r"E:\\GeneWarsFX\\evidence\\original_disc\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue")
+CUE = Path((_GW_FX + '\\\\evidence\\\\original_disc\\\\Genewars (Europe) (En,Fr,De,Es,It,Sv).cue'))
 EXPECTED_TARGET = "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
 EXPECTED_CUE = "1d417e3aed625d4f054b51054a1211562a19cd4f712b08e7846613517228a5b5"
 

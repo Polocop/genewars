@@ -21,7 +21,7 @@ staging dir on the scratch volume, and asserts the guard's behaviour:
      proves staging cannot exceed the physical volume capacity.
 
 Artifacts: evidence/disk_guard_test_<name>.json (one per test) + a summary.
-Run:  E:\\GWRecomp\\.venv\\Scripts\\python.exe E:\\GWRecomp\\tests\\test_oracle_guard.py
+Run:  python tests/test_oracle_guard.py
 """
 from __future__ import annotations
 import os as _gw_os
@@ -47,7 +47,7 @@ og.SANDBOX_REQUIRED = False
 
 PY = sys.executable
 SCRATCH = Path(os.environ.get("LDG_SCRATCH",
-          r"E:\AI\hermes\profiles\ninfer\cache\scratch\ldg_tests"))
+          str(ROOT / "cache" / "ldg_tests")))
 EV = ROOT / "evidence" / "oracle_runs"
 GENEWARSFX = (_GW_FX)
 os.environ.setdefault("GWRECOMP_GENEWARSFX", GENEWARSFX)

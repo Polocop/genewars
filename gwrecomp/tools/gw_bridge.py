@@ -22,6 +22,10 @@ This file is intended to be committed (it is part of `tools/`).
 """
 
 from __future__ import annotations
+import os as _gw_os
+from pathlib import Path as _GwPath
+_GW_ROOT=str(_GwPath(__file__).resolve().parents[1])
+_GW_FX=_gw_os.environ.get("GENEWARSFX_ROOT",_gw_os.path.join(_GW_ROOT,"third_party","GeneWarsFX"))
 
 import argparse
 import hashlib
@@ -35,7 +39,7 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 # Original material lives OUTSIDE the repo, read-only (per AGENTS.md).
-GENEWARSFX = pathlib.Path(os.environ.get("GWRECOMP_GENEWARSFX", "E:\\GeneWarsFX"))
+GENEWARSFX = pathlib.Path(os.environ.get("GWRECOMP_GENEWARSFX", (_GW_FX)))
 # The DOSBox-X heavy-debug build used as the original oracle.
 DBX_HEAVY = ROOT / "build" / "dosboxx-heavy" / "src" / "dosbox-x.exe"
 # The native target the recompiler produces.
@@ -293,7 +297,7 @@ def cmd_replay_native(a) -> int:
 
 def cmd_replay_original(a) -> int:
     """Run the original binary under the DOSBox-X heavy oracle (real PC).
-    Requires the read-only fixture at E:\\GeneWarsFX and the heavy build.
+    Requires the read-only fixture at <GENEWARSFX_ROOT> and the heavy build.
     This is the 'real test on the home PC' path; it launches, it does not copy."""
     if not DBX_HEAVY.exists():
         return _emit({

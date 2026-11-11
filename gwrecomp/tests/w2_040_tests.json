@@ -1,6 +1,6 @@
 [
   {
-    "argv": ["E:\\GWRecomp\\.venv\\Scripts\\python.exe", "-m", "unittest", "tests.test_host_devices", "tests.test_dos_services"],
+    "argv": ["python", "-m", "unittest", "tests.test_host_devices", "tests.test_dos_services"],
     "suite": "general"
   }
 ]
