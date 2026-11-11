@@ -1,0 +1,106 @@
+{
+  "schema": "gwrecomp-test-triage/1",
+  "note": "Result of triaging the modules that fail on a clean checkout. Method: each was re-run in a throwaway copy that also held the maintainers' private inputs (evidence/, coordination/, tasks/, work/, a pcrecomp clone). BLOCKED = passes there, so the clean-checkout failure is only a missing input. KNOWN_FAIL = still fails there, i.e. a genuine failure or a stale assertion that needs maintainer attention (tracked in the issues). Entries apply only when the module does not pass. The C-harness entries only appear once pcrecomp is installed (scripts\\setup.ps1); before that they are BLOCKED on pcrecomp.",
+  "modules": {
+    "test_dpmi_alloc_contract_work3": {
+      "status": "BLOCKED",
+      "reason": "needs the maintainers' internal task-queue files (coordination/taskq.py); passes when they are present"
+    },
+    "test_dpmi_lock_resume_work3": {
+      "status": "BLOCKED",
+      "reason": "needs the maintainers' internal task-queue files (coordination/taskq.py); passes when they are present"
+    },
+    "test_taskq_project_metrics": {
+      "status": "BLOCKED",
+      "reason": "needs the maintainers' internal task-queue files (coordination/taskq.py); passes when they are present"
+    },
+    "test_taskq_transitions": {
+      "status": "BLOCKED",
+      "reason": "needs the maintainers' internal task-queue files (coordination/taskq.py); passes when they are present"
+    },
+    "test_w2_122_pit8254_runtime": {
+      "status": "BLOCKED",
+      "reason": "needs a maintainers' recovery manifest under evidence/ (not published); passes when present"
+    },
+    "test_w3_241_isatty_static_caller": {
+      "status": "BLOCKED",
+      "reason": "needs GW.EXE inside the maintainers' DOSBox-X oracle sandbox (build/dosboxx_oracle/C/GENEWARS)"
+    },
+    "test_current_cd_present_gate_projection_work3": {
+      "status": "KNOWN_FAIL",
+      "reason": "evidence pins a runtime digest that no longer matches (runtime changed after the capture); fails even with all private inputs"
+    },
+    "test_native_dpmi_0200_w1_058": {
+      "status": "KNOWN_FAIL",
+      "reason": "pins SHA-256 of runtime/gw_dos_services.{c,h} and dos_services.py from the W2-112/113 era; sources have changed since (stale pin)"
+    },
+    "test_w3_260_a0000_video_mapping": {
+      "status": "KNOWN_FAIL",
+      "reason": "two source-hash-bound assertions no longer hold (stale pins); fails even with all private inputs"
+    },
+    "test_w1_090_ax0501_sequence": {
+      "status": "KNOWN_FAIL",
+      "reason": "asserts text that is absent from tests/test_native_guest_image.c (stale assertion; also absent in the maintainers' working tree)"
+    },
+    "test_w2_123_port_io_runtime": {
+      "status": "KNOWN_FAIL",
+      "reason": "-Werror=unused-variable: 'caller' in runtime/gw_interrupts.c:37 is unused when built without tracing; fails even with all private inputs"
+    },
+    "test_oracle_launch_policy": {
+      "status": "KNOWN_FAIL",
+      "reason": "(1) policy regex flags tools/w3_099_generate.py:19 (a git rev-parse call that mentions the oracle clone) as an emulator launch: likely false positive; (2) needs the unpublished official oracle configs"
+    },
+    "test_w3_256_clang_prerequisite": {
+      "status": "BLOCKED",
+      "reason": "needs a prerequisite artifact produced by the maintainers' tools.w3_256_clang_prerequisite run (passes when present)"
+    },
+    "test_w3_257_staging_clang_build": {
+      "status": "BLOCKED",
+      "reason": "needs a prerequisite artifact produced by the maintainers' tools.w3_257_staging_clang_build run (passes when present)"
+    },
+    "test_w3_258_oracle_guard_preflight": {
+      "status": "BLOCKED",
+      "reason": "needs a prerequisite artifact produced by the maintainers' tools.w3_258_oracle_guard_preflight run (passes when present)"
+    },
+    "test_crt_init_table_closure_work1": {
+      "status": "BLOCKED",
+      "reason": "imports the maintainers' reference library package 'dos_re' (GeneWarsFX; not published)"
+    },
+    "test_w3_246_cd_present_setup": {
+      "status": "BLOCKED",
+      "reason": "asserts the original disc .cue at the maintainers' fixed location (not configurable, not published)"
+    },
+    "test_fnsave": {
+      "status": "KNOWN_FAIL",
+      "reason": "gcc 16 rejects the lifted code: implicit declaration of gw_recomp_guest_instruction (the test compiles without the runtime trace header); fails even with all private inputs"
+    },
+    "test_gw_recomp_trace": {
+      "status": "KNOWN_FAIL",
+      "reason": "C harness link fails with undefined references (harness links only gw_recomp_trace.c; the runtime has grown since); fails even with all private inputs"
+    },
+    "test_w2_112_native_dpmi_0200": {
+      "status": "KNOWN_FAIL",
+      "reason": "link fails: undefined reference to gw_pit8254_init (harness source list predates the PIT module); fails even with all private inputs"
+    },
+    "test_w2_083_lifecycle_harness": {
+      "status": "KNOWN_FAIL",
+      "reason": "native C lifecycle harness exits with code 3 after the AH=49 phase; fails even with all private inputs"
+    },
+    "test_w2_110_ax4400_stream_classification": {
+      "status": "KNOWN_FAIL",
+      "reason": "C harness crashes (0xC0000005) when run; fails even with all private inputs"
+    },
+    "test_w2_111_ax4400_configured_console_info": {
+      "status": "KNOWN_FAIL",
+      "reason": "C runtime harness crashes (0xC0000005) when run; fails even with all private inputs"
+    },
+    "test_native_dos_ah44_preflight_work2": {
+      "status": "KNOWN_FAIL",
+      "reason": "script-style module exits non-zero without output even with all private inputs; cause not yet diagnosed"
+    },
+    "test_native_dpmi_dos_alloc": {
+      "status": "KNOWN_FAIL",
+      "reason": "script-style module exits non-zero without output even with all private inputs; cause not yet diagnosed"
+    }
+  }
+}
