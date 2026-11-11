@@ -72,3 +72,11 @@ The maintainer's local install path was replaced by the placeholder `<GENEWARS_H
 ## Trademark
 
 Gene Wars is a trademark of its respective owners. This project is unofficial.
+
+## History rewrite of `gwrecomp-native-port`
+
+The first public import (`6904a79`, then `26420e6`) contained the byte vectors described above. With the maintainer's explicit authorisation the branch was replaced, using `--force-with-lease` on that branch only, by a single commit on top of upstream `72ec4c4` that does not contain them. `main`, the other branches and the upstream repository were not touched.
+
+Checked on a fresh clone of the new branch: one commit above `72ec4c4`; none of the removed byte strings, nor the maintainer's local install path, appear in any commit of the branch; no `.pyc`, executables or driver files are tracked.
+
+**The old commits are still publicly reachable.** After the rewrite, the old tip `26420e6` (and its parent) can still be fetched by SHA from `Polocop/genewars` and also through the upstream repository (`mefistotelis/genewars`), because forks share one object store; the API, the web commit page and `raw.githubusercontent.com` all answered `200` without authentication. Pull Request #9 now shows only the new commit. Removing the old objects is not possible from our side: it needs a request to GitHub Support (sensitive data removal: purge of dangling commits and cached views across the fork network, including the PR refs), or deleting and recreating the fork (which loses Issues and the PR and does not by itself guarantee removal from the shared network). Treat the bytes as having been public until GitHub confirms removal. A local backup of the previous state is kept by the maintainer outside this repository.
