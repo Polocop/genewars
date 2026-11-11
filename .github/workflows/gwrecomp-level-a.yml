@@ -50,7 +50,7 @@ jobs:
       - name: Point the scripts at this MSYS2
         run: |
           $root = '${{ steps.msys.outputs.msys2-location }}'
-          if (-not (Test-Path (Join-Path $root 'usrin\pacman.exe'))) { $root = Split-Path -Parent $root }
+          if (-not (Test-Path (Join-Path $root 'usr\bin\pacman.exe'))) { $root = Split-Path -Parent $root }
           "MSYS2_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Install the pinned mingw32 toolchain packages
