@@ -2,7 +2,7 @@
 
 **GWRecomp** is an experimental effort to run *Gene Wars* (Bullfrog Productions, 1996, v1.1 DOS4GW/Watcom LE executable) **natively on Windows, without DOSBox**, by statically lifting the original x86-32 code to C and running it on a modern host-platform layer (SDL2 video/audio/input, DOS/DPMI service emulation, a virtual SB16 for the original Miles mixer, CD-DA playback).
 
-> **Status: research prototype.** It is *not* a finished port, the full campaign has not been tested, and it **cannot run without original game files that you must provide yourself**. See [PROGRESS.md](PROGRESS.md) for what is and is not verified.
+> **Status: research prototype.** It is *not* a finished port and the full campaign has not been tested. **It cannot run without original game files that you must provide yourself**, and one required build input (the symbol map) is currently not obtainable by outside contributors. See [PROGRESS.md](PROGRESS.md) for what is and is not verified and [tools/rebuild/README_BUILD.md](tools/rebuild/README_BUILD.md) for the exact build levels.
 
 ## Relationship to the original project
 
@@ -14,40 +14,46 @@ This directory lives in a fork of [mefistotelis/genewars](https://github.com/mef
 |---|---|
 | `runtime/` | Host layer: DOS/DPMI/INT services, CD-ROM/ISO9660 view, PIT 8254, VBE provider, virtual SB16 (Miles), CD-DA player, x87 and CPU-context helpers (C and Python) |
 | `src/le_loader.py` | Parser/loader for the DOS4GW LE executable format |
-| `tools/` | Lifter driver, function-boundary/coverage analyzers, oracle guard, rebuild scripts, terrain renderer experiment, probes |
+| `tools/` | Lifter driver, function-boundary/coverage analyzers, rebuild scripts, terrain renderer experiment, probes |
 | `tests/` | Unit/contract tests and the SDL2 demo harness (`test_ifctitle_creature_probe.{c,py}`) |
-| `docs/` | Architecture, provenance and issue seeds |
+| `scripts/` | `setup.ps1`, `build.ps1`, `test.ps1`, `play.ps1` (entry points), `run_tests.py`, `gwconfig.ps1` |
+| `docs/` | Architecture, provenance, test status, issue seeds |
 
-## What you must provide (not distributed here)
+## Quick start
 
-- A legitimate copy of **Gene Wars v1.1** (the `GENEWARS` install: `genewars-1_1.exe`, `DATA/`, CD image/cue for CD-DA).
-- Several development inputs derived from that copy (guest memory snapshot / evidence inputs listed in `tools/rebuild/evidence_inputs.json` by SHA-256). **These are intentionally not in this repository.**
+Everything runs from the `gwrecomp` directory in Windows PowerShell. Start scripts with the process-scoped bypass shown (it changes no system setting). The repository can be cloned anywhere.
 
-## Requirements (as used by the author; Windows 11)
+```powershell
+git clone https://github.com/Polocop/genewars.git
+cd genewars
+git checkout gwrecomp-native-port
+cd gwrecomp
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1      # venv, pinned packages, pcrecomp + patch; reports what is missing
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Level A   # no game files: compile the runtime units
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test.ps1       # classified test run
+```
 
-- Python 3.13 with `unicorn==2.1.4` (see `tools/rebuild/toolchain.lock.json`)
-- MSYS2 mingw32 GCC + SDL2, LLVM clang (VS 2022 Build Tools)
-- External lifter dependency [`sp00nznet/pcrecomp`](https://github.com/sp00nznet/pcrecomp) (MIT) at commit `35548b8d…` plus `tools/rebuild/patches/P01_pcrecomp_local_mods.patch`
+Prerequisites you install yourself: Git, Python 3.10+ (reference 3.13), MSYS2 with the mingw32 gcc/SDL2 packages (`setup.ps1 -InstallMsys2Packages` can install the packages), LLVM clang 19.1.5. Versions and details: [README_BUILD.md](tools/rebuild/README_BUILD.md).
 
-## Building
+### Levels
+- **Level A** (no game files): toolchain check, pcrecomp at its pinned commit with the documented patch, compile all runtime C units, run the independent tests.
+- **Level B** (needs your game files): lift the executable, compile and link the demo from a clean clone of the committed state: `scripts\build.ps1 -Level B`.
+- **Level C** (needs a Level B build): bounded smoke run of the native executable: `scripts\build.ps1 -Level C`, or `scripts\play.ps1` to play.
 
-The documented procedure is `tools/rebuild/rebuild.ps1` (see [`tools/rebuild/README_BUILD.md`](tools/rebuild/README_BUILD.md)). **Known limitation:** compiler, SDL and install paths are currently hard-coded to the author's machine (`E:\GWRecomp`, `E:\msys64`, …) and the clean rebuild has *not* been reproduced outside it. Parameterising these paths is the first good contribution (see `docs/ISSUES_SEED.md`).
-
-## Running
-
-`play_genewars_interactive.ps1 -InstallRoot <your GENEWARS install>` launches the SDL2 interactive demo from a prepared build. It requires the build artifacts and guest image described above; they are not provided.
+### What you must provide (not distributed here)
+Your own Gene Wars **1.1 (Europe)** install folder, the `.cue` of your CD image, and the symbol map `genewars-1_1.map`. The first two are verified by SHA-256 (`python tools\rebuild\check_inputs.py` tells you which file differs). **The symbol map is derived from the original binary, is not part of the install, and cannot currently be obtained or redistributed**; until that is resolved, Levels B and C are reproducible only by the maintainers. Details: [README_BUILD.md](tools/rebuild/README_BUILD.md#3-inputs-you-must-supply-levels-b-and-c).
 
 ## Tests
 
-See [docs/TEST_STATUS.md](docs/TEST_STATUS.md): of 466 test modules, 92 pass on a clean checkout, 364 need inputs that are not published, 10 need triage.
+`scripts\test.ps1` classifies every module. After `setup.ps1` in a clean clone (no game files): of 466 modules, **94 pass**, **358 are blocked** by a named missing input (not failures), **14 are known failures** (triaged; they also fail with all private inputs present) and **0 fail unexpectedly**. See [docs/TEST_STATUS.md](docs/TEST_STATUS.md) and `scripts/test_triage.json`.
 
 ## Current limitations
 
-See [PROGRESS.md](PROGRESS.md) and [ROADMAP.md](ROADMAP.md). In short: no verified end-to-end native boot from the original executable; the playable demo path resumes from a snapshot; Smacker audio, IRQ0/AIL timer path and exact state restoration after *Load* are unverified; the full campaign is untested.
+See [PROGRESS.md](PROGRESS.md) and [ROADMAP.md](ROADMAP.md). In short: no verified end-to-end native boot from the original executable; the playable demo path resumes from a snapshot; Smacker audio, IRQ0/AIL timer path and exact state restoration after *Load* are unverified; the full campaign is untested; the clean rebuild (Level B/C) has been reproduced from a fresh clone only on the maintainers' machine, using the maintainers' copies of the inputs.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Good entry points are labelled in `docs/ISSUES_SEED.md`.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Good entry points are labelled in `docs/ISSUES_SEED.md` and in the repository's Issues.
 
 ## Credits and legal
 
