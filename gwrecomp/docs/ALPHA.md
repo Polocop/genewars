@@ -30,29 +30,43 @@ Alpha.
 Test method: the real executable, real OS mouse and keyboard events (`tools/interactive/`), and the frame the game
 presents, read from the game itself (`GW_FRAME_DUMP_DIR`), because screen capture of the SDL window is black on the
 machine used. Sound is checked through a PCM capture of the virtual SB16 and the Windows audio-session level.
-"Manual" below means a person (the maintainer) played it in earlier sessions; "scripted" means the interactive scenario
-below drove the real window; neither is a replay-harness result.
+"Scripted" below means the interactive scenario drove the real window; "manual with the scripted tools" means the same input
+tools were used step by step (looking at the presented frames), on an earlier build of the same code. Neither is a
+replay-harness result, and no person other than the tool driver played these sessions.
 
 | Area | Status | Evidence kind |
 |---|---|---|
-| Start, intro videos (skippable), original title menu | works | scripted |
+| Start, intro videos, original title menu | works (intro runs ~3 min; each video can be skipped, see Known issues) | scripted, 12/12 scenario steps |
 | New game -> mission 1 landing -> map | works | scripted |
 | Select and move a specialist | works | scripted |
-| Build a structure (extractor): placement, cost, construction | works | scripted |
+| Build a structure (extractor): placement, cost, construction | works (done in an earlier build of the same code, by hand with the scripted tools) | manual with the scripted tools |
 | ESC options menu, save, load (state returns to the saved one) | works | scripted |
-| Load a save from the end of mission 1 -> debrief -> galaxy map -> mission 2 briefing -> mission 2 | works | scripted |
-| Sound effects | reaches the audio device | scripted + PCM capture |
-| CD music | works when `GENEWARS_CUE` is set | scripted (log + level) |
+| Load a save from the end of mission 1 -> debrief -> galaxy map -> mission 2 briefing -> mission 2 | works (earlier build of the same code) | manual with the scripted tools |
+| Sound effects | reach the audio device (7 MB of PCM in the scenario) | scripted + PCM capture |
+| CD music | works when `GENEWARS_CUE` is set | log + audio level |
 | Creature selection and orders | **not tested** | |
 | Research | **not tested** | |
-| Long sessions | see PROGRESS.md for the latest soak figures | scripted sampler |
-| Lost first click after a screen transition | **not reproduced** on title/mission/load/menu; may exist elsewhere | |
-| Steady background loop during missions | present; not yet classified as original ambience or a mixer defect | PCM analysis |
+| Long sessions | 17 minutes idle in a mission: memory (114 MB) and handles constant, frames keep changing. Not tested with play or for hours | scripted sampler (`tools/interactive/soak.ps1`) |
+| Steady background loop during missions | present (period 0.85 s, 1-6 kHz, about half of full scale); not yet classified as original ambience or a mixer defect | PCM analysis (`pcm_stats.py`) |
 | Output clipping in sound bursts | observed (peaks at full scale); cause unknown | PCM analysis |
+
+The scenario is `tools/interactive/playtest.ps1` (12 steps: window, title, new game, select, move, ESC menu, save, OK, load,
+stability, sound). On the clean-clone Level B build of this commit all 12 pass.
+
+## Known issues found while testing
+
+- In runs where the intro videos were skipped with ESC, the intro sometimes started again right after the title appeared.
+  It was not seen when the intro played to the end. The cause was not determined; some of those runs also had input
+  misdirected by the test tool (below), so it may be partly an artefact.
+- A click right after a screen change can be lost if it arrives before the new screen is running; a person clicking when the
+  screen is visible does not hit it. (Several apparent "lost clicks" during this work were the test tool talking to a stale
+  window or to a window hidden behind another application; the game recreates its window between the intro and the title.)
+- The window cannot be captured by desktop screen capture on the test machine while it is covered; the tools read frames from
+  the game instead.
 
 ## Known limits
 
 - Needs the locally generated snapshot (above); needs your own game files for every step.
 - Music needs a `.cue` image; there is no music from the install folder alone.
 - The window must be a normal desktop window; it has only been used at 1200x900 and scaled by Windows.
-- Anything not in the table above has not been played.
+- Anything not in the table above has not been played. Nothing here was tested on a machine other than the development one.

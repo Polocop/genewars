@@ -9,6 +9,10 @@ public static class W {
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, UIntPtr e);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte sc, uint f, UIntPtr e);
@@ -23,7 +27,19 @@ function Find-GwWindow([string]$proc = 'gw_demo') {
     $p = Get-Process | Where-Object { $_.ProcessName -like "$proc*" -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1
     if ($p) { return $p.MainWindowHandle } else { return [IntPtr]::Zero }
 }
+# Bring the game window to the front for real (a plain SetForegroundWindow is refused when another app is active, and then
+# every click lands on whatever window is on top). Verified through GetForegroundWindow.
+function Focus-Window($h) {
+    if (-not [W]::IsWindow($h)) { $h = Find-GwWindow }   # the game recreates its window between intro and title: never trust an old handle
+    for ($i = 0; $i -lt 5; $i++) {
+        if ([W]::GetForegroundWindow() -eq $h) { return $true }
+        [W]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [W]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)   # ALT tap lifts the foreground lock
+        [void][W]::ShowWindow($h, 9); [void][W]::BringWindowToTop($h); [void][W]::SetForegroundWindow($h); Start-Sleep -Milliseconds 200
+    }
+    return ([W]::GetForegroundWindow() -eq $h)
+}
 function Get-Client($h) {
+    if (-not [W]::IsWindow($h)) { $h = Find-GwWindow }
     $r = New-Object W+RECT; [void][W]::GetClientRect($h, [ref]$r)
     $pt = New-Object W+POINT; [void][W]::ClientToScreen($h, [ref]$pt)
     return @{ X = $pt.X; Y = $pt.Y; W = $r.R; H = $r.B }
@@ -40,7 +56,7 @@ function Move-Mouse($h, [double]$fx, [double]$fy) {
     $c = Get-Client $h; [void][W]::SetCursorPos([int]($c.X + $fx * $c.W), [int]($c.Y + $fy * $c.H))
 }
 function Click($h, [double]$fx, [double]$fy, [string]$button = 'L', [int]$holdMs = 80) {
-    [void][W]::SetForegroundWindow($h); Move-Mouse $h $fx $fy; Start-Sleep -Milliseconds 120
+    if (-not (Focus-Window $h)) { Write-Host '  [warn] could not bring the game window to the front' }; Move-Mouse $h $fx $fy; Start-Sleep -Milliseconds 120
     $dn, $up = if ($button -eq 'R') { 0x0008, 0x0010 } else { 0x0002, 0x0004 }
     [W]::mouse_event($dn, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds $holdMs
     [W]::mouse_event($up, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 150

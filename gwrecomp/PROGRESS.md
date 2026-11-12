@@ -39,6 +39,16 @@ History below is from the maintainer's private working repository (24 commits, 2
 | 1 Nov | v0.7 demo sources brought under version control (Krell harness, Smacker V13/V18.1, save/load V15/V16, CD-DA); reproducible rebuild procedure and acceptance data |
 | 2 Nov | Miles mixer dispatch verified; virtual SB16 sink; opt-in reusable object cache; build fixes |
 
+## Alpha 0.1 (2026-11-12): the game can be played from the menus
+
+The most advanced playable code (the candidate called fix4: original `setup_game` -> intro videos -> title menu -> game loop) was
+ported onto the public driver sources and checked on a clean-clone Level B build with real mouse and keyboard events on the
+real window: title menu, new game, mission 1, select and move a specialist, ESC menu, save, load, sound. 12 of 12 scenario steps
+pass (`tools/interactive/playtest.ps1`). Building a structure and loading a save through the debrief and galaxy map into
+mission 2 were played with the same tools on an earlier build of the same code. `scripts/play.ps1` now starts the real-time
+play mode (CD music when `GENEWARS_CUE` is set). Not tested: creature orders, research, long play. Details, evidence kinds and
+known issues: [docs/ALPHA.md](docs/ALPHA.md). The start still uses the locally generated title snapshot (provisional).
+
 ## Reproducible build (verified 2026-11-11)
 
 Levels B and C have been verified on the maintainers' machine only; they have not been run on a second machine because they need game files that must not go to public runners. How to verify them yourself: [docs/PORTABILITY.md](docs/PORTABILITY.md).

@@ -60,7 +60,8 @@ try {
     if ($alpha) { $argLine += ' --play' }
     if ($Detach) {   # for automated interactive tests: start the game and return its process id
         $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $br -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
-        Write-Output $p.Id; Pop-Location; exit 0
+        Set-Content -LiteralPath (Join-Path $Build 'play.pid') -Value $p.Id -Encoding ascii
+        Write-Host "started, pid $($p.Id)"; Pop-Location; exit 0
     }
     $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $br -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
     $code = $p.ExitCode
