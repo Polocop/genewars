@@ -8620,6 +8620,27 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             }
         }
     }
+    {   /* QA aid (opt-in, read-only): GW_ORDER_TRACE=<file>. Once per presented frame, samples a few guest fields that decide
+           whether a map click becomes an order (selected specialist, MapDisplay candidate/flags, the 11-byte action packet) and
+           appends a line whenever one of them changes. Never writes guest memory. Local diagnostics only. */
+        static const char *trace_path; static int trace_init; static FILE *trace_file;
+        static uint32_t last_sel=0xFFFFFFFFu,last_c18=0xFFFFFFFFu,last_c37=0xFFFFFFFFu; static uint8_t last_pkt[11]; static uint32_t frames,bit0_samples;
+        if(!trace_init) { trace_init=1; trace_path=getenv("GW_ORDER_TRACE"); if(trace_path && !trace_path[0]) trace_path=NULL; if(trace_path) trace_file=fopen(trace_path,"ab"); }
+        if(trace_file && guest_memory) {
+            frames++;
+            const uint32_t turn=*(uint32_t *)(guest_memory+0x002F1472u), sel=*(uint32_t *)(guest_memory+0x002F1434u);
+            const uint32_t c18=*(uint32_t *)(guest_memory+0x00346D88u), c37=*(uint32_t *)(guest_memory+0x00346DA7u);
+            const uint8_t c1c=guest_memory[0x00346D8Cu]; if(c1c&1u) bit0_samples++;
+            const uint8_t *pkt=guest_memory+0x002F19C0u;
+            if(sel!=last_sel || c18!=last_c18 || c37!=last_c37 || memcmp(pkt,last_pkt,sizeof last_pkt)!=0) {
+                fprintf(trace_file,"turn=%u frame=%u selectedPlSpec=%08x map18=%08x map37=%08x map1c=%02x bit0_frames_so_far=%u action=%02x packet=",
+                    turn,frames,sel,c18,c37,c1c,bit0_samples,pkt[10]);
+                for(unsigned i=0;i<11u;i++) fprintf(trace_file,"%02x",pkt[i]);
+                fputc('\n',trace_file); fflush(trace_file);
+                last_sel=sel; last_c18=c18; last_c37=c37; memcpy(last_pkt,pkt,sizeof last_pkt);
+            }
+        }
+    }
     {   /* QA aid (opt-in): GW_FRAME_DUMP_DIR=<dir>. When <dir>/snap.req exists (its text is the file stem) the presented
            640x480 frame is written to <dir>/<stem>.bmp and the request is removed. Lets an automated interactive test read the
            frame the game presents, independently of the desktop compositor. Local diagnostics only; unused in normal play. */
