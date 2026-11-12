@@ -1,11 +1,14 @@
 <#
- Start the native interactive demo built by scripts\build.ps1 -Level B.
-   powershell -NoProfile -File scripts\play.ps1 [-Build <rebuild dir>] [-SmokeFrames N] [-Backend default|terrain_modern]
+ Start the native interactive build made by scripts\build.ps1 -Level B.
+   powershell -NoProfile -File scripts\play.ps1 [-Build <rebuild dir>] [-SmokeFrames N] [-Backend default|terrain_modern] [-Detach]
+ Without -SmokeFrames this is the ALPHA play mode: real-time window, mouse/keyboard, digital sound (virtual SB16) and, when
+ GENEWARS_CUE is set, CD music from your disc image. The intro videos play first (ESC / click skips each one), then the original
+ title menu appears. The start still uses the locally generated title snapshot, so it is provisional: see docs/ALPHA.md.
  -Backend terrain_modern selects the EXPERIMENTAL modern terrain renderer (needs B32 data prepared by tools\terrain_renderer; map clicks disabled).
  -Build defaults to the newest build\rebuild-* directory. -SmokeFrames N makes the program exit after N frames (smoke test).
  Requires GENEWARS_INSTALL_DIR (your own game files). Logs go to <build>\play.stdout.log / play.stderr.log.
 #>
-param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default')
+param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'gwconfig.ps1')
 $root = Get-GwRoot
@@ -29,8 +32,19 @@ foreach ($req in @($exe, (Join-Path $cfg.Mingw32Bin 'SDL2.dll'), $guest, $tsv)) 
 $env:PATH = "$(Split-Path $exe);$env:PATH"
 $env:SDL_VIDEODRIVER = 'windows'; $env:SDL_RENDER_SCALE_QUALITY = '0'; $env:SDL_AUDIODRIVER = 'directsound'
 $env:GW_INTERACTIVE_DEMO = '1'; $env:GW_INTERACTIVE_RESILIENT = '1'; $env:GW_INTERACTIVE_QUIET_CONSOLE = '1'
-$env:GWRECOMP_IFCLEVEL_CONTINUE = '1'; $env:GWRECOMP_IFCLEVEL_NATIVE_GAME_LOOP = '1'; $env:GWRECOMP_IFCLEVEL_HOST_BOUND_TURN = '420'
-$env:GW_DEMO_VSYNC = '0'; $env:GW_DEMO_CAP_60 = '0'; $env:GW_TARGET_FPS = '240'; $env:GW_DEMO_PACING = '20'
+$env:GWRECOMP_IFCLEVEL_CONTINUE = '1'; $env:GWRECOMP_IFCLEVEL_NATIVE_GAME_LOOP = '1'
+$alpha = ($SmokeFrames -eq 0)
+if ($alpha) {
+    # Alpha play mode: no harness bound, the original title menu is driven by the user, 60 fps native pacing
+    Remove-Item Env:GWRECOMP_IFCLEVEL_HOST_BOUND_TURN -ErrorAction SilentlyContinue
+    $env:GW_INTERACTIVE_START_AT_TITLE = '1'; $env:GW_VSB16 = '1'
+    $env:GW_DEMO_VSYNC = '0'; $env:GW_DEMO_CAP_60 = '1'; $env:GW_TARGET_FPS = '60'; $env:GW_DEMO_PACING = 'native'
+    if ($cfg.Cue) { $env:GW_CD_AUDIO_CUE = $cfg.Cue } else { Write-Host 'Note: GENEWARS_CUE is not set, so there is no CD music (sound effects only).' -ForegroundColor Yellow }
+    $env:GW_VSB16_LOG = Join-Path $Build 'play.sound.log'
+} else {
+    $env:GWRECOMP_IFCLEVEL_HOST_BOUND_TURN = '420'
+    $env:GW_DEMO_VSYNC = '0'; $env:GW_DEMO_CAP_60 = '0'; $env:GW_TARGET_FPS = '240'; $env:GW_DEMO_PACING = '20'
+}
 if ($Backend -eq 'terrain_modern') {
     $env:GW_RENDER_BACKEND = 'terrain_modern'; $env:GW_DEMO_CAP_60 = '1'; $env:GW_DEMO_PACING = 'native'
     if (-not $env:GW_TERRAIN_WIDTH) { $env:GW_TERRAIN_WIDTH = '2560' }; if (-not $env:GW_TERRAIN_HEIGHT) { $env:GW_TERRAIN_HEIGHT = '1440' }
@@ -43,6 +57,11 @@ Push-Location $br
 # would wrap stderr lines in error records and write UTF-16
 try {
     $argLine = ('"{0}" "{1}" "{2}"' -f $guest, $cfg.Install, $tsv)
+    if ($alpha) { $argLine += ' --play' }
+    if ($Detach) {   # for automated interactive tests: start the game and return its process id
+        $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $br -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+        Write-Output $p.Id; Pop-Location; exit 0
+    }
     $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $br -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
     $code = $p.ExitCode
 } finally { Pop-Location }

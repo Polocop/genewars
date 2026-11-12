@@ -1464,6 +1464,13 @@ def main()->None:
         # The returned TITLE object publishes slot 0 at the original
         # adjustment thunk 0x13720 -> IFCTitle::PlugIn 0x70D10.
         "--partial-root","0x13720",
+        # The original single-player selection interface has its own
+        # four-slot vtable at object-3 link 0x112020. Its fixups select the
+        # exact Plugin/PullOut/Update/Draw adjustment thunks below.
+        "--partial-root","0x136E0","--partial-root","0x711F0",
+        "--partial-root","0x136D0","--partial-root","0x71350",
+        "--partial-root","0x136C0","--partial-root","0x71410",
+        "--partial-root","0x136B0","--partial-root","0x714A0",
         "--partial-root","0x710B0",
         # Original IFCOptions virtual targets recovered from the live LE
         # vtable after game() completed PlugIn: slot +8 -> thunk 0x13600 ->
@@ -2126,6 +2133,27 @@ def main()->None:
                 "--verified-indirect-target","0x92821=0x1B640",
                 "--verified-indirect-target","0x5AF1A=0x1B630",
                 "--verified-indirect-target","0x83561=0x1B620"]
+    # The ID=0 title action publishes the original single-player interface.
+    # Its runtime vptr is 0x002EC020 (object-3 link 0x112020); each of these
+    # exact targets is backed by the canonical LE fixups in that four-slot
+    # table. Keep all four runtime dispatch sites guarded by that table.
+    singleplayer_vtable_link=0x112020
+    singleplayer_vtable_offsets=[0x36E0,0x36D0,0x36C0,0x36B0]
+    singleplayer_fixups={f.source_link:f for f in image.fixups
+        if singleplayer_vtable_link<=f.source_link<singleplayer_vtable_link+16}
+    if set(singleplayer_fixups)!={singleplayer_vtable_link+i*4 for i in range(4)} or any(
+            singleplayer_fixups[singleplayer_vtable_link+i*4].target_object!=1 or
+            singleplayer_fixups[singleplayer_vtable_link+i*4].target_offset!=singleplayer_vtable_offsets[i]
+            for i in range(4)):
+        raise SystemExit("single-player interface vtable no longer matches the four canonical LE fixups")
+    options += ["--verified-indirect-target","0x9282C=0x136E0",
+                "--verified-indirect-target","0x92821=0x136D0",
+                "--verified-indirect-target","0x5AF1A=0x136C0",
+                "--verified-indirect-target","0x83561=0x136B0",
+                "--verified-le-vtable-call","0x9282C=0x112020:4",
+                "--verified-le-vtable-call","0x92821=0x112020:4",
+                "--verified-le-vtable-call","0x5AF1A=0x112020:4",
+                "--verified-le-vtable-call","0x83561=0x112020:4"]
     # The observed TITLE vtable is object-3 link 0x112040; its contiguous
     # four LE fixups cover the original PlugIn/PullOut/Update/Draw thunks.
     # The native draw dispatcher uses the same table at slot +0x0C.
@@ -3255,6 +3283,36 @@ def main()->None:
                 "--indexed-code-jump-table","0x3C6A8=0x39EE4:12:eax",
                 "--indexed-code-jump-table","0xCBC93=0xCBC48:10:eax",
                 "--verified-indirect-target","0xB6B45=0xD0134",
+                "--partial-root","0xC41C0",
+                "--verified-indirect-target","0xC62FC=0xC41C0",
+                "--partial-root","0xC4270",
+                "--verified-indirect-target","0xC4880=0xC4270",
+                "--verified-indirect-target","0xC5ACB=0xC4270",
+                "--verified-indirect-target","0xC5B5F=0xC4270",
+                "--verified-indirect-target","0xC5B95=0xC4270",
+                "--verified-indirect-target","0xC5BE4=0xC4270",
+                "--verified-indirect-target","0xC6302=0xC4270",
+                "--verified-indirect-target","0xC6A92=0xC4270",
+                "--verified-indirect-target","0xC73CA=0xC4270",
+                "--verified-indirect-target","0xC762D=0xC4270",
+                "--verified-indirect-target","0xC763A=0xC4270",
+                "--verified-indirect-target","0xC7696=0xC4270",
+                "--verified-indirect-target","0xC7740=0xC4270",
+                "--verified-indirect-target","0xC774C=0xC4270",
+                "--partial-root","0xC4180",
+                "--verified-indirect-target","0xC6096=0xC4180",
+                "--verified-indirect-target","0xC631E=0xC4180",
+                "--verified-indirect-target","0xC63F6=0xC4180",
+                "--partial-root","0xC43B0",
+                "--verified-indirect-target","0xC6D26=0xC43B0",
+                "--partial-root","0xC42F0",
+                "--verified-indirect-target","0xC5F98=0xC42F0",
+                "--partial-root","0xC4600",
+                "--verified-indirect-target","0xC483E=0xC4600",
+                "--verified-indirect-target","0xC5CE9=0xC4600",
+                "--partial-root","0xC4370",
+                "--verified-indirect-target","0xC71A4=0xC4370",
+                "--partial-root","0xC4640",
                 "--batch-le-fixup-vtables"]
     for target in sorted(seen_callback_targets):
         options += ["--verified-indirect-target",f"0xA8D95={hex(target)}",
@@ -4583,9 +4641,11 @@ def main()->None:
     print("TRACE original IFCLevel comparator link=000184B0 guest=002034B0 source=Draw@17824->qsort_@17837 data_link=00186384 guest=00360384 qsort_sites=8")
     close_callback_rows=[row for row in lift_evidence.get("verified_indirect_targets",[])
                          if row.get("callsite")=="0x000C6096"]
-    if (len(close_callback_rows)!=1 or
-            close_callback_rows[0].get("link_target")!="0x000D7220" or
-            close_callback_rows[0].get("guest_target")!="0x002C2220" or
+    # The Smacker MSS (audio) targets are additional verified rows at the same site; the BIOS-clock
+    # row the proof depends on must still be present and exact.
+    bios_close_rows=[row for row in close_callback_rows
+                     if row.get("link_target")=="0x000D7220" and row.get("guest_target")=="0x002C2220"]
+    if (len(bios_close_rows)!=1 or
             "{ 0x002C2220u, recomp_gw_partial_0x000D7220 }" not in lifted_text):
         raise SystemExit("SMACKCLOSE's fixup-backed callback is not mapped to the lifted nullsub_7 body")
     # Bound the original setup_game body at the continuation after the

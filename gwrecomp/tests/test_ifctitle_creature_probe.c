@@ -135,6 +135,7 @@ void gw_original_setup_game_startup_resources_entry(void);
 void gw_original_setup_game_font_initializers_entry(void);
 void gw_original_setup_game_vector_init_entry(void);
 void recomp_gw_partial_0x00094AC0(void);
+void recomp_gw_partial_0x00092930(void);
 void gw_original_draw_game_level_palette_fade_entry(void);
 void gw_original_setup_controller_entry(void);
 void gw_original_game_frame_timer_tick_entry(void);
@@ -4847,7 +4848,11 @@ void gw_test_instruction_budget_step(uint32_t guest_va) {
             gw_recomp_yield_active_context();
             longjmp(g_native_loop_stop_jmp,1);
         }
+        /* The 320-turn QuitGame arm belongs to the automated proof only. A manual
+           interactive session (host stop disabled, player in control) must run until the
+           player quits through the original UI or closes the window. */
         if(guest_va==0x000928B5u && !g_native_game_loop_host_stop_enabled &&
+           !g_interactive_demo_mode &&
            *(uint32_t *)(guest_memory+0x002F1472u)==320u &&
            (guest_memory[0x002F1464u]&1u)==0u) {
             guest_memory[0x002F1464u]|=1u;
@@ -7935,6 +7940,7 @@ static gw_interactive_key_event g_interactive_key_queue[GW_INTERACTIVE_KEY_QUEUE
 static unsigned g_interactive_key_head,g_interactive_key_count;
 static unsigned g_interactive_input_overflows;
 static int g_interactive_input_x,g_interactive_input_y;
+static const uint8_t *g_title_pointer_memory;
 static int g_interactive_input_valid;
 static int g_interactive_input_left_held,g_interactive_input_right_held;
 static int g_interactive_input_left_edge,g_interactive_input_right_edge;
@@ -8431,8 +8437,10 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             "GeneWars Native Recompilation - Interactive Demo",
             SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,initial_w,initial_h,
             SDL_WINDOW_SHOWN|SDL_WINDOW_RESIZABLE|SDL_WINDOW_ALLOW_HIGHDPI);
-        /* --play draws the game's own pointer; hide the OS arrow over it. */
-        if(g_cli_play_mode) SDL_ShowCursor(SDL_DISABLE);
+        /* --play draws the guest pointer when its sprite is available.  Keep
+           the host cursor available as a fallback on interfaces (notably the
+           title screen) that do not publish a guest cursor sprite. */
+        if(g_cli_play_mode) SDL_ShowCursor(SDL_ENABLE);
         const char *video_driver=SDL_GetCurrentVideoDriver();
         const int headless_test_driver=video_driver && strcmp(video_driver,"dummy")==0;
         Uint32 renderer_flags=(g_interactive_demo_mode && !headless_test_driver)?
@@ -8612,6 +8620,24 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             }
         }
     }
+    {   /* QA aid (opt-in): GW_FRAME_DUMP_DIR=<dir>. When <dir>/snap.req exists (its text is the file stem) the presented
+           640x480 frame is written to <dir>/<stem>.bmp and the request is removed. Lets an automated interactive test read the
+           frame the game presents, independently of the desktop compositor. Local diagnostics only; unused in normal play. */
+        static const char *dump_dir; static int dump_init;
+        if(!dump_init) { dump_init=1; dump_dir=getenv("GW_FRAME_DUMP_DIR"); if(dump_dir && !dump_dir[0]) dump_dir=NULL; }
+        if(dump_dir && !g_terrain_modern_backend && g_ifclevel_demo_rgba) {
+            char req[700]; snprintf(req,sizeof req,"%s/snap.req",dump_dir);
+            FILE *rf=fopen(req,"rb");
+            if(rf) {
+                char stem[96]={0}; size_t n=fread(stem,1,sizeof stem-1,rf); fclose(rf); remove(req);
+                for(size_t i=0;i<n;i++) if(!((stem[i]>='a'&&stem[i]<='z')||(stem[i]>='A'&&stem[i]<='Z')||(stem[i]>='0'&&stem[i]<='9')||stem[i]=='_'||stem[i]=='-')) { stem[i]=0; break; }
+                if(!stem[0]) snprintf(stem,sizeof stem,"frame");
+                char out[900]; snprintf(out,sizeof out,"%s/%s.bmp",dump_dir,stem);
+                SDL_Surface *ds=SDL_CreateRGBSurfaceWithFormatFrom((void *)g_ifclevel_demo_rgba,640,480,32,640*(int)sizeof(uint32_t),SDL_PIXELFORMAT_ARGB8888);
+                if(ds) { SDL_SaveBMP(ds,out); SDL_FreeSurface(ds); }
+            }
+        }
+    }
     if(!capture_path && !g_interactive_capture_done) {
         const char *raw_capture=getenv("GW_INTERACTIVE_CAPTURE_FRAME");
         if(raw_capture && raw_capture[0]) {
@@ -8740,7 +8766,32 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         g_interactive_camera_capture_frames[ci]=g_interactive_frame_count;
         snprintf(g_interactive_camera_capture_paths[ci],sizeof g_interactive_camera_capture_paths[ci],"%s",capture_path);
     }
+    /* Pointer source: the published gameplay snapshot, or (title/menu loop, which runs the guest on
+       this thread) the live guest lbDisplay.MouseSprite read directly. */
+    int ptr_valid=0; unsigned ptr_w=0,ptr_h=0; const uint8_t *ptr_pixels=NULL,*ptr_palette=NULL;
+    int ptr_hot_x=0,ptr_hot_y=0,ptr_x=0,ptr_y=0;
     if(g_cli_play_mode && visual && visual->mouse_valid && g_interactive_input_valid) {
+        ptr_valid=1; ptr_w=visual->mouse_w; ptr_h=visual->mouse_h; ptr_pixels=visual->mouse_pixels;
+        ptr_palette=visual->palette; ptr_hot_x=visual->mouse_hot_x; ptr_hot_y=visual->mouse_hot_y;
+        ptr_x=g_interactive_input_x; ptr_y=g_interactive_input_y;
+    } else if(g_cli_play_mode && !visual && g_title_pointer_memory) {
+        const uint8_t *gm=g_title_pointer_memory;
+        const uint32_t sprite=*(const uint32_t *)(gm+0x00376A6Cu),image_guest=0x00377E5Cu;
+        uint8_t w=0u,h=0u;
+        if(sprite && sprite+6u<=GUEST_LIMIT) { w=gm[sprite+4u]; h=gm[sprite+5u]; }
+        static unsigned title_ptr_trace;
+        if(title_ptr_trace++%240u==0u)
+            fprintf(stderr,"TRACE title_pointer sprite=%08x size=%ux%u hot=%d,%d mouse=%d,%d\n",sprite,w,h,
+                *(const int32_t *)(gm+0x00377E54u),*(const int32_t *)(gm+0x00377E58u),
+                *(const int32_t *)(gm+0x00376AA8u),*(const int32_t *)(gm+0x00376AACu));
+        if(w && h && w<=64u && h<=64u && image_guest+(uint32_t)w*h<=GUEST_LIMIT) {
+            ptr_valid=1; ptr_w=w; ptr_h=h; ptr_pixels=gm+image_guest; ptr_palette=vga_dac;
+            ptr_hot_x=*(const int32_t *)(gm+0x00377E54u); ptr_hot_y=*(const int32_t *)(gm+0x00377E58u);
+            ptr_x=*(const int32_t *)(gm+0x00376AA8u); ptr_y=*(const int32_t *)(gm+0x00376AACu);
+        }
+    }
+    if(g_cli_play_mode) SDL_ShowCursor(ptr_valid?SDL_DISABLE:SDL_ENABLE);
+    if(ptr_valid) {
         /* Host stand-in for LbMousePlace: the original blits its pointer
            over the swapped screen; here it is drawn over the presented frame
            only, so guest memory and the published WScreen stay untouched. */
@@ -8752,15 +8803,15 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             if(pointer_texture) SDL_SetTextureBlendMode(pointer_texture,SDL_BLENDMODE_BLEND);
         }
         if(pointer_texture) {
-            const unsigned w=visual->mouse_w,h=visual->mouse_h;
+            const unsigned w=ptr_w,h=ptr_h;
             for(unsigned y=0;y<64u;y++) for(unsigned x=0;x<64u;x++) {
                 uint32_t value=0u;
                 if(x<w && y<h) {
-                    const uint32_t k=visual->mouse_pixels[y*w+x];
+                    const uint32_t k=ptr_pixels[y*w+x];
                     if(k!=0xFEu) {
-                        const uint32_t r=(uint32_t)visual->palette[k*3u+0u]*255u/63u;
-                        const uint32_t g=(uint32_t)visual->palette[k*3u+1u]*255u/63u;
-                        const uint32_t b=(uint32_t)visual->palette[k*3u+2u]*255u/63u;
+                        const uint32_t r=(uint32_t)ptr_palette[k*3u+0u]*255u/63u;
+                        const uint32_t g=(uint32_t)ptr_palette[k*3u+1u]*255u/63u;
+                        const uint32_t b=(uint32_t)ptr_palette[k*3u+2u]*255u/63u;
                         value=0xFF000000u|(r<<16)|(g<<8)|b;
                     }
                 }
@@ -8768,8 +8819,8 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             }
             SDL_UpdateTexture(pointer_texture,NULL,pointer_rgba,64*(int)sizeof(uint32_t));
             const double sx=(double)dst.w/640.0,sy=(double)dst.h/480.0;
-            const int px=g_interactive_input_x+visual->mouse_hot_x;
-            const int py=g_interactive_input_y+visual->mouse_hot_y;
+            const int px=ptr_x+ptr_hot_x;
+            const int py=ptr_y+ptr_hot_y;
             SDL_Rect pointer_dst={dst.x+(int)(px*sx),dst.y+(int)(py*sy),
                 (int)(64*sx+0.5),(int)(64*sy+0.5)};
             SDL_RenderCopy(g_ifclevel_demo_renderer,pointer_texture,NULL,&pointer_dst);
@@ -9004,16 +9055,26 @@ static void gw_smk_pump_events(void) {
 static SDL_Window *g_smk_window;
 static char g_smk_prev_quit_hint[8];
 static SDL_Renderer *g_smk_renderer;
+static int g_smk_owns_window;
 
-/* The video uses its own window/renderer so the (not yet running) interactive
-   presenter and its state are untouched; it is destroyed when the original
-   loop exits, so the window never sits unserviced during the startup replay. */
+/* Reuse the interactive renderer when one exists; only the earliest startup
+   path, before the main window is created, needs a temporary video window. */
 static int gw_smk_open_window(void) {
     if(g_smk_window) return g_smk_renderer!=NULL;
     if(!sdl_input_initialized && SDL_Init(SDL_INIT_VIDEO)!=0) {
         gw_smk_trace("TRACE smacker_video SDL_Init failed: %s\n",SDL_GetError()); return 0;
     }
     sdl_input_initialized=1;
+    /* During interactive play, present the original Smacker frames in the
+       existing game window.  A second top-level window steals focus and makes
+       the startup transition look like a crash to the player. */
+    if(g_ifclevel_demo_window && g_ifclevel_demo_renderer) {
+        g_smk_window=g_ifclevel_demo_window;
+        g_smk_renderer=g_ifclevel_demo_renderer;
+        g_smk_owns_window=0;
+        gw_smk_trace("TRACE smacker_video using_game_window=1\n");
+        return 1;
+    }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"0");
     /* Destroying the video window must not look like the user quitting: SDL >= 2.0.22
        posts SDL_QUIT when the last window closes, which the startup replay would obey. */
@@ -9026,6 +9087,7 @@ static int gw_smk_open_window(void) {
     const int headless=drv && strcmp(drv,"dummy")==0;
     g_smk_renderer=g_smk_window?SDL_CreateRenderer(g_smk_window,-1,
         headless?SDL_RENDERER_SOFTWARE:SDL_RENDERER_ACCELERATED):NULL;
+    g_smk_owns_window=g_smk_window!=NULL;
     if(!g_smk_renderer) {
         gw_smk_trace("TRACE smacker_video window failed: %s\n",SDL_GetError());
         if(g_smk_window) SDL_DestroyWindow(g_smk_window);
@@ -9037,13 +9099,14 @@ static int gw_smk_open_window(void) {
 static void gw_smk_close_window(void) {
     if(g_smk_texture) { SDL_DestroyTexture(g_smk_texture); g_smk_texture=NULL; }
     g_smk_tex_w=g_smk_tex_h=0;
-    if(g_smk_renderer) { SDL_DestroyRenderer(g_smk_renderer); g_smk_renderer=NULL; }
-    if(g_smk_window) {
+    if(g_smk_owns_window && g_smk_renderer) SDL_DestroyRenderer(g_smk_renderer);
+    if(g_smk_owns_window && g_smk_window) {
         SDL_DestroyWindow(g_smk_window); g_smk_window=NULL;
         /* Drop the events generated by this transient window (close/focus). */
         SDL_PumpEvents(); SDL_FlushEvents(SDL_QUIT,SDL_QUIT); SDL_FlushEvents(SDL_WINDOWEVENT,SDL_SYSWMEVENT);
         SDL_SetHint("SDL_QUIT_ON_LAST_WINDOW_CLOSE",g_smk_prev_quit_hint[0]?g_smk_prev_quit_hint:"1");
     }
+    g_smk_renderer=NULL; g_smk_window=NULL; g_smk_owns_window=0;
 }
 
 /* Draws one decoded Smacker frame (tightly packed 8-bit indices + 6-bit VGA DAC) into rr,
@@ -9132,6 +9195,8 @@ static void gw_smk_draw_packed(SDL_Renderer *rr,SDL_Texture **ptex,int *ptw,int 
     gw_smk_profile_end(GW_SMPH_SDL_PRESENT,phase_t);
 }
 
+static uint8_t *g_fadeclip_idx; static uint32_t g_fadeclip_w,g_fadeclip_h; static int g_fadeclip_valid;
+static SDL_Texture *g_fadeclip_tex; static int g_fadeclip_tw,g_fadeclip_th;
 static void gw_smk_present(uint32_t smack_obj,int via_buffer) {
     if(!gw_smk_open_window()) return;
     const uint32_t ws=*(uint32_t *)(guest_memory+0x00376A5Cu);
@@ -9151,6 +9216,12 @@ static void gw_smk_present(uint32_t smack_obj,int via_buffer) {
     gw_smk_profile_end(GW_SMPH_WSCREEN_COPY,copy_t);
     gw_smk_draw_packed(g_smk_renderer,&g_smk_texture,&g_smk_tex_w,&g_smk_tex_h,idx,vw,vh,
         vga_dac,g_smk_frames_presented+1u,g_smk_frames_total);
+    /* Keep the last clip frame: the original plays clips straight to the screen, so the palette fade
+       that follows a clip fades that frame, not the (title) WScreen behind it. */
+    if(vw*vh<=640u*480u) {
+        if(!g_fadeclip_idx) g_fadeclip_idx=(uint8_t *)malloc(640u*480u);
+        if(g_fadeclip_idx) { memcpy(g_fadeclip_idx,idx,(size_t)vw*vh); g_fadeclip_w=vw; g_fadeclip_h=vh; }
+    }
     free(idx);
 }
 
@@ -9312,7 +9383,14 @@ void gw_vsb16_call_hook(unsigned int site,unsigned int eax,unsigned int ebx,unsi
 }
 /* V20: keep Smacker on its verified silent BIOS-clock path. The bypass is applied only at the two original
    GetSoundDriver_ call sites in the Smacker entry paths; do not expose the unverified AIL-timer path as a runtime option. */
-unsigned int gw_smk_mss_gate(unsigned int driver) { (void)driver; return 0u; }
+unsigned int gw_smk_mss_gate(unsigned int driver) {
+    /* Experimental, opt-in (GW_SMK_AUDIO=1): let Smacker use the already-installed Miles digital driver
+       for clip sound. Default stays the verified silent BIOS-clock path. */
+    static int mode=-1;
+    if(mode<0) { const char *e=getenv("GW_SMK_AUDIO"); mode=(e && e[0]=='1')?1:0; }
+    if(mode) gw_smk_trace("TRACE smacker_audio gate driver=%08x -> 1%c",driver,10);
+    return mode?driver:0u;
+}
 unsigned int gw_smk_fine_clock(unsigned int ms_in) {
     if(g_fine_clock_mode<0) { const char *e=getenv("GW_SMK_FINE_CLOCK"); g_fine_clock_mode=(e && e[0]=='0')?0:1; }
     const int video=g_smk_active || InterlockedCompareExchange(&g_smk_mb.active,0,0);
@@ -9500,6 +9578,7 @@ void gw_smk_video_hook(uint32_t guest_va,uint32_t g_ebp) {
             gw_smk_trace("TRACE smacker_video original_input_polls=%u%c",g_smk_wait_checks,10);
             gw_smk_prof_finish("main-thread"); gw_tl_dump(); gw_smk_fine_clock_end("main");
             g_smk_active=0; gw_recomp_pit_host_hold(0); timeEndPeriod(1u);
+            g_fadeclip_valid=(g_fadeclip_idx!=NULL && g_fadeclip_w && g_fadeclip_h);
             gw_smk_close_window();
         }
         return;
@@ -9509,6 +9588,7 @@ void gw_smk_video_hook(uint32_t guest_va,uint32_t g_ebp) {
     const uint64_t freq=SDL_GetPerformanceFrequency();
     if(!g_smk_active) {
         g_smk_active=1; g_smk_frames_presented=0; g_smk_distinct_frames=0; g_smk_wait_checks=0;
+        g_fadeclip_valid=0; g_fadeclip_w=g_fadeclip_h=0u;
         g_smk_frames_total=*(uint32_t *)(guest_memory+smk+0x0Cu);
         g_smk_period_ms=*(uint32_t *)(guest_memory+smk+0x10u);
         if(g_smk_period_ms<10u || g_smk_period_ms>1000u) g_smk_period_ms=71u;
@@ -11836,6 +11916,28 @@ static int vga_palette_io(unsigned int operation,unsigned int port,unsigned int 
         vga_dac[(uint32_t)vga_dac_index*3u+vga_dac_component++]=(uint8_t)(value&0x3Fu);
         vga_dac_component_writes++;
         if (vga_dac_component==3u) { vga_dac_component=0; vga_dac_index++; }
+        /* The original shows its screen transitions as palette fades (LbPaletteFade_ steps one full
+           palette per frame). The startup/transition replay runs those steps back to back on the main
+           thread, which makes the screen jump. Present the guest screen under each completed palette
+           step, at video-frame rate, so the fade is seen as in the original. Not used by the
+           gameplay worker (g_title_pointer_memory is cleared before it starts) or during a clip. */
+        if (g_title_pointer_memory && !g_smk_active && g_ifclevel_demo_renderer &&
+            GetCurrentThreadId()==g_smk_main_thread_id &&
+            (vga_dac_component_writes%768u)==0u) {
+            const uint32_t ws=*(const uint32_t *)(g_title_pointer_memory+0x00376A5Cu);
+            if (g_fadeclip_valid) {
+                SDL_PumpEvents();
+                gw_smk_draw_packed(g_ifclevel_demo_renderer,&g_fadeclip_tex,&g_fadeclip_tw,&g_fadeclip_th,
+                                   g_fadeclip_idx,g_fadeclip_w,g_fadeclip_h,vga_dac,2u,2u);
+                SDL_Delay(14u);
+                int lit=0; for (unsigned i=0;i<768u;i++) lit|=vga_dac[i];
+                if (!lit) g_fadeclip_valid=0;   /* faded to black: later steps belong to the next screen */
+            } else if (ws && ws+640u*480u<=GUEST_LIMIT) {
+                SDL_PumpEvents();
+                (void)present_ifclevel_demo_frame(g_title_pointer_memory+ws,vga_dac,NULL);
+                SDL_Delay(14u);
+            }
+        }
         return 1;
     }
     return 0;
@@ -15263,6 +15365,80 @@ static int original_interface_ui_cycle(uint8_t *memory,const char *label,
     return 1;
 }
 
+/* Run the live original interface controller while the initial title is
+   visible.  The test harness normally synthesizes an UN JUGADOR click; a
+   normal player launch must instead let SDL input drive these same original
+   Update/Draw and pending-IFC paths.  Non-level menus (for example Options)
+   are dispatched through the original game() transition block and remain
+   interactive until the player chooses New Game/Load or closes the window. */
+static int run_interactive_title_menu(uint8_t *memory,uint32_t wscreen_guest) {
+    if(!memory || !in_guest(0x14u,wscreen_guest,640u*480u,NULL)) return 0;
+    if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS|SDL_INIT_TIMER)!=0) {
+        fprintf(stderr,"interactive title SDL_Init failed: %s\n",SDL_GetError()); return 0;
+    }
+    sdl_input_initialized=1;
+    g_ifclevel_demo_mode=1;
+    g_ifclevel_demo_manual_input=1; g_title_pointer_memory=memory;
+    g_ifclevel_demo_closed=0;
+    fprintf(stderr,"TRACE interactive_title_menu_ready current=%08x pending=%08x Turn=%u gadget_head=%08x SDL_video=%s logical=640x480\n",
+        *(uint32_t *)(memory+0x002EF7E8u),*(uint32_t *)(memory+0x002EF7ECu),
+        *(uint32_t *)(memory+0x002F1472u),*(uint32_t *)(memory+0x00379490u),
+        SDL_GetCurrentVideoDriver()?SDL_GetCurrentVideoDriver():"unknown");
+    const uint64_t frequency=SDL_GetPerformanceFrequency();
+    const uint64_t frame_period=frequency?frequency/60u:0u;
+    uint64_t frames=0u;
+    while(!g_ifclevel_demo_closed) {
+        const uint64_t frame_start=SDL_GetPerformanceCounter();
+        /* game() consumes a pending interface at the top of the next frame.
+           Keep the final IFCLevel pending for the existing original launch
+           path, but run every earlier interface transition here. */
+        uint32_t pending=*(uint32_t *)(memory+0x002EF7ECu);
+        if(pending!=0u && pending!=0x00360A11u) {
+            gw_recomp_context transition_ctx;
+            if(!invoke(gw_original_game_interface_transition_entry,&transition_ctx,
+                       0x92819u,memory,0u,0u) || transition_ctx.eip!=0x92819u) {
+                fprintf(stderr,"interactive original pending-IFC transition failed pending=%08x eip=%08x\n",
+                    pending,transition_ctx.eip); return 0;
+            }
+        }
+        (void)poll_sdl_into_lbdisplay(memory);
+        if(g_ifclevel_demo_closed) break;
+        gw_recomp_context input_ctx={0},update_ctx={0},draw_ctx={0},palette_ctx={0},timer_ctx={0};
+        if(!invoke(gw_original_setup_controller_entry,&input_ctx,0x5B170u,memory,0u,0u) ||
+           !invoke(gw_original_control_game_update_dispatch,&update_ctx,0x5AF12u,memory,0u,0u) ||
+           update_ctx.eip!=0x5AF12u || update_ctx.esp!=STACK_TOP+4u ||
+           !invoke(gw_original_draw_game_draw_dispatch,&draw_ctx,0x83559u,memory,0u,0u) ||
+           draw_ctx.eip!=0x83559u || draw_ctx.esp!=STACK_TOP+4u ||
+           !invoke(gw_original_draw_game_level_palette_fade_entry,&palette_ctx,0x83A0Cu,memory,0u,0u) ||
+           !invoke(gw_original_game_frame_timer_tick_entry,&timer_ctx,0x928AFu,memory,0u,0u)) {
+            fprintf(stderr,"interactive title original Update/Draw failed frame=%llu update=%08x draw=%08x\n",
+                (unsigned long long)frames,update_ctx.eip,draw_ctx.eip); return 0;
+        }
+        pending=*(uint32_t *)(memory+0x002EF7ECu);
+        if(memory[0x002F1464u]&1u) return 2;
+        if(pending==0x00360A11u) {
+            fprintf(stderr,"TRACE interactive title selection Turn=%u current=%08x pending=%08x quit=%u frames=%llu\n",
+                *(uint32_t *)(memory+0x002F1472u),*(uint32_t *)(memory+0x002EF7E8u),pending,
+                memory[0x002F1464u]&1u,(unsigned long long)frames);
+            return 1;
+        }
+        if(!present_ifclevel_demo_frame(memory+wscreen_guest,vga_dac,NULL)) {
+            fprintf(stderr,"interactive title frame presentation failed: %s\n",SDL_GetError()); return 0;
+        }
+        frames++;
+        if(frame_period) {
+            const uint64_t deadline=frame_start+frame_period;
+            while(SDL_GetPerformanceCounter()<deadline) {
+                if(deadline-SDL_GetPerformanceCounter()>frequency/500u) SDL_Delay(1u);
+                else YieldProcessor();
+            }
+        }
+    }
+    fprintf(stderr,"TRACE interactive title closed by SDL window after %llu frames\n",
+        (unsigned long long)frames);
+    return 2;
+}
+
 static int invoke_text_clip(uint8_t *memory,gw_recomp_context *c) {
     memset(c,0,sizeof *c); c->eip=0x6EE60u; c->cur_func=0x6EE60u;
     c->eax=0u; c->ebx=640u; c->ecx=480u; c->edx=0u;
@@ -15548,7 +15724,9 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
         }
         if(pacing!=2 && target_tps) {
             accumulator+=dt*(double)target_tps;
-            if(accumulator>1.0) accumulator=1.0;
+            /* Keep up to three turns of backlog: a slow tick (construction, pathing) is repaid by the
+               following ticks instead of being dropped, so game time keeps following wall time. */
+            if(accumulator>3.0) accumulator=3.0;
             if(accumulator<1.0) {
                 const uint64_t idle_start=SDL_GetPerformanceCounter();
                 SDL_Delay(1);
@@ -15948,6 +16126,7 @@ static int run_interactive_game_loop_serial_legacy(uint8_t *memory,uint32_t wscr
 
 static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
                                      uint32_t start_turn,gw_recomp_context *resume_context) {
+    g_title_pointer_memory=NULL; /* gameplay uses the published snapshot, never racy direct reads */
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS|SDL_INIT_TIMER)!=0) {
         fprintf(stderr,"interactive SDL_Init failed: %s\n",SDL_GetError()); return 0;
     }
@@ -16466,6 +16645,9 @@ static void play_mode_sanitize_environment(void) {
 int main(int argc,char **argv) {
     gw_recomp_dispatch_hits_reset();
     for(int ai=4;ai<argc;ai++) if(!strcmp(argv[ai],"--play")) g_cli_play_mode=1;
+    /* The startup replay writes its evidence files under ./evidence and aborts (exit 112) when
+       that directory is missing; a player launch from any working directory must not depend on it. */
+    if(g_cli_play_mode) (void)CreateDirectoryA("evidence",NULL);
     if(g_cli_play_mode) play_mode_sanitize_environment();
     for(int ai=4;ai<argc;ai++) {
         if(!strcmp(argv[ai],"--play")) continue;
@@ -17486,6 +17668,27 @@ int main(int argc,char **argv) {
         gw_dos_descriptor_clear(&vfs.dos); gw_interrupt_set_callback(NULL,NULL);
         free(vfs.manifest); free(memory); return 0;
     }
+    /* Original main_ 0x93F30 order: setup_game 0x94AC0 -> PlayIntro 0x92930
+       (LOGO, BIOINTRO, GW) -> game() 0x92710, whose prologue runs IFCTitle::PlugIn
+       once. The harness's own TITLE PlugIn must therefore run after the intros,
+       not before them. Running it first and then re-entering game() applied the
+       title scheduler twice (see the 0x000A8AAB fault analysis). */
+    if(gameplay_continue) {
+        gw_recomp_context intro_context={0};
+        const unsigned intro_opens_before=vfs.opens;
+        const int intro_ok=invoke(recomp_gw_partial_0x00092930,&intro_context,0x92930u,memory,0u,0u);
+        if(!intro_ok || intro_context.memory_fault.pending || intro_context.segment_fault_pending ||
+           intro_context.interrupt_trap_pending || intro_context.port_io_trap.pending) {
+            fprintf(stderr,"original PlayIntro 0x92930 failed ok=%d eip=%08x mem=%u/%08x seg=%u:%04x:%08x int=%u:%02x:%08x\n",
+                intro_ok,intro_context.eip,intro_context.memory_fault.pending,intro_context.memory_fault.linear,
+                intro_context.segment_fault_pending,intro_context.segment_fault_selector,
+                intro_context.segment_fault_instruction_va,intro_context.interrupt_trap_pending,
+                intro_context.interrupt_vector,intro_context.interrupt_instruction_va);
+            free(memory); return 106;
+        }
+        printf("PASS original PlayIntro 0x92930 after setup_game 0x94AC0: intro files opened=%u last='%s' gate=%02x\n",
+            vfs.opens-intro_opens_before,vfs.last_path,memory[intro_gate_guest]);
+    }
     g_icall_trace_idx=g_icall_count=0;
     if(!invoke(gw_partial_0x00070D10,&c,0x70D10u,memory,0x0035EAB8u,0) ||
        c.esp!=STACK_TOP+4u ||
@@ -18464,17 +18667,74 @@ int main(int argc,char **argv) {
             *(uint32_t *)(memory+0x002EF7E8u),memory[intro_gate_guest]);
     }
 
+        /* Normal interactive launch: keep the original TITLE visible and
+           let SDL input drive its original controller. The test harness's
+           default path below deliberately clicks UN JUGADOR for gameplay. */
+        const char *start_at_title_env=getenv("GW_INTERACTIVE_START_AT_TITLE");
+        int manual_title_selection=0;
+        if(g_interactive_demo_mode && start_at_title_env &&
+           strcmp(start_at_title_env,"1")==0) {
+            const uint32_t title_current=*(uint32_t *)(memory+0x002EF7E8u);
+            const uint32_t title_pending=*(uint32_t *)(memory+0x002EF7ECu);
+            const uint32_t title_turn=*(uint32_t *)(memory+0x002F1472u);
+            const uint32_t title_wscreen=*(uint32_t *)(memory+0x00376A5Cu);
+            if(title_current!=0x0035EAD8u || title_pending!=0u || title_turn!=0u ||
+               !in_guest(0x14u,title_wscreen,640u*480u,NULL)) {
+                fprintf(stderr,"TRACE interactive_title_precondition_failed current=%08x pending=%08x Turn=%u WScreen=%08x\n",
+                    title_current,title_pending,title_turn,title_wscreen);
+                free(memory); return 104;
+            }
+            const int title_result=run_interactive_title_menu(memory,title_wscreen);
+            if(title_result==2) {
+                if(g_ifclevel_demo_rgba) free(g_ifclevel_demo_rgba);
+                if(g_ifclevel_demo_texture) SDL_DestroyTexture(g_ifclevel_demo_texture);
+                if(g_ifclevel_demo_renderer) SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+                if(g_ifclevel_demo_window) SDL_DestroyWindow(g_ifclevel_demo_window);
+                gw_cdda_shutdown(); SDL_Quit();
+                gw_dos_descriptor_clear(&vfs.dos);
+                gw_interrupt_set_callback(NULL,NULL);
+                free(vfs.manifest); free(memory); return 0;
+            }
+            const uint32_t selected_current=*(uint32_t *)(memory+0x002EF7E8u);
+            const uint32_t selected_pending=*(uint32_t *)(memory+0x002EF7ECu);
+            const uint32_t selected_vptr=selected_current+7u<GUEST_LIMIT?
+                *(uint32_t *)(memory+selected_current+7u):0u;
+            if(title_result!=1 ||
+               (selected_current!=0x0035EAD8u &&
+                !(selected_current==0x00360A41u && selected_vptr==0x002EC020u)) ||
+               selected_pending!=0x00360A11u ||
+               !validate_dos_mcb_chain(memory,vfs.dos.dos_segment_end)) {
+                fprintf(stderr,"TRACE interactive_title_selection_failed result=%d current=%08x pending=%08x Turn=%u MCB_chain_valid=%d\n",
+                    title_result,*(uint32_t *)(memory+0x002EF7E8u),
+                    *(uint32_t *)(memory+0x002EF7ECu),*(uint32_t *)(memory+0x002F1472u),
+                    validate_dos_mcb_chain(memory,vfs.dos.dos_segment_end));
+                if(g_ifclevel_demo_rgba) free(g_ifclevel_demo_rgba);
+                if(g_ifclevel_demo_texture) SDL_DestroyTexture(g_ifclevel_demo_texture);
+                if(g_ifclevel_demo_renderer) SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+                if(g_ifclevel_demo_window) SDL_DestroyWindow(g_ifclevel_demo_window);
+                gw_cdda_shutdown(); SDL_Quit();
+                gw_dos_descriptor_clear(&vfs.dos);
+                gw_interrupt_set_callback(NULL,NULL);
+                free(vfs.manifest); free(memory); return 105;
+            }
+            manual_title_selection=1;
+        }
+
         /* Continue from the original live TITLE gadget list. Click the
            observed id=0 control (“UN JUGADOR”) through the same device and
            virtual-method path; stop at its natural pending interface. */
-        const uint32_t title_gads=*(uint32_t *)(memory+0x00379490u);
-        const uint32_t new_game=title_gads;
-        if(!title_gads || new_game+40u>GUEST_LIMIT || *(int16_t *)(memory+new_game+12u)!=0) {
-            fprintf(stderr,"returned TITLE did not publish the original id=0 gadget\n"); free(memory); return 100;
+        uint32_t title_gads=0u,new_game=0u;
+        int new_x=0,new_y=0,new_hx=0,new_hy=0;
+        if(!manual_title_selection) {
+            title_gads=*(uint32_t *)(memory+0x00379490u);
+            new_game=title_gads;
+            if(!title_gads || new_game+40u>GUEST_LIMIT || *(int16_t *)(memory+new_game+12u)!=0) {
+                fprintf(stderr,"returned TITLE did not publish the original id=0 gadget\n"); free(memory); return 100;
+            }
+            new_x=*(int16_t *)(memory+new_game+4u)+*(int16_t *)(memory+new_game+8u)/2;
+            new_y=*(int16_t *)(memory+new_game+6u)+*(int16_t *)(memory+new_game+10u)/2;
+            new_hx=new_x*2; new_hy=new_y*2;
         }
-        const int new_x=*(int16_t *)(memory+new_game+4u)+*(int16_t *)(memory+new_game+8u)/2;
-        const int new_y=*(int16_t *)(memory+new_game+6u)+*(int16_t *)(memory+new_game+10u)/2;
-        const int new_hx=new_x*2,new_hy=new_y*2;
         const char *creature_click_test=getenv("GW_INTERACTIVE_CREATURE_CLICK_TEST");
         if(creature_click_test && strcmp(creature_click_test,"1")==0) {
             if(!sdl_input_initialized && SDL_Init(SDL_INIT_VIDEO)!=0) {
@@ -18508,30 +18768,33 @@ int main(int argc,char **argv) {
             free(memory); return 101;
         }
         sdl_input_initialized=1;
-        printf("TRACE original UN JUGADOR gadget guest=%08x id=%d bounds=%d,%d..%d,%d center=%d,%d\n",
-            new_game,*(int16_t *)(memory+new_game+12u),
-            *(int16_t *)(memory+new_game+4u),*(int16_t *)(memory+new_game+6u),
-            *(int16_t *)(memory+new_game+4u)+*(int16_t *)(memory+new_game+8u),
-            *(int16_t *)(memory+new_game+6u)+*(int16_t *)(memory+new_game+10u),new_x,new_y);
-        gw_recomp_trace_set_enabled(1);
-        gw_recomp_trace_set_boundary_stop(1);
-        gw_recomp_trace_watch_branch(0x00070EEDu);
-        if(!push_sdl_motion(new_hx,new_hy) || poll_sdl_into_lbdisplay(memory)!=1u ||
-           !original_interface_ui_cycle(memory,"title-new-game-hover",1u,0u) ||
-           !push_sdl_button(SDL_MOUSEBUTTONDOWN,new_hx,new_hy) || poll_sdl_into_lbdisplay(memory)!=1u ||
-           !original_interface_ui_cycle(memory,"title-new-game-down",1u,0u) ||
-           !push_sdl_button(SDL_MOUSEBUTTONUP,new_hx,new_hy) || poll_sdl_into_lbdisplay(memory)!=1u ||
-           !original_interface_ui_cycle(memory,"title-new-game-up",1u,0u)) {
-            gw_recomp_trace_watch_branch(0u);
-            if(gw_recomp_trace_boundary_hit()) {
-                printf("PASS original New Game input reached the authentic exit_ callsite; harness stopped before executing exit_/__FiniRtns, link_callsite=00070f05 intro_gate=00117662 value=%02x main/filescr had been loaded through original VFS\n",
-                    memory[intro_gate_guest]);
-                gw_dos_descriptor_clear(&vfs.dos); gw_interrupt_set_callback(NULL,NULL);
-                free(vfs.manifest); free(memory); return 0;
+        if(!manual_title_selection)
+            printf("TRACE original UN JUGADOR gadget guest=%08x id=%d bounds=%d,%d..%d,%d center=%d,%d\n",
+                new_game,*(int16_t *)(memory+new_game+12u),
+                *(int16_t *)(memory+new_game+4u),*(int16_t *)(memory+new_game+6u),
+                *(int16_t *)(memory+new_game+4u)+*(int16_t *)(memory+new_game+8u),
+                *(int16_t *)(memory+new_game+6u)+*(int16_t *)(memory+new_game+10u),new_x,new_y);
+        if(!manual_title_selection) {
+            gw_recomp_trace_set_enabled(1);
+            gw_recomp_trace_set_boundary_stop(1);
+            gw_recomp_trace_watch_branch(0x00070EEDu);
+            if(!push_sdl_motion(new_hx,new_hy) || poll_sdl_into_lbdisplay(memory)!=1u ||
+               !original_interface_ui_cycle(memory,"title-new-game-hover",1u,0u) ||
+               !push_sdl_button(SDL_MOUSEBUTTONDOWN,new_hx,new_hy) || poll_sdl_into_lbdisplay(memory)!=1u ||
+               !original_interface_ui_cycle(memory,"title-new-game-down",1u,0u) ||
+               !push_sdl_button(SDL_MOUSEBUTTONUP,new_hx,new_hy) || poll_sdl_into_lbdisplay(memory)!=1u ||
+               !original_interface_ui_cycle(memory,"title-new-game-up",1u,0u)) {
+                gw_recomp_trace_watch_branch(0u);
+                if(gw_recomp_trace_boundary_hit()) {
+                    printf("PASS original New Game input reached the authentic exit_ callsite; harness stopped before executing exit_/__FiniRtns, link_callsite=00070f05 intro_gate=00117662 value=%02x main/filescr had been loaded through original VFS\n",
+                        memory[intro_gate_guest]);
+                    gw_dos_descriptor_clear(&vfs.dos); gw_interrupt_set_callback(NULL,NULL);
+                    free(vfs.manifest); free(memory); return 0;
+                }
+                fprintf(stderr,"original UN JUGADOR input sequence failed\n"); free(memory); return 101;
             }
-            fprintf(stderr,"original UN JUGADOR input sequence failed\n"); free(memory); return 101;
+            gw_recomp_trace_watch_branch(0u);
         }
-        gw_recomp_trace_watch_branch(0u);
         /* Preserve a targeted branch watch at 0x70EED through all three SDL
            input cycles; the call ring then confirms 0x70F05/exit_ was skipped. */
         gw_recomp_trace_checkpoint(0x00070F0Fu,0x00070EB0u);
@@ -18549,7 +18812,11 @@ int main(int argc,char **argv) {
         const uint32_t level_current=*(uint32_t *)(memory+0x002EF7E8u);
         const uint32_t level_vptr=next_ifc+7u<GUEST_LIMIT?*(uint32_t *)(memory+next_ifc+7u):0u;
         const uint32_t level_complete=0x003609F1u;
-        if(next_ifc!=0x00360A11u || level_current!=0x0035EAD8u ||
+        const uint32_t current_vptr=level_current+7u<GUEST_LIMIT?
+            *(uint32_t *)(memory+level_current+7u):0u;
+        const int current_ok=level_current==0x0035EAD8u ||
+            (manual_title_selection && level_current==0x00360A41u && current_vptr==0x002EC020u);
+        if(next_ifc!=0x00360A11u || !current_ok ||
            level_vptr!=0x002EBAD4u || next_ifc!=level_complete+0x20u ||
            level_vptr+32u>=GUEST_LIMIT) {
             fprintf(stderr,"New Game pending IFCLevel object/subobject mismatch current=%08x pending=%08x complete=%08x vptr=%08x\n",
@@ -19254,7 +19521,11 @@ int main(int argc,char **argv) {
                 snprintf(tick_names[tick],sizeof tick_names[tick],"frame-%03u",tick);
             }
             unsigned events=poll_sdl_into_lbdisplay(memory);
-            if(!continuation_ok || events!=(unsigned)(event_code!=0)) { continuation_ok=0; break; }
+            /* The automated proof injects exactly one synthetic event per tick and expects that count back.
+               In a live session the player's own clicks, keys and mouse motion (including the input that
+               skipped the preceding Smacker clip) are queued as well; they reach the original game through
+               the same lbDisplay path and must not abort the session. */
+            if(!continuation_ok || (!g_interactive_demo_mode && events!=(unsigned)(event_code!=0))) { continuation_ok=0; break; }
 
             const uint8_t phase_before=memory[level_this+0x9A9u];
             const uint16_t selected_before=*(uint16_t *)(memory+level_this+0x28u);
@@ -19865,16 +20136,24 @@ int main(int argc,char **argv) {
                 g_native_game_loop_bound=1;
                 const char *host_bound_env=getenv("GWRECOMP_IFCLEVEL_HOST_BOUND_TURN");
                 char *host_bound_end=NULL;
+                /* A manual player session must not inherit the automated
+                   420-turn bootstrap stop: the user is expected to continue
+                   playing after selecting New Game or Load. Automated runs
+                   retain their bounded bootstrap unless they supply an
+                   explicit host bound. */
+                const unsigned long interactive_title_bound=
+                    (g_interactive_demo_mode && manual_title_selection)?
+                    0ul:420ul;
                 unsigned long host_bound_value=g_snapshot_save_path?g_snapshot_turn:
                     (host_bound_env&&host_bound_env[0]?
                     strtoul(host_bound_env,&host_bound_end,10):
-                    (g_interactive_demo_mode?420ul:0ul));
+                    (g_interactive_demo_mode?interactive_title_bound:0ul));
                 if(g_snapshot_save_path) host_bound_end=(char *)"";
                 if(g_interactive_demo_mode && (!host_bound_env || !host_bound_env[0]))
                     host_bound_end=(char *)"";
                 /* Playable demo from a restored checkpoint: run exactly one
                    original turn as bootstrap, then hand control to the user. */
-                if(g_interactive_demo_mode && snapshot_loaded && !g_snapshot_save_path &&
+                if(g_interactive_demo_mode && (snapshot_loaded || manual_title_selection) && !g_snapshot_save_path &&
                    (!host_bound_env || !host_bound_env[0]))
                     host_bound_value=(unsigned long)turn_before+1ul;
                 g_native_game_loop_host_stop_enabled=host_bound_value>turn_before &&
@@ -20314,9 +20593,15 @@ int main(int argc,char **argv) {
                         spec0->projected_count && spec1->projected_count &&
                         spec0->screen_x>=0 && spec0->screen_x<640 && spec0->screen_y>=0 && spec0->screen_y<480 &&
                         spec1->screen_x>=0 && spec1->screen_x<640 && spec1->screen_y>=0 && spec1->screen_y<480;
-                    const uint32_t expected_ready_turn=snapshot_loaded?turn_before+1u:420u;
-                    const int state_ready=ready_turn==expected_ready_turn && ready_current==0x0035FE9Au &&
-                        ready_pending==0u && (snapshot_loaded || both_specialists_visible) &&
+                    const uint32_t expected_ready_turn=snapshot_loaded?turn_before+1u:
+                        (manual_title_selection?g_native_game_loop_expected_turn:420u);
+                    /* A player-selected New Game has no probe-specific expectations (Exceland creature
+                       visibility, an exact bootstrap turn): the handoff only needs a live game()
+                       interface with nothing pending. */
+                    const int fresh_manual_start=manual_title_selection && !snapshot_loaded;
+                    const int state_ready=(fresh_manual_start || ready_turn==expected_ready_turn) &&
+                        ready_current==0x0035FE9Au &&
+                        ready_pending==0u && (snapshot_loaded || fresh_manual_start || both_specialists_visible) &&
                         in_guest(0x14u,level_wscreen,640u*480u,NULL) &&
                         validate_dos_mcb_chain(memory,vfs.dos.dos_segment_end);
                     fprintf(interaction,"TRACE interactive_bootstrap Turn=%u currentIFC=%08x pendingIFC=%08x spec0_screen=%d,%d spec1_screen=%d,%d both_visible=%d frontier=0 MCB_chain_valid=%d ready=%d\n",
