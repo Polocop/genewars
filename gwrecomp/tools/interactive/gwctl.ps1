@@ -38,8 +38,18 @@ function Focus-Window($h) {
     }
     return ([W]::GetForegroundWindow() -eq $h)
 }
+Add-Type 'using System;using System.Runtime.InteropServices;public class WP{[DllImport("user32.dll")]public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int w,int ht,uint f);[DllImport("user32.dll")]public static extern int GetSystemMetrics(int i);}' -ErrorAction SilentlyContinue
+# With some monitor set-ups the game window comes up with a client area larger than the screen: part of the 640x480 picture is then off-screen
+# and clicks land elsewhere. Shrink it (4:3, inside the primary work area) before any coordinate is computed.
+function Fit-Window($h) {
+    $sw = [WP]::GetSystemMetrics(0); $sh = [WP]::GetSystemMetrics(1); $r = New-Object W+RECT; [void][W]::GetClientRect($h, [ref]$r)
+    if ($r.B -gt $sh - 80 -or $r.R -gt $sw) {
+        $ht = [Math]::Min(780, $sh - 90); $w = [int]($ht * 4 / 3) + 16
+        [void][WP]::SetWindowPos($h, [IntPtr]::Zero, 20, 5, $w, $ht, 0x0044); Start-Sleep -Milliseconds 400 }
+}
 function Get-Client($h) {
     if (-not [W]::IsWindow($h)) { $h = Find-GwWindow }
+    Fit-Window $h
     $r = New-Object W+RECT; [void][W]::GetClientRect($h, [ref]$r)
     $pt = New-Object W+POINT; [void][W]::ClientToScreen($h, [ref]$pt)
     return @{ X = $pt.X; Y = $pt.Y; W = $r.R; H = $r.B }

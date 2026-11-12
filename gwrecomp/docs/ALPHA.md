@@ -46,9 +46,10 @@ replay-harness result, and no person other than the tool driver played these ses
 | CD music | works when `GENEWARS_CUE` is set | log + audio level |
 | Breed a creature (mission 2: extractor, distributor and genetic pod built by hand, then the pod's breed button) | works: goop drops by the creature's cost (75), a mule appears next to the pod | manual with the scripted tools |
 | Select a creature, order it to move | works: the original picker commits it, the click selects it, the ground click emits an action packet and the creature walks there (several runs, three different creatures) | manual with the scripted tools + read-only trace |
-| Save and load with creatures present | the saved game loads and shows the creatures; whether every creature returns to its exact saved position was **not measured** | manual |
-| Genetic engineer (Jon) used on a creature | accepted: an action packet is emitted with Jon selected, he walks to the creature and an icon appears over it. What the action *does* to research was **not verified** | manual with the scripted tools |
-| Research (progress, cost, result) | **not verified**: the pod panel shows a percentage that rose from 43% to 50% while creatures were bred and Jon was used, but what it measures was not established | |
+| Save and load with a creature present | works: a creature's record in guest memory (position-like pairs, path waypoints) is identical at save and after load, and different after it was ordered elsewhere in between (one run, one creature, see Research and save/load below) | manual with the scripted tools + guest-memory dumps |
+| Genetic engineer (Jon) studies a creature | works: with the creature selected first, then Jon, then the creature as his target, the pod percentage went from 45% to 50% (the pod's cap) within about 10 s and goop did not change (986 before and after). Seen twice, in two sessions | manual with the scripted tools + frames |
+| Research (progress, cost, result) | partly verified, see "Research" below: the percentage is the species' research level (mule), starts at 43%, +1% per bred creature, capped at 50% by the genetic pod; Jon's study takes it to the cap at no goop cost. Not verified: what a higher level changes, hybrids, the pod's second button, the exact memory cell | manual with the scripted tools + frames |
+| `tools/interactive/creatures.ps1` (breed, select, ground order, Jon's order) | passes 4/4 against a live mission 2 (two runs, after fixes to the script) | scripted |
 | Long sessions | 17 minutes idle in a mission: memory (114 MB) and handles constant, frames keep changing. Not tested with play or for hours | scripted sampler (`tools/interactive/soak.ps1`) |
 | Steady background loop during missions | present (period 0.85 s, 1-6 kHz, about half of full scale); not yet classified as original ambience or a mixer defect | PCM analysis (`pcm_stats.py`) |
 | Output clipping in sound bursts | observed (peaks at full scale); cause unknown | PCM analysis |
@@ -66,7 +67,34 @@ change was needed for creatures. Because the picker recomputes its candidate eve
 is under the cursor; creatures wander, so a click made a second after hovering can miss (this looked like "creatures do not
 accept orders" in several test runs and was the test timing, not the game). The read-only trace (`GW_ORDER_TRACE=<file>`)
 records selected unit, picker candidate, `MapDisplay` fields and the 11-byte action packet. `tools/interactive/creatures.ps1`
-automates the creature steps; it was written after the manual runs and has **not** been run end-to-end as a script.
+automates the creature steps and has now been run end-to-end against a live mission 2 (4/4 steps, twice; the first runs exposed
+script problems, not game problems: it ignored the pod when a unit was selected, took specialists' red clothes for the creature and
+clicked stale positions, all fixed).
+
+## Research (genetic pod, mission 2)
+
+What the original game says (its own text, `DATA/TEXT.DAT`, Spanish build): the genetic engineer "studies new creatures, making their
+future production possible"; the genetic pod "allows creature research levels of up to 50%" (the genetic machine up to 75%, the lab
+full research); pods cannot breed hybrids until upgraded. What was measured in the running game, in three sessions:
+
+- The number under the creature picture in the pod panel is the research level of that species. It starts at 43% for the mule.
+- Each creature bred raises it by 1% (43, 44, 45, 46, 47; seven mules, goop 1136 to 611, gave exactly 50%). Breeding costs 75 goop each.
+- It stops at 50% with the pod: further breeds left it at 50%.
+- Jon (genetic engineer): selecting the creature first, then Jon, then clicking the creature, took the level from 45% to 50% within
+  about 10 s, goop unchanged. Two earlier orders to a creature without selecting it first changed nothing visible in 3 minutes, so
+  the order of clicks seems to matter; that was not investigated further.
+- Saved games contain the level: a save made at 44% loaded back as 44% after the level had reached 50%.
+- Guest memory (dumps with `GW_MEM_DUMP`): the percentage is not stored as a plain integer (no cell of 43/44/50 or scaled forms was
+  found); at Jon's study several bytes of the creature's record move to 200. The cell behind the displayed percentage was **not** found.
+- The pod panel's second round button (green) did nothing visible and emitted no packet; the original text says hybrids need an
+  upgraded pod. Not tested: upgrading, hybrids, what a higher level changes (displayed stats stayed 7/4/9/2 while the level moved).
+
+## Save and load with a creature
+
+One run, one bred creature in a fresh mission 2: it was ordered to a spot, the game saved, the creature was ordered elsewhere, the
+game loaded. Words of its record in guest memory (position-like pairs and the path waypoints) were equal at save and after load
+(also 5 s later) and different in between. Screen-position measurements of the creature were too noisy to use (it wanders and
+the diff picks up other red sprites).
 
 ## Known issues found while testing
 
@@ -76,6 +104,10 @@ automates the creature steps; it was written after the manual runs and has **not
 - A click right after a screen change can be lost if it arrives before the new screen is running; a person clicking when the
   screen is visible does not hit it. (Several apparent "lost clicks" during this work were the test tool talking to a stale
   window or to a window hidden behind another application; the game recreates its window between the intro and the title.)
+- On a machine with a high-DPI second monitor the game window came up larger than the screen and clicks landed off-screen (the
+  intro then seemed to loop). `gwctl.ps1` now shrinks such a window before computing coordinates (`Fit-Window`). In mission 2 the
+  creatures were not drawn while specialists stood on the pod's exit; the camera scrolls only with the cursor at the very edge and
+  is fast. A creature may also disappear from view quickly: it wanders.
 - The window cannot be captured by desktop screen capture on the test machine while it is covered; the tools read frames from
   the game instead.
 
