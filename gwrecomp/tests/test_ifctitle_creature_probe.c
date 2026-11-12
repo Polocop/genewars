@@ -8656,6 +8656,10 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 char out[900]; snprintf(out,sizeof out,"%s/%s.bmp",dump_dir,stem);
                 SDL_Surface *ds=SDL_CreateRGBSurfaceWithFormatFrom((void *)g_ifclevel_demo_rgba,640,480,32,640*(int)sizeof(uint32_t),SDL_PIXELFORMAT_ARGB8888);
                 if(ds) { SDL_SaveBMP(ds,out); SDL_FreeSurface(ds); }
+                if(getenv("GW_MEM_DUMP") && guest_memory) { /* read-only copy of the first 4 MiB of guest memory, for offline diffing */
+                    snprintf(out,sizeof out,"%s/%s.mem",dump_dir,stem);
+                    FILE *mf=fopen(out,"wb"); if(mf) { fwrite(guest_memory,1,0x400000u,mf); fclose(mf); }
+                }
             }
         }
     }
