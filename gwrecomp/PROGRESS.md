@@ -46,7 +46,7 @@ ported onto the public driver sources and checked on a clean-clone Level B build
 real window: title menu, new game, mission 1, select and move a specialist, ESC menu, save, load, sound. 12 of 12 scenario steps
 pass (`tools/interactive/playtest.ps1`). Building a structure and loading a save through the debrief and galaxy map into
 mission 2 were played with the same tools on an earlier build of the same code. `scripts/play.ps1` now starts the real-time
-play mode (CD music when `GENEWARS_CUE` is set). Not tested: creature orders, research, long play. Details, evidence kinds and
+play mode (CD music when `GENEWARS_CUE` is set). Creature orders (breed, select, move) and the genetic engineer's order on a creature were exercised in mission 2 (2026-11-12, see ALPHA.md and Issue #8); research progress and long play are not verified. Details, evidence kinds and
 known issues: [docs/ALPHA.md](docs/ALPHA.md). The start still uses the locally generated title snapshot (provisional).
 
 ## Reproducible build (verified 2026-11-11)

@@ -44,14 +44,29 @@ replay-harness result, and no person other than the tool driver played these ses
 | Load a save from the end of mission 1 -> debrief -> galaxy map -> mission 2 briefing -> mission 2 | works (earlier build of the same code) | manual with the scripted tools |
 | Sound effects | reach the audio device (7 MB of PCM in the scenario) | scripted + PCM capture |
 | CD music | works when `GENEWARS_CUE` is set | log + audio level |
-| Creature selection and orders | **not tested** | |
-| Research | **not tested** | |
+| Breed a creature (mission 2: extractor, distributor and genetic pod built by hand, then the pod's breed button) | works: goop drops by the creature's cost (75), a mule appears next to the pod | manual with the scripted tools |
+| Select a creature, order it to move | works: the original picker commits it, the click selects it, the ground click emits an action packet and the creature walks there (several runs, three different creatures) | manual with the scripted tools + read-only trace |
+| Save and load with creatures present | the saved game loads and shows the creatures; whether every creature returns to its exact saved position was **not measured** | manual |
+| Genetic engineer (Jon) used on a creature | accepted: an action packet is emitted with Jon selected, he walks to the creature and an icon appears over it. What the action *does* to research was **not verified** | manual with the scripted tools |
+| Research (progress, cost, result) | **not verified**: the pod panel shows a percentage that rose from 43% to 50% while creatures were bred and Jon was used, but what it measures was not established | |
 | Long sessions | 17 minutes idle in a mission: memory (114 MB) and handles constant, frames keep changing. Not tested with play or for hours | scripted sampler (`tools/interactive/soak.ps1`) |
 | Steady background loop during missions | present (period 0.85 s, 1-6 kHz, about half of full scale); not yet classified as original ambience or a mixer defect | PCM analysis (`pcm_stats.py`) |
 | Output clipping in sound bursts | observed (peaks at full scale); cause unknown | PCM analysis |
 
 The scenario is `tools/interactive/playtest.ps1` (12 steps: window, title, new game, select, move, ESC menu, save, OK, load,
 stability, sound). On the clean-clone Level B build of this commit all 12 pass.
+
+## Creature orders (Issue #8)
+
+In the earlier recorded run a creature was selected but never accepted an order, because the picker rejected it at one test of
+`MapDisplay+0x1C` bit 0. In the Alpha, played from the start, that bit is set for most frames of a running mission (about 79% of
+2.3e5 sampled frames in one session), the picker commits the creature to `MapDisplay+0x18` on hover, and orders are emitted. So
+the gate is a legitimate game state that the old turn-725 snapshot did not have, not a defect of the recompilation; no code
+change was needed for creatures. Because the picker recomputes its candidate every game tick, a click must land while the creature
+is under the cursor; creatures wander, so a click made a second after hovering can miss (this looked like "creatures do not
+accept orders" in several test runs and was the test timing, not the game). The read-only trace (`GW_ORDER_TRACE=<file>`)
+records selected unit, picker candidate, `MapDisplay` fields and the 11-byte action packet. `tools/interactive/creatures.ps1`
+automates the creature steps; it was written after the manual runs and has **not** been run end-to-end as a script.
 
 ## Known issues found while testing
 
