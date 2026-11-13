@@ -8,7 +8,28 @@ python tools/static_closure_inventory.py --exe <genewars-1_1.exe> --map <genewar
     --out docs/STATIC_CLOSURE_REMAINING.tsv
 ```
 
-## Result (2026-11-13), closure report of the Level B build of commit c84e57b (later commits change no lifted code)
+## Batch 1 (2026-11-13, commit 73c725d): groups A and U lifted
+
+The 44 Group A and 6 unclassified entries below are now extra roots of the lifter (`tests/test_ifctitle_creature_probe.py`,
+`GWRECOMP_STATIC_BATCH1=0` leaves them out). The Level B build compiles and links cleanly. Inventory of that build:
+
+| | functions |
+|---|---:|
+| function entries found | 2803 |
+| inside the lifted ranges | 2369 (+75: the 50 roots and 25 Group C entries they reach) |
+| **not lifted** | **434** |
+| Group A | 0 |
+| Group B | 67 |
+| Group C | 367 |
+| unclassified | 0 |
+
+One Group C entry, `LbNetworkSetupIPXAddress_` (0xABC94, IPX network set-up), is now called directly by lifted code. It is
+left unlifted on purpose: the host has no IPX network. Nothing calls the batch-1 functions at run time yet, so this batch
+only checks that they translate and compile. They were not run, and their register contracts were not checked beyond what the lifter itself enforces.
+
+`STATIC_CLOSURE_REMAINING.tsv` now lists the 434 entries of this build. The table below is the earlier state.
+
+## Result before batch 1 (2026-11-13), closure report of the Level B build of commit c84e57b
 
 | | functions |
 |---|---:|

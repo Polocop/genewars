@@ -1,56 +1,15 @@
 va	size_to_next_entry	group	name	name_basis	group_basis	references
-0x00010003	13	A	?	none	ref:table-or-lifted-caller(unnamed)	code-pointer x1
-0x00013530	160	A	W?InitArray$:UnknArr01$n()v	nearest-preceding	inherit:name:cpp-method-unmatched	table x1
-0x00013800	16	A	W?InitArray$:UnknArr01$n()v	nearest-preceding	inherit:name:cpp-method-unmatched	table x1
-0x000138D0	16	A	W?InitArray$:UnknArr01$n()v	nearest-preceding	inherit:name:cpp-method-unmatched	table x1
-0x00013E10	160	A	W?InitArray$:Drone$n()v	nearest-preceding	inherit:name:bio-class	table x1
-0x00013EB0	800	A	W?InitArray$:Drone$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x1
-0x000141D0	208	A	W?InitArray$:Drone$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x9
-0x000142A0	1808	A	W?InitArray$:Drone$n()v	nearest-preceding	inherit:name:bio-class	table x1
-0x00027D70	64	A	W?Create$:InfoRequester$n(pnapnapnal$InfoRequesterStyle$$)v	nearest-preceding	inherit:name:bio-class	code-pointer x1; called-from-unlifted x1
 0x00034470	1632	C	nullsub_12	exact	name:crt/stub	none
-0x00035920	64	A	W?KillAllSounds$:SoundManager$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x1
-0x0003CCD0	176	A	W?InitArray$:Building$n()v	nearest-preceding	inherit:name:bio-class	table x1
-0x00043960	32	A	W?DoShepherd$:PlSpec$n()v	exact	name:bio-class	none
-0x00055600	80	A	W?InitArray$:Creature$n()v	nearest-preceding	inherit:name:bio-class	code-pointer x1
-0x00061640	208	A	W?SetupColorLookups$:IFCBase$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x2
-0x00061B60	1824	A	W?InterpolateAlts$:TopoGrid$n(ulululululululullpn[9]ucc)v	exact	name:bio-class	called-from-unlifted x1
-0x00062280	1728	A	W?Fractalize$:TopoGrid$n(ucl)v	exact	name:bio-class	called-from-unlifted x1
-0x00062A10	336	A	W?Create$:TopoGrid$n($XY$$ucll)v	exact	name:bio-class	called-from-unlifted x1
-0x00063A40	96	A	W?Create$:TopoMorpher$n($XY$$ucll)pn$TopoGrid$$	exact	name:bio-class	none
-0x00064880	304	A	W?Update$:TopoMorpher$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x1
-0x00066FD0	96	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
-0x00067720	224	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
-0x00067800	240	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
-0x00068250	144	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
-0x00068CB0	16	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
-0x00069D10	160	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
-0x00069DB0	32	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x8
-0x00069DF0	32	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x8
-0x0006A000	48	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
 0x0006C490	752	C	nullsub_11	nearest-preceding	inherit:name:crt/stub	table x1
 0x0006EC20	80	C	nullsub_11	nearest-preceding	inherit:name:crt/stub	table x1
 0x0006ED90	16	C	nullsub_11	nearest-preceding	inherit:name:crt/stub	table x4
 0x0006EDD0	16	C	nullsub_13	nearest-preceding	inherit:name:crt/stub	table x4
 0x00072760	48	C	nullsub_16	nearest-preceding	inherit:name:crt/stub	code-pointer x3
 0x00072790	48	C	nullsub_16	nearest-preceding	inherit:name:crt/stub	code-pointer x1
-0x00072880	224	C	nullsub_16	nearest-preceding	inherit:name:crt/stub	called-from-unlifted x1
-0x00072960	720	A	W?PlugIn$:IFCCustom$n()v	exact	name:bio-class	table x1
-0x00072DB0	3120	A	W?PlugIn$:IFCCustom$n()v	nearest-preceding	inherit:name:bio-class	table x1
-0x000739E0	2912	A	W?PlugIn$:IFCCustom$n()v	nearest-preceding	inherit:name:bio-class	table x1
-0x00074660	1120	A	W?PlugIn$:IFCCustom$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x1
-0x0007F940	848	A	W?SelectAmbientSound$:MapDisplay$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x1
-0x0007FC90	1104	A	W?SelectAmbientSound$:MapDisplay$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x4
-0x000800E0	304	A	W?SelectAmbientSound$:MapDisplay$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x2
 0x00083480	16	C	_get_osfhandle_	exact	name:dos-hardware-handler/CRT	table x1
-0x00083490	16	A	_os_handle_	exact	ref:table-or-lifted-caller	table x1
-0x00086290	96	A	W?InitArray$:Effect$n()v	nearest-preceding	inherit:name:bio-class	table x1
 0x000920A0	208	C	LbMemoryGrow_	exact	name:dos-platform	none
-0x00093F30	1264	A	main_	exact	name:bio-symbol	called-from-unlifted x1
 0x00094420	65	C	__full_io_exit	exact	name:crt/stub	none
 0x00094461	79	C	fcloseall	exact	name:crt/stub	none
-0x00094520	1440	A	W?setup_stuff$n()v	exact	name:cpp-free-function-unmatched	none
-0x00095A20	288	A	W?reset_game$n()v	nearest-preceding	inherit:name:bio-function	table x1
 0x00095C40	16	C	_get_osfhandle__0	exact	name:dos-hardware-handler/CRT	table x1
 0x00095CC0	16	C	nullsub_15	exact	name:crt/stub	table x1
 0x00095CD0	16	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
@@ -65,8 +24,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x00096133	37	C	unknown_libname_9	exact	name:crt/stub	none
 0x000962A2	78	B	lbSqrTable	exact	name:engine-prefix	code-pointer x1
 0x00097810	128	B	GetSoundDriver_	nearest-preceding	inherit:name:engine-lib	code-pointer x1
-0x0009869B	104	U	close_file_	exact	no-name-evidence	called-from-unlifted x1
-0x00098703	66	A	freopen_	exact	name:bio-symbol	called-from-unlifted x1
 0x0009FEB0	60	C	LbScreenClearGraphicsWindow_	exact	name:dos-platform	none
 0x0009FF68	20	C	LbScreenSetDoubleBuffering_	exact	name:dos-platform	none
 0x0009FF7C	20	C	LbScreenSetWScreenInVideo_	exact	name:dos-platform	none
@@ -81,20 +38,14 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000A9F58	18	C	__wcpp_2_ctor_array__	nearest-preceding	inherit:name:crt/stub	table x27
 0x000AA6A4	524	C	atoi_	nearest-preceding	inherit:name:crt/stub	code-pointer x8
 0x000AB0AD	3	C	unknown_libname_3	exact	name:crt/stub	none
-0x000AB19C	828	C	atol_	nearest-preceding	inherit:name:crt/stub	called-from-unlifted x1
 0x000AB708	72	C	LbNetworkSessionActive_	exact	name:network/IPX	none
 0x000AB780	48	C	LbNetworkOpenUpListeners_	exact	name:network/IPX	none
-0x000ABC94	52	C	LbNetworkSetupIPXAddress_	exact	name:network/IPX	called-from-unlifted x1
+0x000ABC94	52	C	LbNetworkSetupIPXAddress_	exact	name:network/IPX	called-from-lifted x1
 0x000ABFF4	36	C	LbNetworkSendNoWait_	exact	name:network/IPX	none
 0x000AC018	36	C	LbNetworkReceiveNoWait_	exact	name:network/IPX	none
-0x000AC134	8	C	LbNetworkReadConfig_	exact	name:network/IPX	called-from-unlifted x1
-0x000AC17C	12	C	LbNetworkSetSessionCreateFunction_	exact	name:network/IPX	called-from-unlifted x1
-0x000AC188	12	C	LbNetworkSetSessionJoinFunction_	exact	name:network/IPX	called-from-unlifted x1
 0x000AC194	12	C	LbNetworkSetSessionExchangeFunction_	exact	name:network/IPX	none
 0x000AC1A0	12	C	LbNetworkSetSessionInitFunction_	exact	name:network/IPX	none
 0x000AC1AC	12	C	LbNetworkSetModemInitFunction_	exact	name:network/IPX	none
-0x000AC1B8	12	C	LbNetworkSetSessionDialFunction_	exact	name:network/IPX	called-from-unlifted x1
-0x000AC1C4	12	C	LbNetworkSetSessionAnswerFunction_	exact	name:network/IPX	called-from-unlifted x1
 0x000AC1D0	12	C	LbNetworkSetSessionHangUpFunction_	exact	name:network/IPX	none
 0x000AC1DC	28	C	LbNetworkSetTimeoutSec	exact	name:network/IPX	none
 0x000AD046	21	C	W?lock_code_start$n()v	exact	name:network/IPX	code-pointer x3
@@ -104,14 +55,7 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000AD0FD	54	C	W?com_handler3$f()v	exact	name:dos-hardware-handler/CRT	code-pointer x2
 0x000AD133	210	C	W?handle_com$n(pn$TbSerialDev$$)v	exact	name:network/IPX	called-from-unlifted x4
 0x000AD205	21	C	W?lock_code_end$n()v	exact	name:network/IPX	code-pointer x1
-0x000AD3AF	67	C	W?read_a_line$n(pn$__iobuf$$pna)v	exact	name:network/IPX	called-from-unlifted x8
 0x000AD3F2	301	C	LbModemReadConfig_	exact	name:network/IPX	none
-0x000ADB21	79	A	write_string_	nearest-preceding	ref:table-or-lifted-caller(unnamed)	code-pointer x1
-0x000ADB70	47	U	write_string_	nearest-preceding	unnamed,no-reference-from-lifted-or-tables	called-from-unlifted x2
-0x000ADB9F	130	U	write_string_	nearest-preceding	unnamed,no-reference-from-lifted-or-tables	called-from-unlifted x1
-0x000ADC21	218	A	write_string_	nearest-preceding	ref:table-or-lifted-caller(unnamed)	code-pointer x1
-0x000ADD35	59	U	write_string_	nearest-preceding	unnamed,no-reference-from-lifted-or-tables	called-from-unlifted x1
-0x000ADD70	161	C	strcmp_	exact	name:crt/stub	called-from-unlifted x5
 0x000AE910	32	B	SoundProgressLog__0	exact	name:engine-prefix	none
 0x000AF698	44	C	LbKeyboard_	exact	name:dos-platform	none
 0x000AF708	36	C	LbIKeyboardClose_	exact	name:dos-platform	none
@@ -130,8 +74,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000B57A0	880	B	_AIL_sequence_status	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x1
 0x000B60E0	128	B	_AIL_destroy_wave_synthesizer	exact	name:engine-lib	none
 0x000B6160	44	B	AILDEBUG_end_	exact	name:engine-lib	code-pointer x2
-0x000BA267	5	C	__set_EDOM_	exact	name:crt/stub	called-from-unlifted x1
-0x000BA278	7	C	__set_ERANGE_	exact	name:crt/stub	called-from-unlifted x3
 0x000BA27F	16	C	__set_EINVAL_	exact	name:crt/stub	none
 0x000BA37A	30	C	__purgefp_	exact	name:crt/stub	none
 0x000BAAF4	54	C	__delay_	exact	name:crt/stub	none
@@ -142,8 +84,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000BBB60	496	C	int386x_	nearest-preceding	inherit:name:crt/stub	code-pointer x1
 0x000BBE44	48	C	__sys_init_387_emulator	exact	name:crt/stub	none
 0x000BBFC9	122	C	__sys_fini_387_emulator	exact	name:crt/stub	none
-0x000BC043	59	U	unhook_pharlap	exact	no-name-evidence	called-from-unlifted x1
-0x000BC07E	33	U	_reset_EM_MP_bits	exact	no-name-evidence	called-from-unlifted x2
 0x000BC09F	5	C	__save_8087_	exact	name:crt/stub	code-pointer x1
 0x000BC0A4	4	C	__rest_8087_	exact	name:crt/stub	code-pointer x1
 0x000BC0D9	10	C	_fpreset_	exact	address>=CRT-runtime-region	none
@@ -162,7 +102,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000BCB20	120	C	CallIPX_	exact	name:network/IPX	none
 0x000BCB98	84	C	CallRealModeInterrupt_	exact	name:network/IPX	none
 0x000BCBEC	88	C	setup_bullfrog_header_	exact	name:network/IPX	none
-0x000BD470	528	C	ipx_create_session_	nearest-preceding	inherit:name:network/IPX	called-from-unlifted x1
 0x000BE544	440	C	W?ipx_send_datagram_to_all$n(pnucluc)l	exact	name:network/IPX(radica)	none
 0x000BE6FC	80	C	ipx_backup_last_packet_	exact	name:network/IPX	none
 0x000BED7C	40	C	ipx_add_player_to_session_	exact	name:network/IPX	none
@@ -178,7 +117,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000BFE70	16	C	W?run_exchange_function$n()l	exact	name:network/IPX	none
 0x000BFE80	16	C	W?run_fld2C_function$n()l	exact	address>=CRT-runtime-region	none
 0x000BFE90	16	C	W?run_join_function$n()l	exact	name:network/IPX	none
-0x000C0570	724	C	radica_session_list	exact	name:network/IPX(radica)	called-from-unlifted x1
 0x000C09F8	228	C	radica_unkn_func_18	exact	name:network/IPX(radica)	none
 0x000C0ADC	60	C	radica_unkn_func_17	exact	name:network/IPX(radica)	none
 0x000C106C	252	C	radica_unused_unkn_func_12	exact	name:network/IPX(radica)	none
@@ -190,9 +128,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000C1CF4	28	C	W?run_join_function$n()l_2	exact	name:network/IPX	none
 0x000C2071	29	C	_dos_gettime_	nearest-preceding	inherit:name:dos/crt-pattern	table x2
 0x000C3518	92	C	__wcpp_2_module_dtor__	exact	name:crt/stub	table x1
-0x000C35DA	365	C	cli_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
-0x000C3747	8	C	cli_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
-0x000C374F	94	C	cli_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
 0x000C388D	11	C	__wcpp_2_fun_register__	exact	name:crt/stub	none
 0x000C4110	112	B	SMACKSOUNDUSEMSS	nearest-preceding	inherit:name:smacklib	code-pointer x1
 0x000C42E0	16	B	SMACKSOUNDUSEMSS	nearest-preceding	inherit:name:smacklib	code-pointer x1
@@ -403,10 +338,8 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000DFD01	147	C	__wcpp_2_stab_trav_move__	exact	name:crt/stub	called-from-unlifted x5
 0x000DFD94	45	C	__wcpp_2_dtor_array__	exact	name:crt/stub	called-from-unlifted x1
 0x000DFEE2	146	C	__Nan_Inf_	exact	name:crt/stub	called-from-unlifted x2
-0x000DFF74	67	C	IF@LOG	exact	address>=CRT-runtime-region	called-from-unlifted x1
 0x000DFFB7	4	C	IF@LOG2	exact	address>=CRT-runtime-region	called-from-unlifted x1
 0x000DFFBB	4	C	IF@LOG10	exact	address>=CRT-runtime-region	called-from-unlifted x2
-0x000DFFBF	12	A	log_	exact	name:bio-symbol	none
 0x000DFFCB	12	C	log10_	exact	address>=CRT-runtime-region	none
 0x000DFFD7	12	C	log2_	exact	address>=CRT-runtime-region	none
 0x000DFFE3	60	C	floor_	exact	address>=CRT-runtime-region	called-from-unlifted x1
@@ -419,7 +352,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000E090B	26	C	_nrealloc_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
 0x000E0B0C	28	C	_chain_intr_	exact	address>=CRT-runtime-region	called-from-unlifted x1
 0x000E0B28	30	C	__wcpp_2_bit_test__	exact	name:crt/stub	called-from-unlifted x2
-0x000E0B46	60	C	__log87_err_	exact	name:crt/stub	called-from-unlifted x1
 0x000E0B82	26	C	modf_	exact	address>=CRT-runtime-region	called-from-unlifted x2
 0x000E0B9C	58	C	__CmpBigInt	exact	name:crt/stub	called-from-unlifted x1
 0x000E0BD6	107	C	__Rnd2Int	exact	name:crt/stub	called-from-unlifted x1
@@ -439,7 +371,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000E1022	5	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
 0x000E1027	32	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
 0x000E1047	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
-0x000E10EB	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
 0x000E10FF	24	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
 0x000E1117	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
 0x000E112B	32	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
@@ -474,13 +405,7 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000E1480	112	C	frexp_	exact	address>=CRT-runtime-region	called-from-unlifted x1
 0x000E14F0	76	C	W?terminate$n()v	exact	address>=CRT-runtime-region	called-from-unlifted x1
 0x000E153C	52	C	W?unexpected$n()v	exact	address>=CRT-runtime-region	none
-0x000E1579	10	C	__math1err_	exact	name:crt/stub	called-from-unlifted x1
-0x000E1583	219	C	__math2err_	exact	name:crt/stub	called-from-unlifted x1
 0x000E16B3	6	C	_set_matherr_	exact	address>=CRT-runtime-region	none
-0x000E16B9	72	C	__rterrmsg_	exact	name:crt/stub	called-from-unlifted x1
-0x000E1701	47	C	_matherr_	exact	address>=CRT-runtime-region	called-from-unlifted x1
-0x000E1730	5	C	__matherr	exact	name:crt/stub	table x1
-0x000E1735	31	C	__get_std_stream_	exact	name:crt/stub	called-from-unlifted x1
 0x000E1754	12	C	matherr__	exact	address>=CRT-runtime-region	none
 0x000E1760	422	B	prop_text	exact	name:engine-lib	none
 0x000E8DF0	6264	B	LbSpriteDrawUsingScalingData_	exact	name:engine-lib	none
