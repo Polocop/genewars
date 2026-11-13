@@ -121,9 +121,23 @@ HOST_REPLACED = {
 }
 
 
+# Entries the inventory finds through code pointers but that are not code (group X), and engine entries the lifter refuses
+# (static access to an address that no fixup resolves); the latter stay in group B with the reason.
+NOT_CODE = {0x000962A2: "lbSqrTable is a lookup table referenced by a code pointer"}
+LIFTER_REFUSED = {
+    0x000E1760: "lifter refuses: static access to 0x001B0000 (no fixup)",
+    0x000E8DF0: "lifter refuses: static access to 0x001B034C (no fixup)",
+    0x000EA668: "lifter refuses: static access to 0x001B034C (no fixup)",
+}
+
+
 def classify(name_syms, va, name, basis_exact, sets, lifted_ref, table_ref):
     if va in HOST_REPLACED:
         return "C", "host-replaced:" + HOST_REPLACED[va]
+    if va in NOT_CODE:
+        return "X", "not-code:" + NOT_CODE[va]
+    if va in LIFTER_REFUSED:
+        return "B", LIFTER_REFUSED[va]
     kind, key = norm(name)
     if not basis_exact:     # nearest-preceding symbol: no name evidence for THIS entry, use references only
         if lifted_ref or table_ref: return "A", "ref:table-or-lifted-caller(unnamed)"
