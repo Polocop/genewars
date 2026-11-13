@@ -30,6 +30,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\play.ps1 -SkipIntro 
   save: about 140 s from launch to the loaded map (most of it is the existing start-up before the title, not the load),
   map, goop counter and creature portraits of the save shown afterwards. Mouse/scroll on the loaded map was not
   re-checked in that run.
+* `-Level N` (2..24, new game only, not with `-LoadSave`) uses the level select that is built into Gene Wars 1.1. No
+  command-line option of the original sets the level. Instead, the game's typed-code check (`0x64CB0`, called by
+  `game()` every frame) matches `SALMONAXE`, which sets a `runFlags` bit. With that bit set, `IFCLevel::Update`
+  (`0x17A3C`) moves the level up on `S` (down on Shift+`S`) and reloads the level header with
+  `LevelHeader::LoadHeader`. The launcher clicks UN JUGADOR and then sends those keys through the normal SDL key queue.
+  It does not write the level byte. You then choose the planet, team and landing yourself. The same bit also enables
+  the game's in-mission cheat keys until the window closes (it is not stored in saves). So for clean play, save right
+  after landing, close, and continue with `-LoadSave` of that save.
+* In play mode the mission screen (IFCLevel) of a new game is now driven by the player. Before, the host clicked at
+  the screen centre in two phases. It runs the original `0x64CB0` stage every frame like `game()`. `-LoadSave` keeps the
+  automatic walk into mission 1, because its Options > Cargar driver starts from there.
 * `-OrderLog` writes one line per change of the fields that decide whether a map click becomes an order (selected
   specialist, MapDisplay candidate and flags, the 11-byte action packet).
 * The lines of the three options go to `<build root>\gw_flags.log` (play mode mutes the console once the window opens).
