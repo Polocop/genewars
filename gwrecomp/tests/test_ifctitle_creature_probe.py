@@ -3317,6 +3317,24 @@ def main()->None:
     for target in sorted(seen_callback_targets):
         options += ["--verified-indirect-target",f"0xA8D95={hex(target)}",
                     "--partial-root",hex(target)]
+    # Static closure batch 1 (docs/STATIC_CLOSURE_REMAINING.tsv, groups A and U): function entries that the
+    # static inventory proves (map symbol, data-table pointer or direct call from other unlifted code) but that no
+    # lifted function reaches directly. They are lifted as extra roots so their C exists; nothing calls them yet,
+    # so runtime behaviour is unchanged. GWRECOMP_STATIC_BATCH1=0 leaves them out.
+    if os.environ.get("GWRECOMP_STATIC_BATCH1","1") != "0":
+        for root in (
+            "0x10003","0x13530","0x13800","0x138D0","0x13E10","0x13EB0",
+            "0x141D0","0x142A0","0x27D70","0x35920","0x3CCD0","0x43960",
+            "0x55600","0x61640","0x61B60","0x62280","0x62A10","0x63A40",
+            "0x64880","0x66FD0","0x67720","0x67800","0x68250","0x68CB0",
+            "0x69D10","0x69DB0","0x69DF0","0x6A000","0x72960","0x72DB0",
+            "0x739E0","0x74660","0x7F940","0x7FC90","0x800E0","0x83490",
+            "0x86290","0x93F30","0x94520","0x95A20","0x9869B","0x98703",
+            "0xADB21","0xADB70","0xADB9F","0xADC21","0xADD35","0xBC043",
+            "0xBC07E","0xDFFBF",
+        ):
+            options += ["--partial-root", root]
+
     if os.environ.get("GWRECOMP_REUSE_EXISTING_LIFT") == "1":
         if not generated_base.is_file() or not lift_report.is_file():
             raise SystemExit("requested incremental lift reuse but the pristine generated closure/report is missing")
