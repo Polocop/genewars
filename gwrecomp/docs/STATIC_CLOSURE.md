@@ -8,6 +8,30 @@ python tools/static_closure_inventory.py --exe <genewars-1_1.exe> --map <genewar
     --out docs/STATIC_CLOSURE_REMAINING.tsv
 ```
 
+## Batch 2 completed (2026-11-13, commit 673cd44): groups A and B empty
+
+| | functions |
+|---|---:|
+| function entries found | 2803 |
+| inside the lifted ranges | **2423** |
+| not lifted | 380 |
+| Group A / B / unclassified | **0 / 0 / 0** |
+| Group C (DOS/DPMI/IPX/hardware/Watcom runtime, incl. 16 host-replaced engine entries) | 379 |
+| Group X, not code (`lbSqrTable`) | 1 |
+
+The three entries the lifter had refused (`prop_text` 0xE1760, `LbSpriteDrawUsingScalingData_` 0xE8DF0,
+`LbSpriteSetScalingData_` 0xEA668) access data object 4 (link 0x1B0000, 0x1350 bytes, the sprite-scaling tables).
+Their four absolute operands carry LE fixups to object 4 (offsets 0 and 0x34C). Object 4 has no measured DOS/4GW base,
+but the harness guest image keeps it at its link base with its initial bytes, and the DPMI arena starts at 0x01000000,
+so `tools/lift_entry_path.py` now accepts it at delta 0 (the layout the generated code runs against). This is not a
+claim about where the original DOS/4GW placed it.
+
+Smoke test of the build before this change (`rebuild-20261113-183641`, batch 2 without these three and with the
+dispatch-lookup change): `-SkipIntro -OrderLog -LoadSave <mission 2 save>` loaded the save (log `load_save done
+current=0035FE9A Turn=15967`, map, goop and portraits of the save in the frame), and no unresolved indirect call was
+logged. How often the newly registered dispatch targets ran was not measured (the hit table is not exported in play
+mode). The final build (`673cd44`) was built, not played.
+
 ## Batch 2 (2026-11-13, commit b339626): group B
 
 | | functions |

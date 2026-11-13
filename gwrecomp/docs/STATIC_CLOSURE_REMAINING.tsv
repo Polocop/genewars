@@ -379,6 +379,3 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000E153C	52	C	W?unexpected$n()v	exact	address>=CRT-runtime-region	none
 0x000E16B3	6	C	_set_matherr_	exact	address>=CRT-runtime-region	none
 0x000E1754	12	C	matherr__	exact	address>=CRT-runtime-region	none
-0x000E1760	422	B	prop_text	exact	lifter refuses: static access to 0x001B0000 (no fixup)	none
-0x000E8DF0	6264	B	LbSpriteDrawUsingScalingData_	exact	lifter refuses: static access to 0x001B034C (no fixup)	none
-0x000EA668	920	B	LbSpriteSetScalingData_	exact	lifter refuses: static access to 0x001B034C (no fixup)	none
