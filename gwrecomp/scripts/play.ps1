@@ -1,18 +1,21 @@
 <#
  Start the native interactive build made by scripts\build.ps1 -Level B.
-   powershell -NoProfile -File scripts\play.ps1 [-Build <rebuild dir>] [-SmokeFrames N] [-Backend default|terrain_modern] [-Detach] [-SkipIntro] [-LoadSave <file.sav>]
+   powershell -NoProfile -File scripts\play.ps1 [-Build <rebuild dir>] [-SmokeFrames N] [-Backend default|terrain_modern] [-Detach] [-SkipIntro] [-LoadSave <file.sav>] [-Level <2..24>]
  Without -SmokeFrames this is the ALPHA play mode: real-time window, mouse/keyboard, digital sound (virtual SB16) and, when
  GENEWARS_CUE is set, CD music from your disc image. The intro videos play first (ESC / click skips each one), then the original
  title menu appears. The start still uses the locally generated title snapshot, so it is provisional: see docs/ALPHA.md.
  -Backend terrain_modern selects the EXPERIMENTAL modern terrain renderer (needs B32 data prepared by tools\terrain_renderer; map clicks disabled).
  -SkipIntro cuts the start-up videos at once. -LoadSave <file.sav> goes through the real title flow into mission 1 and then loads that
  save through the original Options > Cargar gadgets (developer aid; your save is copied to slot 1 of the host overlay, the install is untouched).
+ -Level N (new game only): on the original mission screen the launcher types the game's own SALMONAXE code and presses S
+ N-1 times, so IFCLevel::Update loads the level-N header; you then choose the planet, team and landing yourself. The code
+ also enables the game's in-mission cheat keys until the window closes: save at the start, quit, and continue with -LoadSave.
  -OrderLog writes one line per change of the order-related fields (selection, map candidate, action packet) while you click.
  The lines of these three options go to <build root>\gw_flags.log (the console is muted once the game window opens).
  -Build defaults to the newest build\rebuild-* directory. -SmokeFrames N makes the program exit after N frames (smoke test).
  Requires GENEWARS_INSTALL_DIR (your own game files). Logs go to <build>\play.stdout.log / play.stderr.log.
 #>
-param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave, [switch]$OrderLog)
+param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave, [switch]$OrderLog, [ValidateRange(0,24)][int]$Level = 0)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'gwconfig.ps1')
 $root = Get-GwRoot
@@ -64,6 +67,7 @@ try {
     if ($alpha) { $argLine += ' --play' }
     if ($SkipIntro) { $argLine += ' --skip-intro' }
     if ($OrderLog) { $argLine += ' --order-log' }
+    if ($Level -gt 1) { if ($LoadSave) { throw '-Level starts a new game; it cannot be combined with -LoadSave' }; $argLine += (' --level {0}' -f $Level) }
     if ($LoadSave) { $argLine += (' --load-save "{0}"' -f (Resolve-Path -LiteralPath $LoadSave).Path) }
     if ($Detach) {   # for automated interactive tests: start the game and return its process id
         $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $br -PassThru -RedirectStandardOutput $out -RedirectStandardError $err

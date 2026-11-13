@@ -52,6 +52,8 @@ static int g_interactive_demo_mode;
 static int g_cli_skip_intro;
 static int g_cli_load_save;
 static int g_cli_order_log;   /* --order-log: the GW_ORDER_TRACE lines go to the flags log as "TRACE order ..." */
+static unsigned g_cli_level;  /* --level N (2..24): on the new-game IFCLevel screen, type the original SALMONAXE
+                                 code (0x64CB0) and press S N-1 times (IFCLevel::Update 0x17A3C -> LoadHeader) */
 static char g_cli_load_save_path[1024];
 /* Play mode sends stderr to NUL once the window opens (GW_INTERACTIVE_QUIET_CONSOLE), so the developer options write
    their lines to their own file as well: GW_FLAGS_LOG, default gw_flags.log in the working directory (the build root). */
@@ -10662,6 +10664,9 @@ static void gw_save_publish(host_file *h) {
 static uint16_t host_open(void *user,const char *path,uint8_t access,void **out) {
     fixture_vfs *s=(fixture_vfs *)user;
     int capture=guest_path_has_suffix(path,"data/iftitle.anb");
+    if(g_cli_level && path) { /* --level evidence: which level header the original LoadHeader opens */
+        for(const char *p=path;*p;p++) if(!_strnicmp(p,"hdrco",5)) { gw_flag_trace("TRACE level_select open path=%s\n",path); break; }
+    }
     char source[1024],overlay[1024];
     if(path && (!_stricmp(path,"config.ini") ||
                 !_stricmp(path,"c:\\genewars\\") ||
@@ -15477,6 +15482,22 @@ static int original_interface_ui_cycle(uint8_t *memory,const char *label,
    interactive until the player chooses New Game/Load or closes the window. */
 /* --load-save: press UN JUGADOR on the real title menu, as a person would, through the guest input fields the SDL poll
    fills (pointer position and left button). The position is re-asserted on every frame of the click. Game state is only read. */
+/* The original game() frame, between the interface transition and control_game, does
+     0x92860: CALL 0x64CB0 with EAX=0x0017FADC (guest 0x00359ADC)   ; typed-code ring, SALMONAXE -> runFlags bit 0x10
+     0x9286A: conditional clear gated by byte 0x1809B8              ; ends at 0x92896 (CALL control_game)
+   The host-built title and new-game IFCLevel frames left this stage out, so a code typed there
+   never reached the original. Both fragments are the lifted original instructions. */
+static int gw_original_game_pre_update(uint8_t *memory) {
+    gw_recomp_context command_context={0},clear_context={0};
+    if(!invoke(gw_original_64cb0_entry,&command_context,0x64CB0u,memory,0x00359ADCu,0u) ||
+       command_context.memory_fault.pending || command_context.segment_fault_pending ||
+       command_context.interrupt_trap_pending || command_context.port_io_trap.pending) return 0;
+    if(!invoke_from_context(gw_original_cleanup_loop_entry,&clear_context,0x9286Au,memory,&command_context,0,0u) ||
+       clear_context.memory_fault.pending || clear_context.segment_fault_pending ||
+       clear_context.interrupt_trap_pending || clear_context.port_io_trap.pending) return 0;
+    return 1;
+}
+
 static void title_autoclick_new_game(uint8_t *memory,uint64_t dt) {
     const uint32_t gad=*(uint32_t *)(memory+0x00379490u);
     if(!gad || gad+40u>GUEST_LIMIT || *(int16_t *)(memory+gad+12u)!=0 || dt>14u) return;
@@ -15519,9 +15540,12 @@ static int run_interactive_title_menu(uint8_t *memory,uint32_t wscreen_guest) {
             }
         }
         (void)poll_sdl_into_lbdisplay(memory);
-        if(g_cli_load_save && frames>=20u) title_autoclick_new_game(memory,frames-20u);
+        if((g_cli_load_save || g_cli_level) && frames>=20u) title_autoclick_new_game(memory,frames-20u);
         if(g_ifclevel_demo_closed) break;
         gw_recomp_context input_ctx={0},update_ctx={0},draw_ctx={0},palette_ctx={0},timer_ctx={0};
+        if(!gw_original_game_pre_update(memory)) {
+            fprintf(stderr,"interactive title original 0x64CB0 pre-update failed frame=%llu\n",(unsigned long long)frames); return 0;
+        }
         if(!invoke(gw_original_setup_controller_entry,&input_ctx,0x5B170u,memory,0u,0u) ||
            !invoke(gw_original_control_game_update_dispatch,&update_ctx,0x5AF12u,memory,0u,0u) ||
            update_ctx.eip!=0x5AF12u || update_ctx.esp!=STACK_TOP+4u ||
@@ -16775,6 +16799,11 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[ai],"--probe-live-projection-mesh")) g_cli_live_projection_mesh_capture=1;
         else if(!strcmp(argv[ai],"--skip-intro")) g_cli_skip_intro=1;
         else if(!strcmp(argv[ai],"--order-log")) g_cli_order_log=1;
+        else if(!strcmp(argv[ai],"--level") && ai+1<argc) {
+            char *end=NULL; unsigned long n=strtoul(argv[++ai],&end,10);
+            if(!end || *end || n<1ul || n>24ul) return 2;
+            g_cli_level=(unsigned)n;
+        }
         else if(!strcmp(argv[ai],"--load-save") && ai+1<argc) {
             if(strlen(argv[ai+1])>=sizeof g_cli_load_save_path) return 2;
             strcpy(g_cli_load_save_path,argv[++ai]); g_cli_load_save=1;
@@ -19637,7 +19666,20 @@ int main(int argc,char **argv) {
             *(uint16_t *)(memory+0x002F1472u),memory[0x002F146Du],memory[0x002F1661u],
             memory[0x002F3123u+memory[0x002F1431u]*0x70Du],
             *(int32_t *)(memory+0x00376AA8u),*(int32_t *)(memory+0x00376AACu),level_wscreen);
-        const unsigned max_ticks=512u;
+        /* Play mode, new game (no --load-save): the player drives this original IFCLevel screen.
+           No host click at (320,240) in phases 7/9, no 512-tick bound, frames are shown at 60 fps,
+           and the original game() pre-update stage (0x64CB0 + clear) runs every frame. --load-save
+           keeps the automated walk to mission 1 that its Options > Cargar driver starts from. */
+        const int ifclevel_manual=g_cli_play_mode && g_interactive_demo_mode && !g_cli_load_save;
+        const unsigned max_ticks=ifclevel_manual?UINT32_MAX:512u;
+        static const SDL_Keycode level_code[9]={SDLK_s,SDLK_a,SDLK_l,SDLK_m,SDLK_o,SDLK_n,SDLK_a,SDLK_x,SDLK_e};
+        const unsigned level_keys=(ifclevel_manual && g_cli_level>1u)?9u+(g_cli_level-1u):0u;
+        unsigned level_key_index=0u,level_key_phase=0u,level_done=0u;
+        uint8_t level_cheat_seen=0u;
+        uint64_t ifclevel_frame_deadline=0u;
+        if(ifclevel_manual)
+            gw_flag_trace("TRACE ifclevel_manual begin level_byte=%u requested_level=%u\n",
+                memory[0x002F2123u+memory[0x002F1431u]*0x70Du],g_cli_level);
         int mouse_button_down=0, phase7_click_sent=0, phase9_click_sent=0;
         int timer_tick_count=0;
         int continuation_ok=1; unsigned completed=0; int transition_attempted=0,phase8_stalled=0;
@@ -19651,17 +19693,37 @@ int main(int argc,char **argv) {
         for(unsigned tick=0;tick<max_ticks;tick++) {
             const uint8_t phase_for_event=memory[level_this+0x9A9u];
             int event_code=0;
-            if(mouse_button_down) {
+            if(ifclevel_manual) {
+                /* --level: one key per three frames (down, up, idle) through the same SDL queue a
+                   keyboard uses; the original 0x64CB0 and IFCLevel::Update do the rest. */
+                if(level_key_index<level_keys && tick>=60u) {
+                    if(level_key_index==9u && level_key_phase==0u && !(memory[0x002F1661u]&0x10u)) {
+                        gw_flag_trace("TRACE level_select cheat_not_active after SALMONAXE; stopping key input\n");
+                        level_key_index=level_keys;
+                    } else {
+                        const SDL_Keycode k=level_key_index<9u?level_code[level_key_index]:SDLK_s;
+                        if(level_key_phase==0u) { if(!push_sdl_key(SDL_KEYDOWN,k)) continuation_ok=0; }
+                        else if(level_key_phase==1u) { if(!push_sdl_key(SDL_KEYUP,k)) continuation_ok=0; }
+                        if(++level_key_phase==3u) { level_key_phase=0u; level_key_index++; }
+                    }
+                } else if(level_keys && level_key_index>=level_keys && !level_done) {
+                    level_done=1u;
+                    gw_flag_trace("TRACE level_select done level_byte=%u mission=%u cheat=%u frame=%u\n",
+                        memory[0x002F2123u+memory[0x002F1431u]*0x70Du],
+                        memory[0x002F2123u+memory[0x002F1431u]*0x70Du]+1u,(memory[0x002F1661u]>>4)&1u,tick);
+                }
+                snprintf(tick_names[tick&511u],sizeof tick_names[tick&511u],"manual-%03u",tick&0x3FFu);
+            } else if(mouse_button_down) {
                 if(!push_sdl_button(SDL_MOUSEBUTTONUP,320,240)) continuation_ok=0;
-                else { mouse_button_down=0; event_code=2; snprintf(tick_names[tick],sizeof tick_names[tick],"mouse-up-phase%u",phase_for_event); }
+                else { mouse_button_down=0; event_code=2; snprintf(tick_names[tick&511u],sizeof tick_names[tick&511u],"mouse-up-phase%u",phase_for_event); }
             } else if(phase_for_event==7u && !phase7_click_sent) {
                 if(!push_sdl_button(SDL_MOUSEBUTTONDOWN,320,240)) continuation_ok=0;
-                else { mouse_button_down=1; phase7_click_sent=1; event_code=1; snprintf(tick_names[tick],sizeof tick_names[tick],"mouse-down-phase7"); }
+                else { mouse_button_down=1; phase7_click_sent=1; event_code=1; snprintf(tick_names[tick&511u],sizeof tick_names[tick&511u],"mouse-down-phase7"); }
             } else if(phase_for_event>=9u && !phase9_click_sent) {
                 if(!push_sdl_button(SDL_MOUSEBUTTONDOWN,320,240)) continuation_ok=0;
-                else { mouse_button_down=1; phase9_click_sent=1; event_code=1; snprintf(tick_names[tick],sizeof tick_names[tick],"mouse-down-phase9"); }
+                else { mouse_button_down=1; phase9_click_sent=1; event_code=1; snprintf(tick_names[tick&511u],sizeof tick_names[tick&511u],"mouse-down-phase9"); }
             } else {
-                snprintf(tick_names[tick],sizeof tick_names[tick],"frame-%03u",tick);
+                snprintf(tick_names[tick&511u],sizeof tick_names[tick&511u],"frame-%03u",tick);
             }
             unsigned events=poll_sdl_into_lbdisplay(memory);
             /* The automated proof injects exactly one synthetic event per tick and expects that count back.
@@ -19669,6 +19731,19 @@ int main(int argc,char **argv) {
                skipped the preceding Smacker clip) are queued as well; they reach the original game through
                the same lbDisplay path and must not abort the session. */
             if(!continuation_ok || (!g_interactive_demo_mode && events!=(unsigned)(event_code!=0))) { continuation_ok=0; break; }
+            if(ifclevel_manual && g_ifclevel_demo_closed) {
+                gw_flag_trace("TRACE ifclevel_manual window_closed frame=%u\n",tick);
+                continuation_ok=0; break;
+            }
+            if(g_cli_play_mode && !gw_original_game_pre_update(memory)) {
+                fprintf(interaction,"tick=%u stage=original-0x64CB0-pre-update failed\n",tick);
+                continuation_ok=0; break;
+            }
+            if(ifclevel_manual && (memory[0x002F1661u]&0x10u) && !level_cheat_seen) {
+                level_cheat_seen=1u;
+                gw_flag_trace("TRACE level_select cheat_active runFlags1=%02x frame=%u (original 0x64CB0 matched the typed code)\n",
+                    memory[0x002F1661u],tick);
+            }
 
             const uint8_t phase_before=memory[level_this+0x9A9u];
             const uint16_t selected_before=*(uint16_t *)(memory+level_this+0x28u);
@@ -19678,13 +19753,13 @@ int main(int argc,char **argv) {
             if(!invoke(gw_original_setup_controller_entry,&input_context,0x5B170u,memory,0u,0u) ||
                input_context.memory_fault.pending || input_context.segment_fault_pending ||
                input_context.interrupt_trap_pending || input_context.port_io_trap.pending) {
-                fprintf(interaction,"tick=%u label=%s stage=setup_controller failed eip=%08x\n",tick,tick_names[tick],input_context.eip);
+                fprintf(interaction,"tick=%u label=%s stage=setup_controller failed eip=%08x\n",tick,tick_names[tick&511u],input_context.eip);
                 continuation_ok=0; break;
             }
             const uint8_t controller_flags=memory[0x002F146Du];
             if(event_code==1 && phase_for_event==7u && (controller_flags&1u)==0u) {
                 fprintf(interaction,"tick=%u label=%s SDL left-button did not reach original GameControl action bit flags=%02x\n",
-                    tick,tick_names[tick],controller_flags);
+                    tick,tick_names[tick&511u],controller_flags);
                 continuation_ok=0; break;
             }
             const int32_t mx=*(int32_t *)(memory+0x00376AA8u),my=*(int32_t *)(memory+0x00376AACu);
@@ -19692,11 +19767,25 @@ int main(int argc,char **argv) {
                update_context.memory_fault.pending || update_context.segment_fault_pending ||
                update_context.interrupt_trap_pending || update_context.port_io_trap.pending) {
                 fprintf(interaction,"tick=%u label=%s stage=IFCLevel_Update failed eip=%08x faults=%u/%08x seg=%u int=%u port=%u/%08x\n",
-                    tick,tick_names[tick],update_context.eip,update_context.memory_fault.pending,
+                    tick,tick_names[tick&511u],update_context.eip,update_context.memory_fault.pending,
                     update_context.memory_fault.linear,update_context.segment_fault_pending,
                     update_context.interrupt_trap_pending,update_context.port_io_trap.pending,
                     update_context.port_io_trap.guest_va);
                 continuation_ok=0; break;
+            }
+            if(ifclevel_manual) {
+                /* control_game ends every frame with lbInkey=0 (0x5B159..0x5B15B). This loop runs only the
+                   virtual-Update slice of control_game, so without this a key held for several frames
+                   would be seen by IFCLevel::Update (S = next level) once per frame instead of once. */
+                memory[0x00376BF0u]=0u;
+                static uint8_t last_level_byte=0xFFu;
+                const uint8_t lv=memory[0x002F2123u+memory[0x002F1431u]*0x70Du];
+                if(lv!=last_level_byte) {
+                    if(last_level_byte!=0xFFu)
+                        gw_flag_trace("TRACE level_select IFCLevel::Update level_byte %u -> %u (mission %u) frame=%u\n",
+                            last_level_byte,lv,lv+1u,tick);
+                    last_level_byte=lv;
+                }
             }
             uint32_t phase_after_update=memory[level_this+0x9A9u];
             uint32_t selected_after_update=*(uint16_t *)(memory+level_this+0x28u);
@@ -19715,7 +19804,7 @@ int main(int argc,char **argv) {
                g_ifclevel_draw_dispatch_count!=1u || g_ifclevel_draw_dispatch_caller!=0x00083559u ||
                g_ifclevel_draw_dispatch_target!=0x00206620u) {
                 fprintf(interaction,"tick=%u label=%s stage=IFCLevel_Draw failed invoke=%d eip=%08x esp=%08x eax=%08x ebx=%08x ecx=%08x edx=%08x esi=%08x edi=%08x ebp=%08x dispatch=%u/%08x/%08x icalls=%u trace_boundary=%d mem=%u/%08x:%u:%u:%08x seg=%u:%04x:%08x int=%u:%02x:%08x port=%u:%04x:%08x\n",
-                    tick,tick_names[tick],draw_invoke_ok,
+                    tick,tick_names[tick&511u],draw_invoke_ok,
                     draw_context.eip,draw_context.esp,draw_context.eax,draw_context.ebx,
                     draw_context.ecx,draw_context.edx,draw_context.esi,draw_context.edi,draw_context.ebp,
                     g_ifclevel_draw_dispatch_count,
@@ -19728,7 +19817,7 @@ int main(int argc,char **argv) {
                     draw_context.interrupt_vector,draw_context.interrupt_instruction_va,
                     draw_context.port_io_trap.pending,draw_context.port_io_trap.port,
                     draw_context.port_io_trap.guest_va);
-                fprintf(interaction,"tick=%u label=%s guest-stack@%08x",tick,tick_names[tick],draw_context.esp);
+                fprintf(interaction,"tick=%u label=%s guest-stack@%08x",tick,tick_names[tick&511u],draw_context.esp);
                 for(unsigned si=0;si<12u && draw_context.esp+4u*si+4u<=GUEST_LIMIT;si++)
                     fprintf(interaction," %08x",*(uint32_t *)(memory+draw_context.esp+4u*si));
                 fprintf(interaction,"\n");
@@ -19740,7 +19829,7 @@ int main(int argc,char **argv) {
             if(!invoke(gw_original_draw_game_level_palette_fade_entry,&palette_context,0x83A0Cu,memory,0u,0u) ||
                palette_context.memory_fault.pending || palette_context.segment_fault_pending ||
                palette_context.interrupt_trap_pending || palette_context.port_io_trap.pending) {
-                fprintf(interaction,"tick=%u label=%s stage=palette-fade failed eip=%08x\n",tick,tick_names[tick],palette_context.eip);
+                fprintf(interaction,"tick=%u label=%s stage=palette-fade failed eip=%08x\n",tick,tick_names[tick&511u],palette_context.eip);
                 continuation_ok=0; break;
             }
             const uint8_t phase_after_draw=memory[level_this+0x9A9u];
@@ -19748,7 +19837,7 @@ int main(int argc,char **argv) {
                timer_context.memory_fault.pending || timer_context.segment_fault_pending ||
                timer_context.interrupt_trap_pending || timer_context.port_io_trap.pending) {
                 fprintf(interaction,"tick=%u label=%s stage=original-game-timer-increment failed eip=%08x\n",
-                    tick,tick_names[tick],timer_context.eip);
+                    tick,tick_names[tick&511u],timer_context.eip);
                 continuation_ok=0; break;
             }
             timer_tick_count++;
@@ -19763,8 +19852,10 @@ int main(int argc,char **argv) {
             if(camera_x==last_camera[0] && camera_y==last_camera[1] && camera_z==last_camera[2]) camera_stable_ticks++;
             else camera_stable_ticks=0;
             last_camera[0]=camera_x; last_camera[1]=camera_y; last_camera[2]=camera_z;
+            if(!ifclevel_manual || events || tick<4u || phase_before!=phase_after_draw ||
+               selected_before!=selected_after_update || pending)
             fprintf(interaction,"tick=%u label=%s events=%u lbInkey@376bf0=%02x phase_9a9=%u->%u->%u proximity_flags_9aa=%02x motion_flags_958=%02x selected_field_28=%u->%u selected_slot_959=%u->%u selected_planet_index_118123=%u->%u runFlags_117661=%02x flags_11746d=%02x mouse=%d,%d raw_left=%u/%u timer_117472=%u current=%08x pending=%08x camera=%d,%d,%d target_ptr=%08x target_backed=%d target_xyz=%d,%d,%d range_95d=%d velocity=%d,%d,%d camera_stable_ticks=%u WScreen_changed=%u MCB_chain_valid=%u timer_instruction=928af\n",
-                tick,tick_names[tick],events,memory[0x00376BF0u],
+                tick,tick_names[tick&511u],events,memory[0x00376BF0u],
                 phase_before,phase_after_update,phase_after_draw,memory[level_this+0x9AAu],memory[level_this+0x958u],
                 selected_before,selected_after_update,
                 selected_slot_before,selected_slot_after_update,
@@ -19780,7 +19871,25 @@ int main(int argc,char **argv) {
                 *(int32_t *)(memory+level_this+0x3E4u),camera_stable_ticks,screen_changed,mcb_valid);
             completed++;
             if(!mcb_valid || !in_guest(0x14u,level_wscreen,640u*480u,NULL)) { continuation_ok=0; break; }
+            if(ifclevel_manual && !(pending && pending!=current)) {
+                if(!present_ifclevel_demo_frame(memory+level_wscreen,vga_dac,NULL)) {
+                    fprintf(interaction,"tick=%u manual IFCLevel frame presentation failed: %s\n",tick,SDL_GetError());
+                    continuation_ok=0; break;
+                }
+                const uint64_t freq=SDL_GetPerformanceFrequency();
+                const uint64_t period=freq?freq/60u:0u;
+                uint64_t now=SDL_GetPerformanceCounter();
+                if(!ifclevel_frame_deadline || now>ifclevel_frame_deadline+4u*period) ifclevel_frame_deadline=now;
+                ifclevel_frame_deadline+=period;
+                while(period && (now=SDL_GetPerformanceCounter())<ifclevel_frame_deadline) {
+                    if(ifclevel_frame_deadline-now>(freq/500u)) SDL_Delay(1);
+                }
+            }
             if(pending && pending!=current) {
+                if(ifclevel_manual)
+                    gw_flag_trace("TRACE ifclevel_manual leaving frame=%u level_byte=%u mission=%u current=%08x pending=%08x\n",tick,
+                        memory[0x002F2123u+memory[0x002F1431u]*0x70Du],memory[0x002F2123u+memory[0x002F1431u]*0x70Du]+1u,
+                        current,pending);
                 gw_recomp_context transition_context;
                 int transition_ok=invoke(gw_original_game_interface_transition_entry,&transition_context,
                     0x92819u,memory,0u,0u);
