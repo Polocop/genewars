@@ -14805,7 +14805,7 @@ static void inject_loadsave(uint32_t frame) {
     const uint32_t ifc=*(volatile uint32_t *)(guest_memory+0x002EF7E8u);
     const uint32_t pending=*(volatile uint32_t *)(guest_memory+0x002EF7ECu);
     const uint32_t turn=*(volatile uint32_t *)(guest_memory+0x002F1472u);
-    if(!g_loadsave_first) g_loadsave_first=frame+1u;
+    static int started; if(!started) { started=1; g_loadsave_first=frame; }
     if(frame-g_loadsave_first>7200u) {
         gw_flag_trace("TRACE load_save gave_up state=%u current=%08X pending=%08X Turn=%u\n",g_loadsave_state,ifc,pending,turn);
         g_loadsave_state=9u; return;
