@@ -7,6 +7,8 @@
  -Backend terrain_modern selects the EXPERIMENTAL modern terrain renderer (needs B32 data prepared by tools\terrain_renderer; map clicks disabled).
  -SkipIntro cuts the start-up videos at once. -LoadSave <file.sav> goes through the real title flow into mission 1 and then loads that
  save through the original Options > Cargar gadgets (developer aid; your save is copied to slot 1 of the host overlay, the install is untouched).
+ -OrderLog writes one line per change of the order-related fields (selection, map candidate, action packet) while you click.
+ The lines of these three options go to <build root>\gw_flags.log (the console is muted once the game window opens).
  -Build defaults to the newest build\rebuild-* directory. -SmokeFrames N makes the program exit after N frames (smoke test).
  Requires GENEWARS_INSTALL_DIR (your own game files). Logs go to <build>\play.stdout.log / play.stderr.log.
 #>

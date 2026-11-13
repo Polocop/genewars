@@ -16,6 +16,7 @@
 #include <bcrypt.h>
 #include <errno.h>
 #include <setjmp.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,8 +51,17 @@ static int g_interactive_demo_mode;
    original Options > Cargar gadgets by feeding the input mailbox). Neither writes game state. */
 static int g_cli_skip_intro;
 static int g_cli_load_save;
-static int g_cli_order_log;   /* --order-log: the GW_ORDER_TRACE lines go to the console (stderr) as "TRACE order ..." */
+static int g_cli_order_log;   /* --order-log: the GW_ORDER_TRACE lines go to the flags log as "TRACE order ..." */
 static char g_cli_load_save_path[1024];
+/* Play mode sends stderr to NUL once the window opens (GW_INTERACTIVE_QUIET_CONSOLE), so the developer options write
+   their lines to their own file as well: GW_FLAGS_LOG, default gw_flags.log in the working directory (the build root). */
+static FILE *g_flags_log;
+static void gw_flag_trace(const char *fmt,...) {
+    va_list ap;
+    if(!g_flags_log) { const char *fp=getenv("GW_FLAGS_LOG"); g_flags_log=fopen(fp&&fp[0]?fp:"gw_flags.log","ab"); }
+    if(g_flags_log) { va_start(ap,fmt); vfprintf(g_flags_log,fmt,ap); va_end(ap); fflush(g_flags_log); }
+    va_start(ap,fmt); vfprintf(stderr,fmt,ap); va_end(ap);
+}
 static int g_interactive_input_focus_lost;
 static int g_fast_interactive_profile;
 static int g_interactive_output_quiet;
@@ -8632,7 +8642,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
            appends a line whenever one of them changes. Never writes guest memory. Local diagnostics only. */
         static const char *trace_path; static int trace_init; static FILE *trace_file;
         static uint32_t last_sel=0xFFFFFFFFu,last_c18=0xFFFFFFFFu,last_c37=0xFFFFFFFFu; static uint8_t last_pkt[11]; static uint32_t frames,bit0_samples;
-        if(!trace_init) { trace_init=1; trace_path=getenv("GW_ORDER_TRACE"); if(trace_path && !trace_path[0]) trace_path=NULL; if(trace_path) trace_file=fopen(trace_path,"ab"); else if(g_cli_order_log) trace_file=stderr; }
+        if(!trace_init) { trace_init=1; trace_path=getenv("GW_ORDER_TRACE"); if(trace_path && !trace_path[0]) trace_path=NULL; if(trace_path) trace_file=fopen(trace_path,"ab"); else if(g_cli_order_log) { gw_flag_trace("TRACE order_log enabled%c",10); trace_file=g_flags_log; } }
         if(trace_file && guest_memory) {
             frames++;
             const uint32_t turn=*(uint32_t *)(guest_memory+0x002F1472u), sel=*(uint32_t *)(guest_memory+0x002F1434u);
@@ -8641,7 +8651,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             const uint8_t *pkt=guest_memory+0x002F19C0u;
             if(sel!=last_sel || c18!=last_c18 || c37!=last_c37 || memcmp(pkt,last_pkt,sizeof last_pkt)!=0) {
                 fprintf(trace_file,"%sturn=%u frame=%u selectedPlSpec=%08x map18=%08x map37=%08x map1c=%02x bit0_frames_so_far=%u action=%02x packet=",
-                    trace_file==stderr?"TRACE order ":"",turn,frames,sel,c18,c37,c1c,bit0_samples,pkt[10]);
+                    trace_file==g_flags_log?"TRACE order ":"",turn,frames,sel,c18,c37,c1c,bit0_samples,pkt[10]);
                 for(unsigned i=0;i<11u;i++) fprintf(trace_file,"%02x",pkt[i]);
                 fputc('\n',trace_file); fflush(trace_file);
                 last_sel=sel; last_c18=c18; last_c37=c37; memcpy(last_pkt,pkt,sizeof last_pkt);
@@ -9645,6 +9655,7 @@ void gw_smk_video_hook(uint32_t guest_va,uint32_t g_ebp) {
         /* --skip-intro: the original loop leaves on its own ESC flag, exactly as for a key press. */
         guest_memory[0x00376AF1u]=1u;
         gw_smk_trace("TRACE smacker_video skip_intro frame=%u%c",g_smk_frames_presented,10);
+        gw_flag_trace("TRACE skip_intro video_cut frame=%u%c",g_smk_frames_presented,10);
     }
     gw_smk_pump_events();
     gw_tl_add(6,0,0,0,0,0);
@@ -14796,31 +14807,33 @@ static void inject_loadsave(uint32_t frame) {
     const uint32_t turn=*(volatile uint32_t *)(guest_memory+0x002F1472u);
     if(!g_loadsave_first) g_loadsave_first=frame+1u;
     if(frame-g_loadsave_first>7200u) {
-        fprintf(stderr,"TRACE load_save gave_up state=%u current=%08X pending=%08X Turn=%u\n",g_loadsave_state,ifc,pending,turn);
+        gw_flag_trace("TRACE load_save gave_up state=%u current=%08X pending=%08X Turn=%u\n",g_loadsave_state,ifc,pending,turn);
         g_loadsave_state=9u; return;
     }
     const uint32_t dt=frame-g_loadsave_mark;
     switch(g_loadsave_state) {
     case 0:
         if(ifc==0x0035FE9Au && !pending && turn>=60u) {
-            fprintf(stderr,"TRACE load_save mission_interface_ready current=%08X Turn=%u frame=%u\n",ifc,turn,frame);
+            gw_flag_trace("TRACE load_save mission_interface_ready current=%08X Turn=%u frame=%u\n",ifc,turn,frame);
             interactive_mailbox_key(0x01u,1,0x01u); g_loadsave_mark=frame; g_loadsave_state=1u; }
+        else if(((frame-g_loadsave_first)%600u)==0u)
+            gw_flag_trace("TRACE load_save waiting current=%08X pending=%08X Turn=%u frame=%u%c",ifc,pending,turn,frame,10);
         break;
     case 1: if(dt>=4u) { interactive_mailbox_key(0x01u,0,0x01u); g_loadsave_mark=frame; g_loadsave_state=2u; } break;
     case 2:
         if(ifc!=0x0035FE9Au && !pending && dt>=20u) {
-            fprintf(stderr,"TRACE load_save options_open current=%08X frame=%u\n",ifc,frame);
+            gw_flag_trace("TRACE load_save options_open current=%08X frame=%u\n",ifc,frame);
             g_loadsave_mark=frame; g_loadsave_state=4u; }
         else if(dt>240u && g_loadsave_tries++<2u) { g_loadsave_mark=frame; g_loadsave_state=0u; }   /* ESC lost: try again */
         break;
     case 4: if(loadsave_click(300,204,dt)) { g_loadsave_mark=frame; g_loadsave_state=5u; } break;
     case 5: if(dt>=20u) { g_loadsave_mark=frame; g_loadsave_state=6u; } break;
     case 6: if(loadsave_click(160,225,dt)) {
-            fprintf(stderr,"TRACE load_save cargar_clicked frame=%u\n",frame);
+            gw_flag_trace("TRACE load_save cargar_clicked frame=%u\n",frame);
             g_loadsave_mark=frame; g_loadsave_state=7u; } break;
     case 7:
         if(ifc==0x0035FE9Au && !pending && dt>=40u) {
-            fprintf(stderr,"TRACE load_save done current=%08X Turn=%u frame=%u\n",ifc,turn,frame);
+            gw_flag_trace("TRACE load_save done current=%08X Turn=%u frame=%u\n",ifc,turn,frame);
             g_loadsave_state=8u; }
         break;
     default: break;
@@ -15472,7 +15485,7 @@ static void title_autoclick_new_game(uint8_t *memory,uint64_t dt) {
     *(int32_t *)(memory+0x00376AA8u)=x; *(int32_t *)(memory+0x00376AACu)=y;
     if(dt>=8u && dt<14u) { memory[0x00376ABFu]=1; memory[0x00376AC2u]=1; }
     else { memory[0x00376ABFu]=0; memory[0x00376AC2u]=0; }
-    if(dt==8u) fprintf(stderr,"TRACE load_save title_click UN_JUGADOR logical=%d,%d\n",x,y);
+    if(dt==8u) gw_flag_trace("TRACE load_save title_click UN_JUGADOR logical=%d,%d\n",x,y);
 }
 
 static int run_interactive_title_menu(uint8_t *memory,uint32_t wscreen_guest) {
@@ -17000,7 +17013,7 @@ int main(int argc,char **argv) {
         if(had) { fclose(had); char bak[1100]; _snprintf(bak,sizeof bak,"%s.previo-%lu",ov,(unsigned long)GetTickCount());
             (void)MoveFileExA(ov,bak,0u); }
         if(!gw_save_copy(g_cli_load_save_path,ov)) { fprintf(stderr,"--load-save: copy to the overlay failed\n"); free(memory); return 2; }
-        fprintf(stderr,"TRACE load_save prepared source='%s' overlay='%s' size=%llu\n",g_cli_load_save_path,ov,GW_SAVE_FILE_SIZE);
+        gw_flag_trace("TRACE load_save prepared source='%s' overlay='%s' size=%llu\n",g_cli_load_save_path,ov,GW_SAVE_FILE_SIZE);
     }
     gw_dos_services_init(&vfs.dos);
     vfs.dos.major=6u; vfs.dos.minor=22u;
