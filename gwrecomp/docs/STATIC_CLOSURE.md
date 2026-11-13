@@ -8,6 +8,16 @@ python tools/static_closure_inventory.py --exe <genewars-1_1.exe> --map <genewar
     --out docs/STATIC_CLOSURE_REMAINING.tsv
 ```
 
+## Dynamic status (2026-11-13, build of commit ce275cd)
+
+One `-SkipIntro -OrderLog -LoadSave <mission 2 save>` session with real mouse input (save loaded; breed, select,
+ground order and genetic-engineer order all emitted their packets; Miles/vsb16, Smacker and timing hooks active; no
+unresolved indirect call). The LE dispatch hit telemetry, now written on a normal window close
+(`evidence/native_le_dispatch_hit_telemetry.json`), recorded 682 call-site/target pairs. **None of the 50 newly
+registered dispatch targets ran**, and the three object-4 functions (`prop_text`, `LbSpriteSetScalingData_`,
+`LbSpriteDrawUsingScalingData_`) did not run either: they are compiled, not yet executed. A differential test of the
+object-4 functions is deferred until a scaling problem shows up or they need explicit validation.
+
 ## Batch 2 completed (2026-11-13, commit 673cd44): groups A and B empty
 
 | | functions |
