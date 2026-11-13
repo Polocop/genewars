@@ -1,0 +1,510 @@
+va	size_to_next_entry	group	name	name_basis	group_basis	references
+0x00010003	13	A	?	none	ref:table-or-lifted-caller(unnamed)	code-pointer x1
+0x00013530	160	A	W?InitArray$:UnknArr01$n()v	nearest-preceding	inherit:name:cpp-method-unmatched	table x1
+0x00013800	16	A	W?InitArray$:UnknArr01$n()v	nearest-preceding	inherit:name:cpp-method-unmatched	table x1
+0x000138D0	16	A	W?InitArray$:UnknArr01$n()v	nearest-preceding	inherit:name:cpp-method-unmatched	table x1
+0x00013E10	160	A	W?InitArray$:Drone$n()v	nearest-preceding	inherit:name:bio-class	table x1
+0x00013EB0	800	A	W?InitArray$:Drone$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x1
+0x000141D0	208	A	W?InitArray$:Drone$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x9
+0x000142A0	1808	A	W?InitArray$:Drone$n()v	nearest-preceding	inherit:name:bio-class	table x1
+0x00027D70	64	A	W?Create$:InfoRequester$n(pnapnapnal$InfoRequesterStyle$$)v	nearest-preceding	inherit:name:bio-class	code-pointer x1; called-from-unlifted x1
+0x00034470	1632	C	nullsub_12	exact	name:crt/stub	none
+0x00035920	64	A	W?KillAllSounds$:SoundManager$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x1
+0x0003CCD0	176	A	W?InitArray$:Building$n()v	nearest-preceding	inherit:name:bio-class	table x1
+0x00043960	32	A	W?DoShepherd$:PlSpec$n()v	exact	name:bio-class	none
+0x00055600	80	A	W?InitArray$:Creature$n()v	nearest-preceding	inherit:name:bio-class	code-pointer x1
+0x00061640	208	A	W?SetupColorLookups$:IFCBase$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x2
+0x00061B60	1824	A	W?InterpolateAlts$:TopoGrid$n(ulululululululullpn[9]ucc)v	exact	name:bio-class	called-from-unlifted x1
+0x00062280	1728	A	W?Fractalize$:TopoGrid$n(ucl)v	exact	name:bio-class	called-from-unlifted x1
+0x00062A10	336	A	W?Create$:TopoGrid$n($XY$$ucll)v	exact	name:bio-class	called-from-unlifted x1
+0x00063A40	96	A	W?Create$:TopoMorpher$n($XY$$ucll)pn$TopoGrid$$	exact	name:bio-class	none
+0x00064880	304	A	W?Update$:TopoMorpher$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x1
+0x00066FD0	96	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
+0x00067720	224	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
+0x00067800	240	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
+0x00068250	144	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
+0x00068CB0	16	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
+0x00069D10	160	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
+0x00069DB0	32	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x8
+0x00069DF0	32	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x8
+0x0006A000	48	A	W?find_mapxy$n(pnspnsll)v	nearest-preceding	inherit:name:bio-function	table x1
+0x0006C490	752	C	nullsub_11	nearest-preceding	inherit:name:crt/stub	table x1
+0x0006EC20	80	C	nullsub_11	nearest-preceding	inherit:name:crt/stub	table x1
+0x0006ED90	16	C	nullsub_11	nearest-preceding	inherit:name:crt/stub	table x4
+0x0006EDD0	16	C	nullsub_13	nearest-preceding	inherit:name:crt/stub	table x4
+0x00072760	48	C	nullsub_16	nearest-preceding	inherit:name:crt/stub	code-pointer x3
+0x00072790	48	C	nullsub_16	nearest-preceding	inherit:name:crt/stub	code-pointer x1
+0x00072880	224	C	nullsub_16	nearest-preceding	inherit:name:crt/stub	called-from-unlifted x1
+0x00072960	720	A	W?PlugIn$:IFCCustom$n()v	exact	name:bio-class	table x1
+0x00072DB0	3120	A	W?PlugIn$:IFCCustom$n()v	nearest-preceding	inherit:name:bio-class	table x1
+0x000739E0	2912	A	W?PlugIn$:IFCCustom$n()v	nearest-preceding	inherit:name:bio-class	table x1
+0x00074660	1120	A	W?PlugIn$:IFCCustom$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x1
+0x0007F940	848	A	W?SelectAmbientSound$:MapDisplay$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x1
+0x0007FC90	1104	A	W?SelectAmbientSound$:MapDisplay$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x4
+0x000800E0	304	A	W?SelectAmbientSound$:MapDisplay$n()v	nearest-preceding	inherit:name:bio-class	called-from-unlifted x2
+0x00083480	16	C	_get_osfhandle_	exact	name:dos-hardware-handler/CRT	table x1
+0x00083490	16	A	_os_handle_	exact	ref:table-or-lifted-caller	table x1
+0x00086290	96	A	W?InitArray$:Effect$n()v	nearest-preceding	inherit:name:bio-class	table x1
+0x000920A0	208	C	LbMemoryGrow_	exact	name:dos-platform	none
+0x00093F30	1264	A	main_	exact	name:bio-symbol	called-from-unlifted x1
+0x00094420	65	C	__full_io_exit	exact	name:crt/stub	none
+0x00094461	79	C	fcloseall	exact	name:crt/stub	none
+0x00094520	1440	A	W?setup_stuff$n()v	exact	name:cpp-free-function-unmatched	none
+0x00095A20	288	A	W?reset_game$n()v	nearest-preceding	inherit:name:bio-function	table x1
+0x00095C40	16	C	_get_osfhandle__0	exact	name:dos-hardware-handler/CRT	table x1
+0x00095CC0	16	C	nullsub_15	exact	name:crt/stub	table x1
+0x00095CD0	16	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
+0x00095CE0	16	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
+0x00095CF0	16	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
+0x00095D00	16	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
+0x00095D10	16	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
+0x00095D20	16	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
+0x00095EC0	64	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
+0x00095F00	16	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
+0x00095F10	547	B	LbFadeTableGenerate_	exact	name:engine-lib	none
+0x00096133	37	C	unknown_libname_9	exact	name:crt/stub	none
+0x000962A2	78	B	lbSqrTable	exact	name:engine-prefix	code-pointer x1
+0x00097810	128	B	GetSoundDriver_	nearest-preceding	inherit:name:engine-lib	code-pointer x1
+0x0009869B	104	U	close_file_	exact	no-name-evidence	called-from-unlifted x1
+0x00098703	66	A	freopen_	exact	name:bio-symbol	called-from-unlifted x1
+0x0009FEB0	60	C	LbScreenClearGraphicsWindow_	exact	name:dos-platform	none
+0x0009FF68	20	C	LbScreenSetDoubleBuffering_	exact	name:dos-platform	none
+0x0009FF7C	20	C	LbScreenSetWScreenInVideo_	exact	name:dos-platform	none
+0x000A0090	440	C	LbScreenSwapBoxClear_	exact	name:dos-platform	none
+0x000A0248	256	C	LbScreenSwapClear_	exact	name:dos-platform	none
+0x000A0348	352	C	LbScreenSwapBox_	exact	name:dos-platform	none
+0x000A04A8	848	C	LbScreenDrawHVLineDirect_	exact	name:dos-platform	none
+0x000A0FB0	48	B	W?DeInitSoundBank$n()v	exact	name:engine-function	none
+0x000A12C0	640	B	W?cbfadesample$n(ul)v	exact	name:engine-function	code-pointer x1
+0x000A1E74	864	C	W?MouseHandler256$f(iii)v	exact	name:dos-hardware-handler/CRT	code-pointer x1
+0x000A2CCC	260	B	LbPaletteDraw_	exact	name:engine-lib	none
+0x000A9F58	18	C	__wcpp_2_ctor_array__	nearest-preceding	inherit:name:crt/stub	table x27
+0x000AA6A4	524	C	atoi_	nearest-preceding	inherit:name:crt/stub	code-pointer x8
+0x000AB0AD	3	C	unknown_libname_3	exact	name:crt/stub	none
+0x000AB19C	828	C	atol_	nearest-preceding	inherit:name:crt/stub	called-from-unlifted x1
+0x000AB708	72	C	LbNetworkSessionActive_	exact	name:network/IPX	none
+0x000AB780	48	C	LbNetworkOpenUpListeners_	exact	name:network/IPX	none
+0x000ABC94	52	C	LbNetworkSetupIPXAddress_	exact	name:network/IPX	called-from-unlifted x1
+0x000ABFF4	36	C	LbNetworkSendNoWait_	exact	name:network/IPX	none
+0x000AC018	36	C	LbNetworkReceiveNoWait_	exact	name:network/IPX	none
+0x000AC134	8	C	LbNetworkReadConfig_	exact	name:network/IPX	called-from-unlifted x1
+0x000AC17C	12	C	LbNetworkSetSessionCreateFunction_	exact	name:network/IPX	called-from-unlifted x1
+0x000AC188	12	C	LbNetworkSetSessionJoinFunction_	exact	name:network/IPX	called-from-unlifted x1
+0x000AC194	12	C	LbNetworkSetSessionExchangeFunction_	exact	name:network/IPX	none
+0x000AC1A0	12	C	LbNetworkSetSessionInitFunction_	exact	name:network/IPX	none
+0x000AC1AC	12	C	LbNetworkSetModemInitFunction_	exact	name:network/IPX	none
+0x000AC1B8	12	C	LbNetworkSetSessionDialFunction_	exact	name:network/IPX	called-from-unlifted x1
+0x000AC1C4	12	C	LbNetworkSetSessionAnswerFunction_	exact	name:network/IPX	called-from-unlifted x1
+0x000AC1D0	12	C	LbNetworkSetSessionHangUpFunction_	exact	name:network/IPX	none
+0x000AC1DC	28	C	LbNetworkSetTimeoutSec	exact	name:network/IPX	none
+0x000AD046	21	C	W?lock_code_start$n()v	exact	name:network/IPX	code-pointer x3
+0x000AD05B	54	C	W?com_handler0$f()v	exact	name:dos-hardware-handler/CRT	code-pointer x2
+0x000AD091	54	C	W?com_handler1$f()v	exact	name:dos-hardware-handler/CRT	code-pointer x2
+0x000AD0C7	54	C	W?com_handler2$f()v	exact	name:dos-hardware-handler/CRT	code-pointer x2
+0x000AD0FD	54	C	W?com_handler3$f()v	exact	name:dos-hardware-handler/CRT	code-pointer x2
+0x000AD133	210	C	W?handle_com$n(pn$TbSerialDev$$)v	exact	name:network/IPX	called-from-unlifted x4
+0x000AD205	21	C	W?lock_code_end$n()v	exact	name:network/IPX	code-pointer x1
+0x000AD3AF	67	C	W?read_a_line$n(pn$__iobuf$$pna)v	exact	name:network/IPX	called-from-unlifted x8
+0x000AD3F2	301	C	LbModemReadConfig_	exact	name:network/IPX	none
+0x000ADB21	79	A	write_string_	nearest-preceding	ref:table-or-lifted-caller(unnamed)	code-pointer x1
+0x000ADB70	47	U	write_string_	nearest-preceding	unnamed,no-reference-from-lifted-or-tables	called-from-unlifted x2
+0x000ADB9F	130	U	write_string_	nearest-preceding	unnamed,no-reference-from-lifted-or-tables	called-from-unlifted x1
+0x000ADC21	218	A	write_string_	nearest-preceding	ref:table-or-lifted-caller(unnamed)	code-pointer x1
+0x000ADD35	59	U	write_string_	nearest-preceding	unnamed,no-reference-from-lifted-or-tables	called-from-unlifted x1
+0x000ADD70	161	C	strcmp_	exact	name:crt/stub	called-from-unlifted x5
+0x000AE910	32	B	SoundProgressLog__0	exact	name:engine-prefix	none
+0x000AF698	44	C	LbKeyboard_	exact	name:dos-platform	none
+0x000AF708	36	C	LbIKeyboardClose_	exact	name:dos-platform	none
+0x000AF72C	104	C	LbDosKeyboard_	exact	name:dos-platform	called-from-unlifted x1
+0x000AF794	332	C	W?KInt$f()v	exact	name:dos-hardware-handler/CRT	code-pointer x1
+0x000AF96C	116	C	start	exact	name:entry/CRT-startup	none
+0x000AF9E0	4	C	start	nearest-preceding	inherit:name:entry/CRT-startup	code-pointer x1
+0x000AFBFB	2	C	__exit_	exact	name:crt/stub	none
+0x000AFC41	3	C	__GETDS	nearest-preceding	inherit:name:crt/stub	code-pointer x2
+0x000AFE76	101	C	__set_binary_	exact	name:crt/stub	none
+0x000AFFF0	112	B	_TIME_callback	exact	name:engine-lib	code-pointer x1
+0x000B0630	160	B	_AIL_set_USE16_ISR	exact	name:engine-lib	none
+0x000B3590	560	B	_AIL_set_digital_master_volume	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x2
+0x000B5050	288	B	_AIL_sequence_status	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x1
+0x000B5680	288	B	_AIL_sequence_status	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x1
+0x000B57A0	880	B	_AIL_sequence_status	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x1
+0x000B60E0	128	B	_AIL_destroy_wave_synthesizer	exact	name:engine-lib	none
+0x000B6160	44	B	AILDEBUG_end_	exact	name:engine-lib	code-pointer x2
+0x000BA267	5	C	__set_EDOM_	exact	name:crt/stub	called-from-unlifted x1
+0x000BA278	7	C	__set_ERANGE_	exact	name:crt/stub	called-from-unlifted x3
+0x000BA27F	16	C	__set_EINVAL_	exact	name:crt/stub	none
+0x000BA37A	30	C	__purgefp_	exact	name:crt/stub	none
+0x000BAAF4	54	C	__delay_	exact	name:crt/stub	none
+0x000BAEC4	60	C	rename_	exact	name:dos-platform	none
+0x000BB0B4	184	B	LbTextSetClipWindow_	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x2
+0x000BB16C	1876	B	LbTextSetClipWindow_	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x1
+0x000BB8C0	592	B	LbTextSetClipWindow_	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x11
+0x000BBB60	496	C	int386x_	nearest-preceding	inherit:name:crt/stub	code-pointer x1
+0x000BBE44	48	C	__sys_init_387_emulator	exact	name:crt/stub	none
+0x000BBFC9	122	C	__sys_fini_387_emulator	exact	name:crt/stub	none
+0x000BC043	59	U	unhook_pharlap	exact	no-name-evidence	called-from-unlifted x1
+0x000BC07E	33	U	_reset_EM_MP_bits	exact	no-name-evidence	called-from-unlifted x2
+0x000BC09F	5	C	__save_8087_	exact	name:crt/stub	code-pointer x1
+0x000BC0A4	4	C	__rest_8087_	exact	name:crt/stub	code-pointer x1
+0x000BC0D9	10	C	_fpreset_	exact	address>=CRT-runtime-region	none
+0x000BC129	1	C	nullsub_9	exact	name:crt/stub	table x1
+0x000BC12A	26	C	strrchr_	exact	name:crt/stub	none
+0x000BC1AA	42	C	__clock_	exact	name:crt/stub	none
+0x000BC2A0	25	C	_mbsninc_	exact	address>=CRT-runtime-region	none
+0x000BC2B9	69	C	__mbsninc_	exact	name:crt/stub	none
+0x000BC2FE	81	C	_mbscat_	exact	address>=CRT-runtime-region	none
+0x000BC34F	31	C	_mbscpy_	exact	address>=CRT-runtime-region	none
+0x000BC36E	65	C	_mbsdup_	exact	address>=CRT-runtime-region	none
+0x000BC3AF	93	C	_mbsncat_	exact	address>=CRT-runtime-region	none
+0x000BC40C	242	C	_mbsnbcat_	exact	address>=CRT-runtime-region	none
+0x000BC60F	26	C	_mbvtop_	exact	address>=CRT-runtime-region	none
+0x000BC629	52	C	__mbvtop_	exact	name:crt/stub	none
+0x000BCB20	120	C	CallIPX_	exact	name:network/IPX	none
+0x000BCB98	84	C	CallRealModeInterrupt_	exact	name:network/IPX	none
+0x000BCBEC	88	C	setup_bullfrog_header_	exact	name:network/IPX	none
+0x000BD470	528	C	ipx_create_session_	nearest-preceding	inherit:name:network/IPX	called-from-unlifted x1
+0x000BE544	440	C	W?ipx_send_datagram_to_all$n(pnucluc)l	exact	name:network/IPX(radica)	none
+0x000BE6FC	80	C	ipx_backup_last_packet_	exact	name:network/IPX	none
+0x000BED7C	40	C	ipx_add_player_to_session_	exact	name:network/IPX	none
+0x000BEDA4	64	C	ipx_store_players_details_	exact	name:network/IPX	none
+0x000BEDF4	16	C	ipx_openup_listeners_	exact	name:network/IPX	called-from-unlifted x1
+0x000BEFA8	88	C	clear_ipx_info_	exact	name:network/IPX	none
+0x000BF28C	92	C	W?send_old_player_datagram$n(l)v	exact	name:network/IPX(radica)	none
+0x000BF2E8	108	C	W?increment_players_datagram_packet_count$n(l)v	exact	name:network/IPX(radica)	none
+0x000BFC00	324	C	ipx_send_packet_to_player_nowait_	exact	name:network/IPX	called-from-unlifted x1
+0x000BFD44	208	C	ipx_receive_packet_from_player_nowait_	exact	name:network/IPX	called-from-unlifted x1
+0x000BFE14	72	C	is_header_valid_	exact	name:network/IPX	none
+0x000BFE5C	20	C	W?run_create_function$n()l	exact	name:network/IPX	none
+0x000BFE70	16	C	W?run_exchange_function$n()l	exact	name:network/IPX	none
+0x000BFE80	16	C	W?run_fld2C_function$n()l	exact	address>=CRT-runtime-region	none
+0x000BFE90	16	C	W?run_join_function$n()l	exact	name:network/IPX	none
+0x000C0570	724	C	radica_session_list	exact	name:network/IPX(radica)	called-from-unlifted x1
+0x000C09F8	228	C	radica_unkn_func_18	exact	name:network/IPX(radica)	none
+0x000C0ADC	60	C	radica_unkn_func_17	exact	name:network/IPX(radica)	none
+0x000C106C	252	C	radica_unused_unkn_func_12	exact	name:network/IPX(radica)	none
+0x000C1168	832	C	radica_unkn_func_15	exact	name:network/IPX(radica)	none
+0x000C14BC	20	C	radica_unkn_func_15	nearest-preceding	inherit:name:network/IPX(radica)	called-from-unlifted x1
+0x000C150C	8	C	radica_get_player_number_	nearest-preceding	inherit:name:network/IPX(radica)	called-from-unlifted x1
+0x000C1514	172	C	radica_unkn_func_14	exact	name:network/IPX(radica)	none
+0x000C1CE0	20	C	W?run_create_function$n()l_2	exact	name:network/IPX	none
+0x000C1CF4	28	C	W?run_join_function$n()l_2	exact	name:network/IPX	none
+0x000C2071	29	C	_dos_gettime_	nearest-preceding	inherit:name:dos/crt-pattern	table x2
+0x000C3518	92	C	__wcpp_2_module_dtor__	exact	name:crt/stub	table x1
+0x000C35DA	365	C	cli_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000C3747	8	C	cli_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000C374F	94	C	cli_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000C388D	11	C	__wcpp_2_fun_register__	exact	name:crt/stub	none
+0x000C4110	112	B	SMACKSOUNDUSEMSS	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000C42E0	16	B	SMACKSOUNDUSEMSS	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000C77A0	4	B	SMACKOPEN	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000C77A4	12	B	SMACKOPEN	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000C77B0	96	B	SMACKOPEN	nearest-preceding	inherit:name:smacklib	called-from-unlifted x17
+0x000C7A10	320	B	_DLL_size	exact	name:engine-lib	called-from-unlifted x1
+0x000C7B50	1392	B	_DLL_load	exact	name:engine-lib	none
+0x000C80C0	16	B	_FILE_error	exact	name:engine-lib	none
+0x000C81F0	144	B	_FILE_write	exact	name:engine-lib	none
+0x000C8280	132	B	_FILE_append	exact	name:engine-lib	none
+0x000C86CD	79	C	__CMain	exact	name:crt/stub	called-from-unlifted x1
+0x000C8A5E	294	C	__fatal_runtime_error_	nearest-preceding	inherit:name:crt/stub	code-pointer x1
+0x000C8DC8	7	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x2
+0x000C8DCF	15	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
+0x000C8DDE	6	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
+0x000C8DE4	22	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
+0x000C8DFA	10	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
+0x000C8E04	7	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
+0x000C8E0B	18	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
+0x000C8E1D	534	B	_AIL_API_set_USE16_ISR	exact	name:engine-lib	called-from-unlifted x1
+0x000C9078	4	B	_AIL_API_disable_interrupts	exact	name:engine-lib	none
+0x000C94D0	80	B	_AIL_API_set_timer_frequency	nearest-preceding	inherit:name:engine-lib	code-pointer x1
+0x000C9E80	135	B	_AIL_API_shutdown	nearest-preceding	inherit:name:engine-lib	code-pointer x2
+0x000CA0D1	25	C	_ctime_	exact	address>=CRT-runtime-region	none
+0x000CA0EA	5	C	ctime_	exact	address>=CRT-runtime-region	none
+0x000CACC0	160	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000CB930	32	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000CBB10	192	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x2
+0x000CBBD0	48	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x2
+0x000CBEF0	16	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000CBFE0	368	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000CC250	48	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x2
+0x000CC4F0	80	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000CC540	768	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x3
+0x000CD2F0	1744	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000CDA90	96	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000CED50	112	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000CEED0	32	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000CEEF0	112	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000CF370	272	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x2
+0x000CF480	512	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x3
+0x000CF680	48	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x2
+0x000CF6B0	464	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000CF880	48	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x3
+0x000CF8B0	128	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x2
+0x000CF930	272	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x3
+0x000CFA40	48	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000CFA70	1440	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000D0010	112	B	_AIL_API_destroy_wave_synthesizer	exact	name:engine-lib	called-from-unlifted x1
+0x000D0080	42	B	_AIL_API_destroy_wave_synthesizer	nearest-preceding	inherit:name:engine-lib	code-pointer x2
+0x000D00AA	1	C	_Alphabet	exact	address>=CRT-runtime-region	code-pointer x1
+0x000D00AB	36	C	a123456789abcde	exact	address>=CRT-runtime-region	none
+0x000D0146	1	C	_Alphabet_0	exact	address>=CRT-runtime-region	code-pointer x1
+0x000D0147	36	C	a123456789abcde_0	exact	address>=CRT-runtime-region	none
+0x000D1CE3	19	C	mem_putc__0	exact	address>=CRT-runtime-region	code-pointer x1
+0x000D1D0B	33	C	chdir_	exact	name:dos-platform	called-from-unlifted x2
+0x000D1D2C	33	C	mkdir_	exact	name:dos-platform	none
+0x000D1D4D	136	C	getcwd_	exact	name:dos-platform	called-from-unlifted x1
+0x000D1DD5	330	C	stat_	exact	name:dos-platform	none
+0x000D1F1F	112	C	at2mode_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000D1F8F	33	C	rmdir_	exact	name:dos-platform	none
+0x000D2033	12	C	__full_io_exit_	exact	name:crt/stub	table x1
+0x000D203F	5	C	fcloseall_	exact	name:crt/stub	none
+0x000D2044	88	C	docloseall_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000D21C3	33	C	unlink_	exact	address>=CRT-runtime-region	none
+0x000D21F6	16	C	__CHK	exact	name:crt/stub	none
+0x000D2206	3	C	__GRO	exact	name:crt/stub	none
+0x000D2209	30	C	__STK	exact	name:crt/stub	called-from-unlifted x1
+0x000D2293	77	C	_DoINTR_	exact	address>=CRT-runtime-region	none
+0x000D2314	48	C	_DoINTR_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x2
+0x000D2614	265	C	_EFG_Format_	exact	address>=CRT-runtime-region	code-pointer x1
+0x000D271D	95	C	forcedecpt_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000D277C	16	C	__cnvs2d_	exact	name:crt/stub	code-pointer x1
+0x000D278C	4	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x1
+0x000D2790	4	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x1
+0x000D2794	2	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x1
+0x000D2796	2	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x16
+0x000D2798	2	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x18
+0x000D279A	76	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x31
+0x000D27E6	2	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x34
+0x000D27E8	4	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x2
+0x000D27EC	2	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x2
+0x000D27EE	72	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x14
+0x000D2836	4	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x2
+0x000D283A	714	C	__cnvs2d_	nearest-preceding	inherit:name:crt/stub	code-pointer x2
+0x000D2B04	36	C	__int7_pl3	exact	name:crt/stub	code-pointer x1
+0x000D2B28	76	C	__int7_X32VM	exact	name:crt/stub	none
+0x000D2B74	36	C	__int7	exact	name:crt/stub	code-pointer x4
+0x000D2B98	308	C	__int7	nearest-preceding	inherit:name:crt/stub	code-pointer x2; called-from-unlifted x3
+0x000D2CCC	60	C	__int7	nearest-preceding	inherit:name:crt/stub	code-pointer x1
+0x000D2D08	160	C	__int7	nearest-preceding	inherit:name:crt/stub	code-pointer x1
+0x000D2DA8	5382	C	__int7	nearest-preceding	inherit:name:crt/stub	called-from-unlifted x4
+0x000D42AE	14	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x14
+0x000D42BC	42	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x7
+0x000D42E6	48	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x9
+0x000D4316	364	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x15
+0x000D4482	153	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x15
+0x000D451B	42	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x15
+0x000D4545	427	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x7
+0x000D46F0	42	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x8
+0x000D471A	337	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x16
+0x000D486B	5	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x6
+0x000D4870	106	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000D48DA	17	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x19
+0x000D48EB	53	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000D4920	128	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x9
+0x000D49A0	127	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x2
+0x000D4A1F	199	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x2
+0x000D4AE6	69	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x9
+0x000D4B2B	128	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x2
+0x000D4BAB	307	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x6
+0x000D4CDE	90	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000D4D38	182	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000D4DEE	355	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000D4F51	102	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x2
+0x000D4FB7	123	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x2
+0x000D5032	168	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000D50DA	30	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000D50F8	40	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000D5120	25	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000D5139	67	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000D517C	466	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000D534E	90	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000D53A8	90	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000D5402	18	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000D5414	503	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x3
+0x000D560B	10	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x2
+0x000D5615	13	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x2
+0x000D5622	14	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000D5630	40	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000D5658	468	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000D582C	236	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000D5918	82	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x4
+0x000D596A	72	C	funcs_D4115	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x2
+0x000D5A86	89	C	__unhook387	exact	name:crt/stub	called-from-unlifted x2
+0x000D5BD9	13	C	__wcpp_2_base_deregister__	exact	name:crt/stub	none
+0x000D5C53	82	C	_mbsnextc_	exact	address>=CRT-runtime-region	none
+0x000D5CA5	70	C	_mbsinc_	exact	address>=CRT-runtime-region	none
+0x000D5CEB	134	C	_mbsdec_	exact	address>=CRT-runtime-region	none
+0x000D5D71	63	C	strncat_	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000D5EA9	55	C	fini_	exact	address>=CRT-runtime-region	table x1
+0x000D6E44	74	C	W?nextDtorPosn$n(pn$__1j2o3bSTAB_TRAVERSE$$)pn$__7a4u3RO_STATE$$	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000D6E8E	74	C	W?dtorComponent$n(pn$__iaap9DTOR_CMD$$uipn$rw_dtreg$$ui)v	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000D6ED8	304	C	W?destruct_traverse$n(uipn$rw_dtreg$$i)v	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000D7008	10	C	__wcpp_2_destruct_internal__	exact	name:crt/stub	called-from-unlifted x3
+0x000D7012	2	C	__wcpp_2_destruct_all__	exact	name:crt/stub	called-from-unlifted x1
+0x000D7014	18	C	__wcpp_2_destruct__	exact	name:crt/stub	none
+0x000D7026	2	C	__wcpp_2_destruct_after_all__	exact	name:crt/stub	none
+0x000D7028	15	C	__wcpp_2_destruct_after__	exact	name:crt/stub	none
+0x000D7037	16	C	unknown_libname_13	exact	name:crt/stub	none
+0x000D7047	200	C	sbrk_	exact	address>=CRT-runtime-region	none
+0x000D802B	11	C	nullsub_7	nearest-preceding	inherit:name:crt/stub	called-from-unlifted x1
+0x000D82B4	84	C	__CacheOSTZ_	exact	name:crt/stub	none
+0x000D8308	24	C	tryOSTimeZone_	exact	address>=CRT-runtime-region	none
+0x000D8799	30	C	_gmtime_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000D87B7	13	C	gmtime_	exact	address>=CRT-runtime-region	none
+0x000DBF88	7	C	_dos_write_	exact	name:dos/crt-pattern	none
+0x000DBF94	74	C	strpbrk_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DBFDE	102	C	_d2ttime_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DC044	20	C	strchr_	exact	name:crt/stub	called-from-unlifted x1
+0x000DC058	57	C	__HasLeadingZero_	exact	name:crt/stub	called-from-unlifted x1
+0x000DC091	6	C	_SetMaxPrec_	exact	address>=CRT-runtime-region	none
+0x000DC097	163	C	DoEFormat_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DC13A	99	C	DoFFormat_	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000DC19D	113	C	AdjField_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DC20E	587	C	_FtoS_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DC459	499	C	strtod_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DC64C	23	C	W?callTerminate$n(pn$thread_ctl$$)v	exact	address>=CRT-runtime-region	called-from-unlifted x3
+0x000DC674	156	C	W?typesigIndex$n(pn$dispatch_exc$$uipnpn$rt_type_sig$$)ui	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000DC710	39	C	W?dispatchableFnExc$n(pn$dispatch_exc$$pn$__iaap9DTOR_CMD$$)i	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DC737	22	C	W?fneDispatch$n(pn$dispatch_exc$$)v	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DC74D	38	C	W?dispatchableCatch$n(pn$dispatch_exc$$pn$__iaap9DTOR_CMD$$)i	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DC773	14	C	W?throwCnvSig$n(pn$dispatch_exc$$)pn$rt_type_sig$$	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000DC781	163	C	W?excToBePopped$n(pn$thread_ctl$$)i	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000DC824	318	C	W?catchDispatch$n(pn$dispatch_exc$$)v	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DC962	61	C	W?catchDone$n(pn$thread_ctl$$pn$active_exc$$)v	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000DC99F	33	C	__wcpp_2_catch_done__	exact	name:crt/stub	none
+0x000DC9C0	37	C	W?unwindExc$n(pn$dispatch_exc$$)v	exact	address>=CRT-runtime-region	called-from-unlifted x3
+0x000DC9E5	86	C	W?unwindStack$n(pn$dispatch_exc$$)v	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000DCA3B	257	C	W?dispatchable$n(pn$dispatch_exc$$pn$rw_dtreg$$)$$TE$$	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DCB3C	132	C	W?getActiveExc$n(pn$thread_ctl$$)pn$active_exc$$	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000DCBC0	57	C	W?dispatch_init$n(pn$dispatch_exc$$pn$throw_ro$$i)v	exact	name:dos/crt-pattern	called-from-unlifted x1
+0x000DCBF9	89	C	__wcpp_2_dispatchable__	exact	name:crt/stub	called-from-unlifted x1
+0x000DCC52	126	C	__wcpp_2_save_exc__	exact	name:crt/stub	called-from-unlifted x1
+0x000DCCD0	177	C	__wcpp_2_dispatch__	exact	name:crt/stub	called-from-unlifted x1
+0x000DCD81	71	C	W?processThrow$n(pnvpn$throw_ro$$i)v	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000DCDC8	16	C	__wcpp_2_rethrow__	exact	name:crt/stub	none
+0x000DCDD8	10	C	__wcpp_2_throw__	exact	name:crt/stub	none
+0x000DCDE2	8	C	__wcpp_2_throw_zero__	exact	name:crt/stub	none
+0x000DCDEA	75	C	W?longjmpExcPop$n(pn$dispatch_exc$$pn$rw_dtreg$$)v	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DCE35	160	C	W?longjmpDtoring$n(pfv)v	exact	address>=CRT-runtime-region	code-pointer x1
+0x000DCF9C	1104	C	W?longjmpInit$n()v	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000DE4A6	1569	C	W?longjmpInit$n()v	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000DEAC7	42	C	W?longjmpInit$n()v	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000DEAF1	1626	C	W?longjmpInit$n()v	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000DF1C8	393	C	W?longjmpInit$n()v	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x3
+0x000DF351	6	C	W?longjmpInit$n()v	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000DF357	251	C	W?longjmpInit$n()v	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000DF510	84	C	W?longjmpInit$n()v	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000DF564	72	C	W?longjmpInit$n()v	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000DF5AC	920	C	W?longjmpInit$n()v	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x2
+0x000DF944	26	C	W?longjmpInit$n()v	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
+0x000DFC28	46	C	__wcpp_2_stab_entry__	exact	name:crt/stub	called-from-unlifted x3
+0x000DFC56	33	C	__wcpp_2_stab_trav_init__	exact	name:crt/stub	called-from-unlifted x4
+0x000DFC77	5	C	__wcpp_2_stab_trav_comp__	exact	name:crt/stub	called-from-unlifted x1
+0x000DFC7C	133	C	__wcpp_2_stab_trav_next__	exact	name:crt/stub	called-from-unlifted x5
+0x000DFD01	147	C	__wcpp_2_stab_trav_move__	exact	name:crt/stub	called-from-unlifted x5
+0x000DFD94	45	C	__wcpp_2_dtor_array__	exact	name:crt/stub	called-from-unlifted x1
+0x000DFEE2	146	C	__Nan_Inf_	exact	name:crt/stub	called-from-unlifted x2
+0x000DFF74	67	C	IF@LOG	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DFFB7	4	C	IF@LOG2	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000DFFBB	4	C	IF@LOG10	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000DFFBF	12	A	log_	exact	name:bio-symbol	none
+0x000DFFCB	12	C	log10_	exact	address>=CRT-runtime-region	none
+0x000DFFD7	12	C	log2_	exact	address>=CRT-runtime-region	none
+0x000DFFE3	60	C	floor_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000E001F	65	C	_Scale_	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000E0060	285	C	_Scale10V_	exact	address>=CRT-runtime-region	called-from-unlifted x3
+0x000E017D	477	C	__cvt_	exact	name:crt/stub	called-from-unlifted x1
+0x000E035A	144	C	unknown_libname_4	exact	name:crt/stub	none
+0x000E03EA	75	C	unknown_libname_5	exact	name:crt/stub	called-from-unlifted x1
+0x000E0435	83	C	unknown_libname_5	nearest-preceding	inherit:name:crt/stub	called-from-unlifted x2
+0x000E090B	26	C	_nrealloc_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
+0x000E0B0C	28	C	_chain_intr_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000E0B28	30	C	__wcpp_2_bit_test__	exact	name:crt/stub	called-from-unlifted x2
+0x000E0B46	60	C	__log87_err_	exact	name:crt/stub	called-from-unlifted x1
+0x000E0B82	26	C	modf_	exact	address>=CRT-runtime-region	called-from-unlifted x2
+0x000E0B9C	58	C	__CmpBigInt	exact	name:crt/stub	called-from-unlifted x1
+0x000E0BD6	107	C	__Rnd2Int	exact	name:crt/stub	called-from-unlifted x1
+0x000E0C41	106	C	__Bin2String	exact	name:crt/stub	called-from-unlifted x1
+0x000E0CAB	181	C	__Bin2String	nearest-preceding	inherit:name:crt/stub	called-from-unlifted x1
+0x000E0D60	4	C	__Bin2String	nearest-preceding	inherit:name:crt/stub	called-from-unlifted x1
+0x000E0E7B	10	C	__fdiv_fpr	exact	name:crt/stub	none
+0x000E0EB3	28	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E0EEA	5	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E0EEF	28	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E0F1B	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E0F2F	16	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E0F3F	32	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E0F7E	5	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E0FA3	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E0FCF	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1022	5	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1027	32	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1047	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E10EB	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E10FF	24	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1117	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E112B	32	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E114B	5	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1150	26	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E118F	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E11A3	24	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E11BB	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E11CF	32	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E11EF	5	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E11F4	26	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E120E	5	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1213	32	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1233	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1247	24	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E125F	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1273	32	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1293	5	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1298	26	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E12B2	5	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E12B7	32	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E12D7	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E12EB	24	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1303	20	C	__fdiv_fpr	nearest-preceding	inherit:name:crt/stub	table x1
+0x000E1317	19	C	__fdivp_sti_st	exact	name:crt/stub	called-from-unlifted x4
+0x000E132A	19	C	__fdivrp_sti_st	exact	name:crt/stub	called-from-unlifted x4
+0x000E133D	19	C	__fdiv_chk	exact	name:crt/stub	none
+0x000E1350	76	C	__fdiv_m32	exact	name:crt/stub	none
+0x000E139C	76	C	__fdiv_m64	exact	name:crt/stub	called-from-unlifted x2
+0x000E13E8	76	C	__fdiv_m32r	exact	name:crt/stub	none
+0x000E1434	76	C	__fdiv_m64r	exact	name:crt/stub	none
+0x000E1480	112	C	frexp_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000E14F0	76	C	W?terminate$n()v	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000E153C	52	C	W?unexpected$n()v	exact	address>=CRT-runtime-region	none
+0x000E1579	10	C	__math1err_	exact	name:crt/stub	called-from-unlifted x1
+0x000E1583	219	C	__math2err_	exact	name:crt/stub	called-from-unlifted x1
+0x000E16B3	6	C	_set_matherr_	exact	address>=CRT-runtime-region	none
+0x000E16B9	72	C	__rterrmsg_	exact	name:crt/stub	called-from-unlifted x1
+0x000E1701	47	C	_matherr_	exact	address>=CRT-runtime-region	called-from-unlifted x1
+0x000E1730	5	C	__matherr	exact	name:crt/stub	table x1
+0x000E1735	31	C	__get_std_stream_	exact	name:crt/stub	called-from-unlifted x1
+0x000E1754	12	C	matherr__	exact	address>=CRT-runtime-region	none
+0x000E1760	422	B	prop_text	exact	name:engine-lib	none
+0x000E8DF0	6264	B	LbSpriteDrawUsingScalingData_	exact	name:engine-lib	none
+0x000EA668	920	B	LbSpriteSetScalingData_	exact	name:engine-lib	none
+0x000EAA94	12	B	j_SmackInternal002	exact	name:smacklib	none
+0x000EAD84	12	B	j_SmackInternal003	exact	name:smacklib	none
+0x000EAE85	11	B	j_SmackGetSizeTables	exact	name:smacklib	none
+0x000EAE96	10	B	j_SmackDoTables	exact	name:smacklib	none
+0x000EB111	15	B	j_SmackInternal007_sub1	exact	name:smacklib	none
+0x000EB120	177	B	_SmackInternal007_sub1	exact	name:smacklib	none
+0x000EB1D1	15	B	j_SmackInternal005	exact	name:smacklib	none
+0x000EB240	80	B	_SmackInternal007	exact	name:smacklib	code-pointer x1
+0x000EB290	755	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000EB583	29	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000EB5A0	80	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000EB5F0	1955	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000EBD93	29	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000EBDB0	80	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000EBE00	323	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000EBF43	19	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
+0x000EBF56	10	B	j_SmackInternalSwitch1_case000	exact	name:smacklib	none
+0x000EDEE7	9	B	j_SmackDoPCM	exact	name:smacklib	none
+0x000EE718	8	B	j_SmackGetSizeDeltas	exact	name:smacklib	none
+0x000EE737	9	B	j_SmackGetRect	exact	name:smacklib	none
+0x000EE740	273	B	_SmackGetRect	exact	name:smacklib	none
+0x000EE851	15	B	j_SmackRemapTables	exact	name:smacklib	none
+0x000EE860	208	B	_SmackRemapTables	exact	name:smacklib	called-from-unlifted x1

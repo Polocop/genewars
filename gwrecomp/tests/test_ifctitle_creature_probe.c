@@ -50,6 +50,7 @@ static int g_interactive_demo_mode;
    original Options > Cargar gadgets by feeding the input mailbox). Neither writes game state. */
 static int g_cli_skip_intro;
 static int g_cli_load_save;
+static int g_cli_order_log;   /* --order-log: the GW_ORDER_TRACE lines go to the console (stderr) as "TRACE order ..." */
 static char g_cli_load_save_path[1024];
 static int g_interactive_input_focus_lost;
 static int g_fast_interactive_profile;
@@ -8631,7 +8632,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
            appends a line whenever one of them changes. Never writes guest memory. Local diagnostics only. */
         static const char *trace_path; static int trace_init; static FILE *trace_file;
         static uint32_t last_sel=0xFFFFFFFFu,last_c18=0xFFFFFFFFu,last_c37=0xFFFFFFFFu; static uint8_t last_pkt[11]; static uint32_t frames,bit0_samples;
-        if(!trace_init) { trace_init=1; trace_path=getenv("GW_ORDER_TRACE"); if(trace_path && !trace_path[0]) trace_path=NULL; if(trace_path) trace_file=fopen(trace_path,"ab"); }
+        if(!trace_init) { trace_init=1; trace_path=getenv("GW_ORDER_TRACE"); if(trace_path && !trace_path[0]) trace_path=NULL; if(trace_path) trace_file=fopen(trace_path,"ab"); else if(g_cli_order_log) trace_file=stderr; }
         if(trace_file && guest_memory) {
             frames++;
             const uint32_t turn=*(uint32_t *)(guest_memory+0x002F1472u), sel=*(uint32_t *)(guest_memory+0x002F1434u);
@@ -8639,8 +8640,8 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             const uint8_t c1c=guest_memory[0x00346D8Cu]; if(c1c&1u) bit0_samples++;
             const uint8_t *pkt=guest_memory+0x002F19C0u;
             if(sel!=last_sel || c18!=last_c18 || c37!=last_c37 || memcmp(pkt,last_pkt,sizeof last_pkt)!=0) {
-                fprintf(trace_file,"turn=%u frame=%u selectedPlSpec=%08x map18=%08x map37=%08x map1c=%02x bit0_frames_so_far=%u action=%02x packet=",
-                    turn,frames,sel,c18,c37,c1c,bit0_samples,pkt[10]);
+                fprintf(trace_file,"%sturn=%u frame=%u selectedPlSpec=%08x map18=%08x map37=%08x map1c=%02x bit0_frames_so_far=%u action=%02x packet=",
+                    trace_file==stderr?"TRACE order ":"",turn,frames,sel,c18,c37,c1c,bit0_samples,pkt[10]);
                 for(unsigned i=0;i<11u;i++) fprintf(trace_file,"%02x",pkt[i]);
                 fputc('\n',trace_file); fflush(trace_file);
                 last_sel=sel; last_c18=c18; last_c37=c37; memcpy(last_pkt,pkt,sizeof last_pkt);
@@ -15461,6 +15462,19 @@ static int original_interface_ui_cycle(uint8_t *memory,const char *label,
    Update/Draw and pending-IFC paths.  Non-level menus (for example Options)
    are dispatched through the original game() transition block and remain
    interactive until the player chooses New Game/Load or closes the window. */
+/* --load-save: press UN JUGADOR on the real title menu, as a person would, through the guest input fields the SDL poll
+   fills (pointer position and left button). The position is re-asserted on every frame of the click. Game state is only read. */
+static void title_autoclick_new_game(uint8_t *memory,uint64_t dt) {
+    const uint32_t gad=*(uint32_t *)(memory+0x00379490u);
+    if(!gad || gad+40u>GUEST_LIMIT || *(int16_t *)(memory+gad+12u)!=0 || dt>14u) return;
+    const int x=*(int16_t *)(memory+gad+4u)+*(int16_t *)(memory+gad+8u)/2;
+    const int y=*(int16_t *)(memory+gad+6u)+*(int16_t *)(memory+gad+10u)/2;
+    *(int32_t *)(memory+0x00376AA8u)=x; *(int32_t *)(memory+0x00376AACu)=y;
+    if(dt>=8u && dt<14u) { memory[0x00376ABFu]=1; memory[0x00376AC2u]=1; }
+    else { memory[0x00376ABFu]=0; memory[0x00376AC2u]=0; }
+    if(dt==8u) fprintf(stderr,"TRACE load_save title_click UN_JUGADOR logical=%d,%d\n",x,y);
+}
+
 static int run_interactive_title_menu(uint8_t *memory,uint32_t wscreen_guest) {
     if(!memory || !in_guest(0x14u,wscreen_guest,640u*480u,NULL)) return 0;
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS|SDL_INIT_TIMER)!=0) {
@@ -15492,6 +15506,7 @@ static int run_interactive_title_menu(uint8_t *memory,uint32_t wscreen_guest) {
             }
         }
         (void)poll_sdl_into_lbdisplay(memory);
+        if(g_cli_load_save && frames>=20u) title_autoclick_new_game(memory,frames-20u);
         if(g_ifclevel_demo_closed) break;
         gw_recomp_context input_ctx={0},update_ctx={0},draw_ctx={0},palette_ctx={0},timer_ctx={0};
         if(!invoke(gw_original_setup_controller_entry,&input_ctx,0x5B170u,memory,0u,0u) ||
@@ -16746,6 +16761,7 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[ai],"--load-snapshot") && ai+1<argc) g_snapshot_load_path=argv[++ai];
         else if(!strcmp(argv[ai],"--probe-live-projection-mesh")) g_cli_live_projection_mesh_capture=1;
         else if(!strcmp(argv[ai],"--skip-intro")) g_cli_skip_intro=1;
+        else if(!strcmp(argv[ai],"--order-log")) g_cli_order_log=1;
         else if(!strcmp(argv[ai],"--load-save") && ai+1<argc) {
             if(strlen(argv[ai+1])>=sizeof g_cli_load_save_path) return 2;
             strcpy(g_cli_load_save_path,argv[++ai]); g_cli_load_save=1;
@@ -18787,7 +18803,7 @@ int main(int argc,char **argv) {
         const char *start_at_title_env=getenv("GW_INTERACTIVE_START_AT_TITLE");
         int manual_title_selection=0;
         if(g_interactive_demo_mode && start_at_title_env &&
-           strcmp(start_at_title_env,"1")==0 && !g_cli_load_save) {
+           strcmp(start_at_title_env,"1")==0) {
             const uint32_t title_current=*(uint32_t *)(memory+0x002EF7E8u);
             const uint32_t title_pending=*(uint32_t *)(memory+0x002EF7ECu);
             const uint32_t title_turn=*(uint32_t *)(memory+0x002F1472u);

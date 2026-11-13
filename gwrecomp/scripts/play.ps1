@@ -10,7 +10,7 @@
  -Build defaults to the newest build\rebuild-* directory. -SmokeFrames N makes the program exit after N frames (smoke test).
  Requires GENEWARS_INSTALL_DIR (your own game files). Logs go to <build>\play.stdout.log / play.stderr.log.
 #>
-param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave)
+param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave, [switch]$OrderLog)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'gwconfig.ps1')
 $root = Get-GwRoot
@@ -61,6 +61,7 @@ try {
     $argLine = ('"{0}" "{1}" "{2}"' -f $guest, $cfg.Install, $tsv)
     if ($alpha) { $argLine += ' --play' }
     if ($SkipIntro) { $argLine += ' --skip-intro' }
+    if ($OrderLog) { $argLine += ' --order-log' }
     if ($LoadSave) { $argLine += (' --load-save "{0}"' -f (Resolve-Path -LiteralPath $LoadSave).Path) }
     if ($Detach) {   # for automated interactive tests: start the game and return its process id
         $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $br -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
