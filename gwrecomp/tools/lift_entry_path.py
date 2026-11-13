@@ -3116,6 +3116,18 @@ if partial:
                         for target in targets}
     lookup_targets = table_targets | {target for target in explicit_targets
                                       if target in funcs}
+    # Every fixup-backed target that GW_RECOMP_ICALL_LE_BACKED_AT admits must also
+    # resolve through recomp_lookup; otherwise the allowlist passes and the
+    # dispatch still finds no body (65 such targets before this, including the
+    # vtable/callback entries of static closure batch 1).
+    # Only game logic and the bflibrary/bfmydraw drawing code below the Smacker
+    # player (0xAE000) are added: the sound (Miles/AIL), Smacker and runtime
+    # code above it is driven through host hooks (gw_vsb16, gw_smk_*), and its
+    # indirect targets stay as they were (hand-registered in the harness or
+    # fail-closed).
+    LE_BACKED_LOOKUP_LIMIT = 0x000AE000
+    lookup_targets |= {target for target in le_backed_dispatch_targets
+                       if target in funcs and target < LE_BACKED_LOOKUP_LIMIT}
     for target in sorted(lookup_targets):
         function = funcs.get(target)
         if function is None:

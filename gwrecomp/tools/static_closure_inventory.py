@@ -103,7 +103,27 @@ qsort bsearch toupper tolower isalpha isdigit isspace time clock getenv system s
 nullsub""".split())
 
 
+# Engine entries that talk to DOS hardware or drivers the host replaces (gw_vsb16 virtual SB16 + timer, gw_smk_* hooks).
+# They are kept out of the lift so no lifted path can reach them past the host layer.
+HOST_REPLACED = {
+    0x000AFFF0: "Miles _TIME_callback (timer interrupt; host timer)",
+    0x000B0630: "Miles _AIL_set_USE16_ISR (ISR install)",
+    0x000C8DC8: "Miles real-mode vector thunk", 0x000C8DCF: "Miles real-mode vector thunk",
+    0x000C8DDE: "Miles real-mode vector thunk", 0x000C8DE4: "Miles real-mode vector thunk",
+    0x000C8DFA: "Miles real-mode vector thunk", 0x000C8E04: "Miles real-mode vector thunk",
+    0x000C8E0B: "Miles real-mode vector thunk",
+    0x000C8E1D: "Miles _AIL_API_set_USE16_ISR (ISR install)",
+    0x000C9078: "Miles _AIL_API_disable_interrupts (CLI)",
+    0x000C94D0: "Miles _AIL_API_set_timer_frequency (PIT programming)",
+    0x000C7A10: "Miles _DLL_size (DOS driver loader)", 0x000C7B50: "Miles _DLL_load (DOS driver loader)",
+    0x000C4110: "SMACKSOUNDUSEMSS (MSS clock path; host forces GetSoundDriver_=0 at the Smacker call sites)",
+    0x000C42E0: "SMACKSOUNDUSEMSS (MSS clock path; host forces GetSoundDriver_=0 at the Smacker call sites)",
+}
+
+
 def classify(name_syms, va, name, basis_exact, sets, lifted_ref, table_ref):
+    if va in HOST_REPLACED:
+        return "C", "host-replaced:" + HOST_REPLACED[va]
     kind, key = norm(name)
     if not basis_exact:     # nearest-preceding symbol: no name evidence for THIS entry, use references only
         if lifted_ref or table_ref: return "A", "ref:table-or-lifted-caller(unnamed)"

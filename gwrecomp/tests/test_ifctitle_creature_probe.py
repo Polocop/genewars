@@ -3335,6 +3335,25 @@ def main()->None:
         ):
             options += ["--partial-root", root]
 
+    # Static closure batch 2 (group B engine support: bflibrary, bfmydraw, smacklib, bfsoundlib), 51 of 67 entries.
+    # The other 16 talk to DOS hardware or drivers that the host replaces (Miles ISR/vector/timer/driver loader,
+    # the Smacker MSS clock path) and are listed as group C (host-replaced) by tools/static_closure_inventory.py.
+    # The host hooks are inserted by exact-once instruction markers below, so a batch that duplicated or removed
+    # one would fail the build. GWRECOMP_STATIC_BATCH2=0 leaves them out.
+    if os.environ.get("GWRECOMP_STATIC_BATCH2","1") != "0":
+        for root in (
+            "0x95F10","0x962A2","0x97810","0xA0FB0","0xA12C0","0xA2CCC",
+            "0xAE910","0xB3590","0xB5050","0xB5680","0xB57A0","0xB60E0",
+            "0xB6160","0xBB0B4","0xBB16C","0xBB8C0","0xC77A0","0xC77A4",
+            "0xC77B0","0xC80C0","0xC81F0","0xC8280","0xC9E80","0xD0010",
+            "0xD0080","0xE1760","0xE8DF0","0xEA668","0xEAA94","0xEAD84",
+            "0xEAE85","0xEAE96","0xEB111","0xEB120","0xEB1D1","0xEB240",
+            "0xEB290","0xEB583","0xEB5A0","0xEB5F0","0xEBD93","0xEBDB0",
+            "0xEBE00","0xEBF43","0xEBF56","0xEDEE7","0xEE718","0xEE737",
+            "0xEE740","0xEE851","0xEE860",
+        ):
+            options += ["--partial-root", root]
+
     if os.environ.get("GWRECOMP_REUSE_EXISTING_LIFT") == "1":
         if not generated_base.is_file() or not lift_report.is_file():
             raise SystemExit("requested incremental lift reuse but the pristine generated closure/report is missing")
