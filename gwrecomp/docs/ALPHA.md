@@ -17,6 +17,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\play.ps1            
 ESC or a click skips each one. Saved games are written next to the build (`work\dos_vfs_overlay\SAVE`), never into your
 game folder.
 
+### Developer launch options
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\play.ps1 -SkipIntro -OrderLog -LoadSave <your save .sav>
+```
+
+* `-SkipIntro` cuts every start-up Smacker video at its first frame.
+* `-LoadSave <file.sav>` copies your save (checked: 343,958 bytes, save magic) to slot 1 of the host overlay, presses
+  UN JUGADOR on the real title menu, waits for the mission interface and then loads the save through the original
+  Options > Cargar gadgets, so the map comes up through the game's own load path. Measured on 2026-11-13 with a mission 2
+  save: about 140 s from launch to the loaded map (most of it is the existing start-up before the title, not the load),
+  map, goop counter and creature portraits of the save shown afterwards. Mouse/scroll on the loaded map was not
+  re-checked in that run.
+* `-OrderLog` writes one line per change of the fields that decide whether a map click becomes an order (selected
+  specialist, MapDisplay candidate and flags, the 11-byte action packet).
+* The lines of the three options go to `<build root>\gw_flags.log` (play mode mutes the console once the window opens).
+
 ## Provisional start (stated plainly)
 
 The game does not start from the original entry point yet. Level B generates, from your files, a memory snapshot taken
@@ -88,6 +105,8 @@ full research); pods cannot breed hybrids until upgraded. What was measured in t
   found); at Jon's study several bytes of the creature's record move to 200. The cell behind the displayed percentage was **not** found.
 - The pod panel's second round button (green) did nothing visible and emitted no packet; the original text says hybrids need an
   upgraded pod. Not tested: upgrading, hybrids, what a higher level changes (displayed stats stayed 7/4/9/2 while the level moved).
+- **Pending verification: building upgrades and hybrids.** Mission 2 (Krell) has no Pulper or Ranger, so these mechanics are not
+  reachable there; they belong to mission 5 (Brown) and will be checked by loading a mission 5 save directly with `-LoadSave`.
 
 ## Save and load with a creature
 
