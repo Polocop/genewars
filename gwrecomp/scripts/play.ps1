@@ -1,14 +1,16 @@
 <#
  Start the native interactive build made by scripts\build.ps1 -Level B.
-   powershell -NoProfile -File scripts\play.ps1 [-Build <rebuild dir>] [-SmokeFrames N] [-Backend default|terrain_modern] [-Detach]
+   powershell -NoProfile -File scripts\play.ps1 [-Build <rebuild dir>] [-SmokeFrames N] [-Backend default|terrain_modern] [-Detach] [-SkipIntro] [-LoadSave <file.sav>]
  Without -SmokeFrames this is the ALPHA play mode: real-time window, mouse/keyboard, digital sound (virtual SB16) and, when
  GENEWARS_CUE is set, CD music from your disc image. The intro videos play first (ESC / click skips each one), then the original
  title menu appears. The start still uses the locally generated title snapshot, so it is provisional: see docs/ALPHA.md.
  -Backend terrain_modern selects the EXPERIMENTAL modern terrain renderer (needs B32 data prepared by tools\terrain_renderer; map clicks disabled).
+ -SkipIntro cuts the start-up videos at once. -LoadSave <file.sav> goes through the real title flow into mission 1 and then loads that
+ save through the original Options > Cargar gadgets (developer aid; your save is copied to slot 1 of the host overlay, the install is untouched).
  -Build defaults to the newest build\rebuild-* directory. -SmokeFrames N makes the program exit after N frames (smoke test).
  Requires GENEWARS_INSTALL_DIR (your own game files). Logs go to <build>\play.stdout.log / play.stderr.log.
 #>
-param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach)
+param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'gwconfig.ps1')
 $root = Get-GwRoot
@@ -58,6 +60,8 @@ Push-Location $br
 try {
     $argLine = ('"{0}" "{1}" "{2}"' -f $guest, $cfg.Install, $tsv)
     if ($alpha) { $argLine += ' --play' }
+    if ($SkipIntro) { $argLine += ' --skip-intro' }
+    if ($LoadSave) { $argLine += (' --load-save "{0}"' -f (Resolve-Path -LiteralPath $LoadSave).Path) }
     if ($Detach) {   # for automated interactive tests: start the game and return its process id
         $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $br -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
         Set-Content -LiteralPath (Join-Path $Build 'play.pid') -Value $p.Id -Encoding ascii

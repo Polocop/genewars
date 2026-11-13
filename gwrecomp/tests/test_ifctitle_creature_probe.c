@@ -45,6 +45,12 @@ static uint8_t vga_dac[768];
 static int g_sixth_packet_probe_mode;
 static int g_action17_only_probe;
 static int g_interactive_demo_mode;
+/* Developer launch options: --skip-intro (cut every start-up Smacker video at once) and
+   --load-save <file.sav> (reach mission 1 through the real title flow, then load <file.sav> through the
+   original Options > Cargar gadgets by feeding the input mailbox). Neither writes game state. */
+static int g_cli_skip_intro;
+static int g_cli_load_save;
+static char g_cli_load_save_path[1024];
 static int g_interactive_input_focus_lost;
 static int g_fast_interactive_profile;
 static int g_interactive_output_quiet;
@@ -9605,6 +9611,10 @@ void gw_smk_video_hook(uint32_t guest_va,uint32_t g_ebp) {
             g_smk_active=0; gw_recomp_pit_host_hold(0); timeEndPeriod(1u);
             g_fadeclip_valid=(g_fadeclip_idx!=NULL && g_fadeclip_w && g_fadeclip_h);
             gw_smk_close_window();
+            /* The key that ended the clip is consumed by it: clear the held flags and the key events still queued,
+               so the same ESC does not open the Options menu on the screen that follows the clip. */
+            guest_memory[0x00376AF1u]=0u; guest_memory[0x00376B0Cu]=0u; guest_memory[0x00376B29u]=0u;
+            SDL_FlushEvent(SDL_KEYDOWN); SDL_FlushEvent(SDL_KEYUP);
         }
         return;
     }
@@ -9629,6 +9639,11 @@ void gw_smk_video_hook(uint32_t guest_va,uint32_t g_ebp) {
             g_smk_frames_total,g_smk_period_ms,guest_va==0x000AE485u?"direct":"via_buffer",
             guest_memory[0x00376AF1u],guest_memory[0x00376B0Cu],
             guest_memory[0x00376B29u],guest_memory[0x00376AC2u]);
+    }
+    if(g_cli_skip_intro && g_smk_frames_presented>=1u) {
+        /* --skip-intro: the original loop leaves on its own ESC flag, exactly as for a key press. */
+        guest_memory[0x00376AF1u]=1u;
+        gw_smk_trace("TRACE smacker_video skip_intro frame=%u%c",g_smk_frames_presented,10);
     }
     gw_smk_pump_events();
     gw_tl_add(6,0,0,0,0,0);
@@ -14760,6 +14775,56 @@ static void interactive_mailbox_key(uint8_t scan,int down,uint8_t index) {
     } else g_interactive_input_overflows++;
     SDL_UnlockMutex(g_interactive_input_mutex);
 }
+/* --load-save driver. Runs in the UI loop right after the SDL poll and feeds the same input mailbox a person would:
+   ESC (Options), a click on save slot 1, a click on the Cargar orb. The mouse position and button are re-asserted
+   every frame of a click so the real pointer cannot cut it short. Game state is only read. States: 0 wait for the
+   mission interface, 1 ESC down, 2 ESC up, 4 slot click, 5 pause, 6 Cargar click, 7 wait for the mission to come
+   back, 8 done, 9 gave up. */
+static unsigned g_loadsave_state; static uint32_t g_loadsave_mark, g_loadsave_first, g_loadsave_tries;
+static int loadsave_click(int gx,int gy,uint32_t dt) {
+    if(dt>=15u) return 1;
+    if(dt==8u) interactive_mailbox_mouse(gx,gy,SDL_MOUSEBUTTONDOWN,SDL_BUTTON_LEFT);
+    else if(dt==14u) interactive_mailbox_mouse(gx,gy,SDL_MOUSEBUTTONUP,SDL_BUTTON_LEFT);
+    else interactive_mailbox_mouse(gx,gy,SDL_MOUSEMOTION,0u);
+    return 0;
+}
+static void inject_loadsave(uint32_t frame) {
+    if(!g_cli_load_save || g_loadsave_state>=8u || !guest_memory) return;
+    const uint32_t ifc=*(volatile uint32_t *)(guest_memory+0x002EF7E8u);
+    const uint32_t pending=*(volatile uint32_t *)(guest_memory+0x002EF7ECu);
+    const uint32_t turn=*(volatile uint32_t *)(guest_memory+0x002F1472u);
+    if(!g_loadsave_first) g_loadsave_first=frame+1u;
+    if(frame-g_loadsave_first>7200u) {
+        fprintf(stderr,"TRACE load_save gave_up state=%u current=%08X pending=%08X Turn=%u\n",g_loadsave_state,ifc,pending,turn);
+        g_loadsave_state=9u; return;
+    }
+    const uint32_t dt=frame-g_loadsave_mark;
+    switch(g_loadsave_state) {
+    case 0:
+        if(ifc==0x0035FE9Au && !pending && turn>=60u) {
+            fprintf(stderr,"TRACE load_save mission_interface_ready current=%08X Turn=%u frame=%u\n",ifc,turn,frame);
+            interactive_mailbox_key(0x01u,1,0x01u); g_loadsave_mark=frame; g_loadsave_state=1u; }
+        break;
+    case 1: if(dt>=4u) { interactive_mailbox_key(0x01u,0,0x01u); g_loadsave_mark=frame; g_loadsave_state=2u; } break;
+    case 2:
+        if(ifc!=0x0035FE9Au && !pending && dt>=20u) {
+            fprintf(stderr,"TRACE load_save options_open current=%08X frame=%u\n",ifc,frame);
+            g_loadsave_mark=frame; g_loadsave_state=4u; }
+        else if(dt>240u && g_loadsave_tries++<2u) { g_loadsave_mark=frame; g_loadsave_state=0u; }   /* ESC lost: try again */
+        break;
+    case 4: if(loadsave_click(300,204,dt)) { g_loadsave_mark=frame; g_loadsave_state=5u; } break;
+    case 5: if(dt>=20u) { g_loadsave_mark=frame; g_loadsave_state=6u; } break;
+    case 6: if(loadsave_click(160,225,dt)) {
+            fprintf(stderr,"TRACE load_save cargar_clicked frame=%u\n",frame);
+            g_loadsave_mark=frame; g_loadsave_state=7u; } break;
+    case 7:
+        if(ifc==0x0035FE9Au && !pending && dt>=40u) {
+            fprintf(stderr,"TRACE load_save done current=%08X Turn=%u frame=%u\n",ifc,turn,frame);
+            g_loadsave_state=8u; }
+        break;
+    default: break;
+    }
+}
 static unsigned interactive_mailbox_apply(uint8_t *memory) {
     gw_interactive_key_event keys[GW_INTERACTIVE_KEY_QUEUE];
     unsigned key_count=0u; int x=0,y=0,left_edge=0,right_edge=0,left_held=0,right_held=0,valid=0,focus_lost=0;
@@ -16270,6 +16335,7 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
         (void)inject_interactive_stress_click(g_interactive_frame_count);
         (void)inject_interactive_stress_key(g_interactive_frame_count);
         (void)poll_sdl_into_lbdisplay(NULL);
+        inject_loadsave(g_interactive_frame_count);
         gw_cdda_pump();
         if(g_interactive_camera_probe_mode==1) {
             /* Pin the original device cursor at the map center so OS pointer
@@ -16679,6 +16745,11 @@ int main(int argc,char **argv) {
         if(!strcmp(argv[ai],"--save-snapshot") && ai+1<argc) g_snapshot_save_path=argv[++ai];
         else if(!strcmp(argv[ai],"--load-snapshot") && ai+1<argc) g_snapshot_load_path=argv[++ai];
         else if(!strcmp(argv[ai],"--probe-live-projection-mesh")) g_cli_live_projection_mesh_capture=1;
+        else if(!strcmp(argv[ai],"--skip-intro")) g_cli_skip_intro=1;
+        else if(!strcmp(argv[ai],"--load-save") && ai+1<argc) {
+            if(strlen(argv[ai+1])>=sizeof g_cli_load_save_path) return 2;
+            strcpy(g_cli_load_save_path,argv[++ai]); g_cli_load_save=1;
+        }
         else if(!strcmp(argv[ai],"--snapshot-turn") && ai+1<argc) {
             char *end=NULL; unsigned long n=strtoul(argv[++ai],&end,10);
             if(!end || *end || !n || n>=UINT32_MAX) return 2;
@@ -16897,6 +16968,24 @@ int main(int argc,char **argv) {
     }
     printf("TRACE original VFS manifest files=%u policy=sha256-verified-install-read-only overlay=work/dos_vfs_overlay\n",
         vfs.manifest_count);
+    if(g_cli_load_save) {
+        /* --load-save: put the user's own save in slot 0 of the host overlay (the install copy is never touched; a slot-0
+           save already in the overlay is kept next to it as save0.sav.previo-<tick>). The in-game load then reads it. */
+        const char *why="?"; char ov[1024];
+        if(!gw_save_validate(g_cli_load_save_path,&why)) {
+            fprintf(stderr,"--load-save: '%s' is not a GeneWars save (%s): expected %llu bytes, magic %08X\n",
+                g_cli_load_save_path,why,GW_SAVE_FILE_SIZE,GW_SAVE_MAGIC);
+            free(memory); return 2;
+        }
+        if(!make_confined_path(ov,sizeof ov,"work\\dos_vfs_overlay","save\\save0.sav") || !ensure_parent_directories(ov)) {
+            fprintf(stderr,"--load-save: cannot prepare the overlay save directory\n"); free(memory); return 2;
+        }
+        FILE *had=fopen(ov,"rb");
+        if(had) { fclose(had); char bak[1100]; _snprintf(bak,sizeof bak,"%s.previo-%lu",ov,(unsigned long)GetTickCount());
+            (void)MoveFileExA(ov,bak,0u); }
+        if(!gw_save_copy(g_cli_load_save_path,ov)) { fprintf(stderr,"--load-save: copy to the overlay failed\n"); free(memory); return 2; }
+        fprintf(stderr,"TRACE load_save prepared source='%s' overlay='%s' size=%llu\n",g_cli_load_save_path,ov,GW_SAVE_FILE_SIZE);
+    }
     gw_dos_services_init(&vfs.dos);
     vfs.dos.major=6u; vfs.dos.minor=22u;
     if(!gw_dos_descriptor_bind(&vfs.dos,0x0024u,0x00008000u,0x000000FFu)) { free(memory); return 76; }
@@ -18698,7 +18787,7 @@ int main(int argc,char **argv) {
         const char *start_at_title_env=getenv("GW_INTERACTIVE_START_AT_TITLE");
         int manual_title_selection=0;
         if(g_interactive_demo_mode && start_at_title_env &&
-           strcmp(start_at_title_env,"1")==0) {
+           strcmp(start_at_title_env,"1")==0 && !g_cli_load_save) {
             const uint32_t title_current=*(uint32_t *)(memory+0x002EF7E8u);
             const uint32_t title_pending=*(uint32_t *)(memory+0x002EF7ECu);
             const uint32_t title_turn=*(uint32_t *)(memory+0x002F1472u);
