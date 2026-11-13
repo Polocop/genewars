@@ -128,6 +128,13 @@ if canonical_drawmap_vtable:
 else:
     vtable_function_row = None
 rebases = GENEWARS_11_MEASURED_OBJECT_DELTAS if args.object_map == "measured-1-3" else None
+if rebases is not None:
+    # Data object 4 (link 0x1B0000, 0x1350 bytes: the bflibrary sprite-scaling tables used by prop_text and
+    # LbSprite{Set,DrawUsing}ScalingData_) has no measured DOS/4GW base. The harness guest image (load_le with the
+    # measured map, written as image.mem) keeps it at its link base and resolves all 12 object-4 fixups to that
+    # address, and the DPMI arena starts at 0x01000000, so 0x1B0000..0x1B1350 is backed and owned by this object
+    # alone. Accept static accesses there with delta 0, i.e. the layout the generated code actually runs against.
+    rebases = {**rebases, 4: 0}
 image = load_le(TARGET, object_rebases=rebases)
 unknown = [o.index for o in image.objects if not o.linear_base_verified]
 if args.partial_root:
