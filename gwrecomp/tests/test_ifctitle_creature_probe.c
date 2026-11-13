@@ -20780,6 +20780,11 @@ int main(int argc,char **argv) {
                        regression-only post-loader assertions afterwards: UI
                        input is allowed to publish a legitimate pendingIFC. */
                     if(g_interactive_demo_mode) {
+                        /* Read-only: the LE-backed indirect dispatch hit table, also on a normal window close. */
+                        write_le_dispatch_hit_telemetry(*(uint32_t *)(memory+0x002F1472u),0,
+                            validate_dos_mcb_chain(memory,vfs.dos.dos_segment_end));
+                        if(g_cli_load_save || g_cli_order_log)
+                            gw_flag_trace("TRACE dispatch_telemetry written pairs=%u%c",gw_recomp_dispatch_hits_count(),10);
                         if(interaction) fclose(interaction);
                         if(g_ifclevel_demo_rgba) free(g_ifclevel_demo_rgba);
                         if(g_ifclevel_demo_texture) SDL_DestroyTexture(g_ifclevel_demo_texture);
