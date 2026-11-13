@@ -8,6 +8,36 @@ python tools/static_closure_inventory.py --exe <genewars-1_1.exe> --map <genewar
     --out docs/STATIC_CLOSURE_REMAINING.tsv
 ```
 
+## Batch 2 (2026-11-13, commit b339626): group B
+
+| | functions |
+|---|---:|
+| function entries found | 2803 |
+| inside the lifted ranges | 2420 |
+| **not lifted** | **383** |
+| Group A / unclassified | 0 / 0 |
+| Group B | 3 (refused by the lifter, see below) |
+| Group C | 379 (includes 16 engine entries moved here as host-replaced) |
+| Group X, not code | 1 (`lbSqrTable`, a lookup table reached by a code pointer) |
+
+* 47 of the 67 group B entries are lifted as roots.
+* 16 are reclassified **C, host-replaced** and deliberately not lifted, because they program DOS hardware or drivers
+  that the host layer replaces: Miles `_TIME_callback`, `_AIL_set_USE16_ISR`, `_AIL_API_set_USE16_ISR`, the seven
+  real-mode vector thunks, `_AIL_API_disable_interrupts`, `_AIL_API_set_timer_frequency`, `_DLL_size`/`_DLL_load`, and the
+  two `SMACKSOUNDUSEMSS` pieces (the host forces `GetSoundDriver_` to 0 at the Smacker call sites).
+* 3 stay in group B because the lifter refuses them: `prop_text` reads 0x1B0000, and `LbSpriteDrawUsingScalingData_` and
+  `LbSpriteSetScalingData_` read 0x1B034C. No fixup resolves either address, so it has to be identified before they can be lifted.
+* The host hooks (Smacker video/clock, `gw_vsb16` Miles entries, RAD clock) are inserted at instruction markers that must
+  occur exactly once in the generated C; the build checks this, and it passed.
+* Indirect dispatch: `tools/lift_entry_path.py` now also registers in `gw_partial_dispatch` (used by `recomp_lookup`)
+  every fixup-backed indirect target that has a lifted body and lies below 0xAE000 (game logic and drawing). Before
+  this, 65 targets passed the indirect-call allowlist but had no lookup entry; in play mode such a call returned EAX=0
+  without running anything. That included the vtable/callback entries of batch 1. Targets at or above 0xAE000
+  (Smacker, Miles, runtime) are unchanged: they are either hand-registered in the harness or still fail closed.
+* `LbNetworkSetupIPXAddress_` (0xABC94): its only caller (0x94198, inside `main_`) is in a block the lifter does not emit,
+  so no lifted path can call it. If a later batch made it reachable, the link would fail instead of running IPX code.
+* Batches 1 and 2 were built, not played: no replay or play test was run on this build.
+
 ## Batch 1 (2026-11-13, commit 73c725d): groups A and U lifted
 
 The 44 Group A and 6 unclassified entries below are now extra roots of the lifter (`tests/test_ifctitle_creature_probe.py`,

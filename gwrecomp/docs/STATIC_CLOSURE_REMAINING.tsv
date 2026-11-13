@@ -20,10 +20,8 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x00095D20	16	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
 0x00095EC0	64	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
 0x00095F00	16	C	nullsub_15	nearest-preceding	inherit:name:crt/stub	table x1
-0x00095F10	547	B	LbFadeTableGenerate_	exact	name:engine-lib	none
 0x00096133	37	C	unknown_libname_9	exact	name:crt/stub	none
-0x000962A2	78	B	lbSqrTable	exact	name:engine-prefix	code-pointer x1
-0x00097810	128	B	GetSoundDriver_	nearest-preceding	inherit:name:engine-lib	code-pointer x1
+0x000962A2	78	X	lbSqrTable	exact	not-code:lbSqrTable is a lookup table referenced by a code pointer	code-pointer x1
 0x0009FEB0	60	C	LbScreenClearGraphicsWindow_	exact	name:dos-platform	none
 0x0009FF68	20	C	LbScreenSetDoubleBuffering_	exact	name:dos-platform	none
 0x0009FF7C	20	C	LbScreenSetWScreenInVideo_	exact	name:dos-platform	none
@@ -31,10 +29,7 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000A0248	256	C	LbScreenSwapClear_	exact	name:dos-platform	none
 0x000A0348	352	C	LbScreenSwapBox_	exact	name:dos-platform	none
 0x000A04A8	848	C	LbScreenDrawHVLineDirect_	exact	name:dos-platform	none
-0x000A0FB0	48	B	W?DeInitSoundBank$n()v	exact	name:engine-function	none
-0x000A12C0	640	B	W?cbfadesample$n(ul)v	exact	name:engine-function	code-pointer x1
 0x000A1E74	864	C	W?MouseHandler256$f(iii)v	exact	name:dos-hardware-handler/CRT	code-pointer x1
-0x000A2CCC	260	B	LbPaletteDraw_	exact	name:engine-lib	none
 0x000A9F58	18	C	__wcpp_2_ctor_array__	nearest-preceding	inherit:name:crt/stub	table x27
 0x000AA6A4	524	C	atoi_	nearest-preceding	inherit:name:crt/stub	code-pointer x8
 0x000AB0AD	3	C	unknown_libname_3	exact	name:crt/stub	none
@@ -56,7 +51,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000AD133	210	C	W?handle_com$n(pn$TbSerialDev$$)v	exact	name:network/IPX	called-from-unlifted x4
 0x000AD205	21	C	W?lock_code_end$n()v	exact	name:network/IPX	code-pointer x1
 0x000AD3F2	301	C	LbModemReadConfig_	exact	name:network/IPX	none
-0x000AE910	32	B	SoundProgressLog__0	exact	name:engine-prefix	none
 0x000AF698	44	C	LbKeyboard_	exact	name:dos-platform	none
 0x000AF708	36	C	LbIKeyboardClose_	exact	name:dos-platform	none
 0x000AF72C	104	C	LbDosKeyboard_	exact	name:dos-platform	called-from-unlifted x1
@@ -66,21 +60,12 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000AFBFB	2	C	__exit_	exact	name:crt/stub	none
 0x000AFC41	3	C	__GETDS	nearest-preceding	inherit:name:crt/stub	code-pointer x2
 0x000AFE76	101	C	__set_binary_	exact	name:crt/stub	none
-0x000AFFF0	112	B	_TIME_callback	exact	name:engine-lib	code-pointer x1
-0x000B0630	160	B	_AIL_set_USE16_ISR	exact	name:engine-lib	none
-0x000B3590	560	B	_AIL_set_digital_master_volume	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x2
-0x000B5050	288	B	_AIL_sequence_status	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x1
-0x000B5680	288	B	_AIL_sequence_status	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x1
-0x000B57A0	880	B	_AIL_sequence_status	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x1
-0x000B60E0	128	B	_AIL_destroy_wave_synthesizer	exact	name:engine-lib	none
-0x000B6160	44	B	AILDEBUG_end_	exact	name:engine-lib	code-pointer x2
+0x000AFFF0	112	C	_TIME_callback	exact	host-replaced:Miles _TIME_callback (timer interrupt; host timer)	code-pointer x1
+0x000B0630	160	C	_AIL_set_USE16_ISR	exact	host-replaced:Miles _AIL_set_USE16_ISR (ISR install)	none
 0x000BA27F	16	C	__set_EINVAL_	exact	name:crt/stub	none
 0x000BA37A	30	C	__purgefp_	exact	name:crt/stub	none
 0x000BAAF4	54	C	__delay_	exact	name:crt/stub	none
 0x000BAEC4	60	C	rename_	exact	name:dos-platform	none
-0x000BB0B4	184	B	LbTextSetClipWindow_	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x2
-0x000BB16C	1876	B	LbTextSetClipWindow_	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x1
-0x000BB8C0	592	B	LbTextSetClipWindow_	nearest-preceding	inherit:name:engine-lib	called-from-unlifted x11
 0x000BBB60	496	C	int386x_	nearest-preceding	inherit:name:crt/stub	code-pointer x1
 0x000BBE44	48	C	__sys_init_387_emulator	exact	name:crt/stub	none
 0x000BBFC9	122	C	__sys_fini_387_emulator	exact	name:crt/stub	none
@@ -129,33 +114,25 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000C2071	29	C	_dos_gettime_	nearest-preceding	inherit:name:dos/crt-pattern	table x2
 0x000C3518	92	C	__wcpp_2_module_dtor__	exact	name:crt/stub	table x1
 0x000C388D	11	C	__wcpp_2_fun_register__	exact	name:crt/stub	none
-0x000C4110	112	B	SMACKSOUNDUSEMSS	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000C42E0	16	B	SMACKSOUNDUSEMSS	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000C77A0	4	B	SMACKOPEN	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000C77A4	12	B	SMACKOPEN	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000C77B0	96	B	SMACKOPEN	nearest-preceding	inherit:name:smacklib	called-from-unlifted x17
-0x000C7A10	320	B	_DLL_size	exact	name:engine-lib	called-from-unlifted x1
-0x000C7B50	1392	B	_DLL_load	exact	name:engine-lib	none
-0x000C80C0	16	B	_FILE_error	exact	name:engine-lib	none
-0x000C81F0	144	B	_FILE_write	exact	name:engine-lib	none
-0x000C8280	132	B	_FILE_append	exact	name:engine-lib	none
+0x000C4110	112	C	SMACKSOUNDUSEMSS	nearest-preceding	inherit:host-replaced:SMACKSOUNDUSEMSS (MSS clock path; host forces GetSoundDriver_=0 at the Smacker call sites)	code-pointer x1
+0x000C42E0	16	C	SMACKSOUNDUSEMSS	nearest-preceding	inherit:host-replaced:SMACKSOUNDUSEMSS (MSS clock path; host forces GetSoundDriver_=0 at the Smacker call sites)	code-pointer x1
+0x000C7A10	320	C	_DLL_size	exact	host-replaced:Miles _DLL_size (DOS driver loader)	called-from-unlifted x1
+0x000C7B50	1392	C	_DLL_load	exact	host-replaced:Miles _DLL_load (DOS driver loader)	none
 0x000C86CD	79	C	__CMain	exact	name:crt/stub	called-from-unlifted x1
 0x000C8A5E	294	C	__fatal_runtime_error_	nearest-preceding	inherit:name:crt/stub	code-pointer x1
-0x000C8DC8	7	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x2
-0x000C8DCF	15	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
-0x000C8DDE	6	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
-0x000C8DE4	22	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
-0x000C8DFA	10	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
-0x000C8E04	7	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
-0x000C8E0B	18	B	_AIL_API_set_real_vect	nearest-preceding	inherit:name:engine-lib	code-pointer x1
-0x000C8E1D	534	B	_AIL_API_set_USE16_ISR	exact	name:engine-lib	called-from-unlifted x1
-0x000C9078	4	B	_AIL_API_disable_interrupts	exact	name:engine-lib	none
-0x000C94D0	80	B	_AIL_API_set_timer_frequency	nearest-preceding	inherit:name:engine-lib	code-pointer x1
-0x000C9E80	135	B	_AIL_API_shutdown	nearest-preceding	inherit:name:engine-lib	code-pointer x2
+0x000C8DC8	7	C	_AIL_API_set_real_vect	nearest-preceding	inherit:host-replaced:Miles real-mode vector thunk	code-pointer x2
+0x000C8DCF	15	C	_AIL_API_set_real_vect	nearest-preceding	inherit:host-replaced:Miles real-mode vector thunk	code-pointer x1
+0x000C8DDE	6	C	_AIL_API_set_real_vect	nearest-preceding	inherit:host-replaced:Miles real-mode vector thunk	code-pointer x1
+0x000C8DE4	22	C	_AIL_API_set_real_vect	nearest-preceding	inherit:host-replaced:Miles real-mode vector thunk	code-pointer x1
+0x000C8DFA	10	C	_AIL_API_set_real_vect	nearest-preceding	inherit:host-replaced:Miles real-mode vector thunk	code-pointer x1
+0x000C8E04	7	C	_AIL_API_set_real_vect	nearest-preceding	inherit:host-replaced:Miles real-mode vector thunk	code-pointer x1
+0x000C8E0B	18	C	_AIL_API_set_real_vect	nearest-preceding	inherit:host-replaced:Miles real-mode vector thunk	code-pointer x1
+0x000C8E1D	534	C	_AIL_API_set_USE16_ISR	exact	host-replaced:Miles _AIL_API_set_USE16_ISR (ISR install)	called-from-unlifted x1
+0x000C9078	4	C	_AIL_API_disable_interrupts	exact	host-replaced:Miles _AIL_API_disable_interrupts (CLI)	none
+0x000C94D0	80	C	_AIL_API_set_timer_frequency	nearest-preceding	inherit:host-replaced:Miles _AIL_API_set_timer_frequency (PIT programming)	code-pointer x1
 0x000CA0D1	25	C	_ctime_	exact	address>=CRT-runtime-region	none
 0x000CA0EA	5	C	ctime_	exact	address>=CRT-runtime-region	none
 0x000CACC0	160	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
-0x000CB930	32	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
 0x000CBB10	192	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x2
 0x000CBBD0	48	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x2
 0x000CBEF0	16	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
@@ -165,9 +142,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000CC540	768	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x3
 0x000CD2F0	1744	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
 0x000CDA90	96	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
-0x000CED50	112	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
-0x000CEED0	32	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
-0x000CEEF0	112	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x1
 0x000CF370	272	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x2
 0x000CF480	512	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x3
 0x000CF680	48	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x2
@@ -177,8 +151,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000CF930	272	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	called-from-unlifted x3
 0x000CFA40	48	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
 0x000CFA70	1440	C	asctime_	nearest-preceding	inherit:address>=CRT-runtime-region	code-pointer x1
-0x000D0010	112	B	_AIL_API_destroy_wave_synthesizer	exact	name:engine-lib	called-from-unlifted x1
-0x000D0080	42	B	_AIL_API_destroy_wave_synthesizer	nearest-preceding	inherit:name:engine-lib	code-pointer x2
 0x000D00AA	1	C	_Alphabet	exact	address>=CRT-runtime-region	code-pointer x1
 0x000D00AB	36	C	a123456789abcde	exact	address>=CRT-runtime-region	none
 0x000D0146	1	C	_Alphabet_0	exact	address>=CRT-runtime-region	code-pointer x1
@@ -407,29 +379,6 @@ va	size_to_next_entry	group	name	name_basis	group_basis	references
 0x000E153C	52	C	W?unexpected$n()v	exact	address>=CRT-runtime-region	none
 0x000E16B3	6	C	_set_matherr_	exact	address>=CRT-runtime-region	none
 0x000E1754	12	C	matherr__	exact	address>=CRT-runtime-region	none
-0x000E1760	422	B	prop_text	exact	name:engine-lib	none
-0x000E8DF0	6264	B	LbSpriteDrawUsingScalingData_	exact	name:engine-lib	none
-0x000EA668	920	B	LbSpriteSetScalingData_	exact	name:engine-lib	none
-0x000EAA94	12	B	j_SmackInternal002	exact	name:smacklib	none
-0x000EAD84	12	B	j_SmackInternal003	exact	name:smacklib	none
-0x000EAE85	11	B	j_SmackGetSizeTables	exact	name:smacklib	none
-0x000EAE96	10	B	j_SmackDoTables	exact	name:smacklib	none
-0x000EB111	15	B	j_SmackInternal007_sub1	exact	name:smacklib	none
-0x000EB120	177	B	_SmackInternal007_sub1	exact	name:smacklib	none
-0x000EB1D1	15	B	j_SmackInternal005	exact	name:smacklib	none
-0x000EB240	80	B	_SmackInternal007	exact	name:smacklib	code-pointer x1
-0x000EB290	755	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000EB583	29	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000EB5A0	80	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000EB5F0	1955	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000EBD93	29	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000EBDB0	80	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000EBE00	323	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000EBF43	19	B	_SmackInternal007	nearest-preceding	inherit:name:smacklib	code-pointer x1
-0x000EBF56	10	B	j_SmackInternalSwitch1_case000	exact	name:smacklib	none
-0x000EDEE7	9	B	j_SmackDoPCM	exact	name:smacklib	none
-0x000EE718	8	B	j_SmackGetSizeDeltas	exact	name:smacklib	none
-0x000EE737	9	B	j_SmackGetRect	exact	name:smacklib	none
-0x000EE740	273	B	_SmackGetRect	exact	name:smacklib	none
-0x000EE851	15	B	j_SmackRemapTables	exact	name:smacklib	none
-0x000EE860	208	B	_SmackRemapTables	exact	name:smacklib	called-from-unlifted x1
+0x000E1760	422	B	prop_text	exact	lifter refuses: static access to 0x001B0000 (no fixup)	none
+0x000E8DF0	6264	B	LbSpriteDrawUsingScalingData_	exact	lifter refuses: static access to 0x001B034C (no fixup)	none
+0x000EA668	920	B	LbSpriteSetScalingData_	exact	lifter refuses: static access to 0x001B034C (no fixup)	none
