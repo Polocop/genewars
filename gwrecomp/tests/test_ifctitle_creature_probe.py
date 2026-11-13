@@ -1319,7 +1319,12 @@ def main()->None:
         (0x106608,[0x40138]*5),
         (0x1066F8,[0xC0008]*7+[0x40008]),
         (0x1068B0,[0x40008]),
-        (0x107080,[0x40058]*2)]
+        (0x107080,[0x40058]*2),
+        # Mission-interface panel records 24 and 25 (live in Brown, mission 5). Found by scanning every object-3
+        # SRC_OFFSET32 fixup into object 1 at record+0x22 with a gadget-shaped record; these were the only two
+        # missing. Without them A8D95 trapped on help callbacks 0x67720 / 0x67800 when hovering those panels.
+        (0x10761C,[0xC5308]),
+        (0x10766C,[0xC9108])]
     mygadget_fixups={item.source_link:item for item in image.fixups}
     for array_start,expected_flags in mygadget_arrays:
         for index,expected_flag in enumerate(expected_flags):
@@ -1357,8 +1362,8 @@ def main()->None:
                 "target_link":f"0x{target_link:08X}",
                 "capstone_first_instruction":f"{decoded[0].mnemonic} {decoded[0].op_str}".strip()})
             seen_callback_targets.add(target_link)
-    expected_mygadget_targets={0x24830,0x241A0,0x24550,0x242F0,0x74B30}
-    if (len(mygadget_rows)!=17 or seen_callback_targets!=expected_mygadget_targets or
+    expected_mygadget_targets={0x24830,0x241A0,0x24550,0x242F0,0x74B30,0x67720,0x67800}
+    if (len(mygadget_rows)!=19 or seen_callback_targets!=expected_mygadget_targets or
             bytes(original_code[0xA8D95-original_code_obj.base:
                                 0xA8D98-original_code_obj.base])!=bytes.fromhex("ff 52 22")):
         raise SystemExit(f"MyGadget callback/fixup set or A8D95 CALL [EDX+22] bytes changed: count={len(mygadget_rows)} targets={sorted(seen_callback_targets)}")
