@@ -16204,6 +16204,7 @@ static uint32_t ws_live_alloc(uint8_t *memory,const gw_recomp_context *parked,ui
 /* The game's own whole-redraw request, 0x79D00 (MapDisplay): strip levels 2 (with the lifter hook: strips 20..26
    too), ring offsets reset, +0x33/+0x35 from lbDisplay, and MapDisplay+0x11D5 = 1 so 0x79320 stamps the static
    Things (buildings) into the ring again. Same private-stack call as the allocator. */
+void gw_partial_0x00079D00(void);
 static int ws_live_game_redraw(uint8_t *memory,const gw_recomp_context *parked) {
     const uint32_t esp=(parked->esp-0x4000u)&~0xFu;
     if(esp<0x2000u || esp+16u>GUEST_LIMIT) return 0;
