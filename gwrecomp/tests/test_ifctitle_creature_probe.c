@@ -14215,8 +14215,21 @@ static void ws_band_copy_impl(void) {
     const uint32_t ws=*(const uint32_t *)(m+0x00376A5Cu),ring=*(const uint32_t *)(m+0x002EECA0u);
     const uint32_t bytes=width*height;
     if(!ws || !ring || ws>GUEST_LIMIT-bytes || ring>GUEST_LIMIT-bytes) return;
-    for(uint32_t y=0;y<height;y++) for(uint32_t x=640u;x<width;x++) {
-        uint32_t at; if(ws_ring_source(m,width,height,x,y,&at)) m[ws+y*width+x]=m[ring+at];
+    /* Row copies: the band x=640..W-1 maps to one contiguous ring run per row, split once at the ring's wrap. */
+    const uint32_t map=0x00346D70u;
+    const int left=(int)*(const uint16_t *)(m+map+0x1Du);
+    const int ring_x=(int)*(const int16_t *)(m+map+0x08u),ring_y=(int)*(const int16_t *)(m+map+0x0Au);
+    const int ring_w=(int)width-left;
+    if(ring_w<=0 || left>640) return;
+    int rx0=(640-left)+(ring_x-left); rx0%=ring_w; if(rx0<0) rx0+=ring_w;
+    const uint32_t band=width-640u;
+    const uint32_t first=(uint32_t)(ring_w-rx0)<band?(uint32_t)(ring_w-rx0):band;
+    for(uint32_t y=0;y<height;y++) {
+        int ry=((int)y+ring_y)%(int)height; if(ry<0) ry+=(int)height;
+        const uint8_t *src=m+ring+(uint32_t)ry*width+(uint32_t)left;
+        uint8_t *dst=m+ws+y*width+640u;
+        memcpy(dst,src+rx0,first);
+        if(first<band) memcpy(dst+first,src,band-first);
     }
     g_ws_band_copies++;
 }

@@ -3271,11 +3271,8 @@ if partial:
     # strip loop: 20 strips at 640, (W+31)/32 otherwise
     ws_rule("_flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(0x14u);\n    _cf = (uint32_t)CMP_B(_flag_a, _flag_b);\n    _flag_k = FK_CMP;\n    if (!gw_recomp_guest_instruction(0x0007C66Fu)) return;",
             f"_flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(({ws_width} + 31u) >> 5);\n    _cf = (uint32_t)CMP_B(_flag_a, _flag_b);\n    _flag_k = FK_CMP; /* 0x0007C66C: widescreen strip count (20 at 640) */\n    if (!gw_recomp_guest_instruction(0x0007C66Fu)) return;")
-    # strips 20.. keep their dirty byte outside MapDisplay (g_gw_ws_strip_ext, guest linear; 0 = no extension)
-    ws_rule("SET_LO8(edx, MEM8(DS_BASE + (ecx + 0x11BD))); /* 0x0007C674: mov dl, byte ptr [ecx + 0x11bd] */",
-            "SET_LO8(edx, MEM8(GW_WS_STRIP_FLAG(ecx, eax))); /* 0x0007C674: strip dirty byte (strips >= 20 outside MapDisplay) */")
-    ws_rule("MEM8(DS_BASE + (ecx + 0x11BD)) = (uint8_t)(0); /* 0x0007C68A: mov byte ptr [ecx + 0x11bd], 0 */",
-            "MEM8(GW_WS_STRIP_FLAG(ecx, eax)) = (uint8_t)(0); /* 0x0007C68A: strip dirty byte (strips >= 20 outside MapDisplay) */")
+    # strips 20.. keep their dirty level outside MapDisplay: done by address below (GW_WS_FLAG_EA), because at
+    # 0x7C68A eax is 0x7C230's return value, not the strip index (ecx already holds MapDisplay + index).
     # y*640 as (5y)<<7 -> y*W (exactly the original shift at 640)
     for site, reg in ((0x7C342, "edx"), (0x7C380, "eax"), (0x7C3F3, "eax"), (0x7C42F, "eax"),
                       (0x1C660, "edi"), (0x1C831, "edi"), (0x1C8F0, "edi"), (0x1C8F3, "edx"),
