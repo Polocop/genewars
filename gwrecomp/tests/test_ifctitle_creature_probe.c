@@ -8638,6 +8638,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             g_terrain_upload_ms+=(double)(upload_end-upload_start)*1000.0/freq;
             g_terrain_render_frames++;
         } else {
+            const uint64_t hp_convert0=SDL_GetPerformanceCounter();
             for(int y=0;y<480;y++) {
                 const uint8_t *row=gw_video_surface_row(source,y);
                 for(int x=0;x<g_present_w;x++) {
@@ -8651,6 +8652,10 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             if(SDL_UpdateTexture(g_ifclevel_demo_texture,NULL,g_ifclevel_demo_rgba,
                                  texture_w*(int)sizeof(uint32_t))!=0) {
                 fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
+            }
+            if(g_interactive_perf_frequency) {
+                g_hostprof_convert_ms+=(double)(SDL_GetPerformanceCounter()-hp_convert0)*1000.0/(double)g_interactive_perf_frequency;
+                g_hostprof_uploads++;
             }
         }
     }
@@ -8722,6 +8727,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         }
     }
     const SDL_Rect dst=g_interactive_demo_mode?ifclevel_presentation_rect():(SDL_Rect){0,0,640,480};
+    const uint64_t hp_copy0=SDL_GetPerformanceCounter();
     if(SDL_RenderClear(g_ifclevel_demo_renderer)!=0) {
         fprintf(stderr,"SDL demo present: %s\n",SDL_GetError()); return 0;
     }
@@ -8895,11 +8901,12 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             SDL_RenderCopy(g_ifclevel_demo_renderer,pointer_texture,NULL,&pointer_dst);
         }
     }
-    const uint64_t render_present_start=SDL_GetPerformanceCounter();
+    const uint64_t render_present_start=SDL_GetPerformanceCounter(); if(g_interactive_perf_frequency) g_hostprof_copy_ms+=(double)(render_present_start-hp_copy0)*1000.0/(double)g_interactive_perf_frequency;
     SDL_RenderPresent(g_ifclevel_demo_renderer);
     if(g_interactive_demo_mode) gw_cdda_pump();
     if(g_interactive_demo_mode) {
         const uint64_t render_present_end=SDL_GetPerformanceCounter();
+        g_hostprof_present_ms+=(double)(render_present_end-render_present_start)*1000.0/(double)(g_interactive_perf_frequency?g_interactive_perf_frequency:1u);
         g_interactive_sdl_render_present_ms+=(double)(render_present_end-render_present_start)*
             1000.0/(double)(g_interactive_perf_frequency?g_interactive_perf_frequency:1u);
     }
@@ -9007,6 +9014,23 @@ static uint64_t g_tick_profile_window_start;
 static unsigned g_tick_profile_window_ticks,g_tick_profile_window_slow;
 static double g_tick_profile_window_sum_ms,g_tick_profile_window_max_ms,g_tick_profile_window_pump_ms;
 
+/* Per-tick sections of the original game() body (lifted call sites instrumented by the harness build):
+   1 control_game 0x5AE60, 2 simulation 0x93010, 3 draw_game 0x834C0, 4 0x35C00. Accumulated per 10 s window. */
+static uint64_t g_tick_section_start[5];
+static double g_tick_section_ms[5];
+void gw_tick_section(uint32_t section,int begin) {
+    if(!g_tick_profile_file || section>4u) return;
+    const uint64_t now=SDL_GetPerformanceCounter();
+    if(begin) g_tick_section_start[section]=now;
+    else if(g_tick_section_start[section] && g_interactive_perf_frequency)
+        g_tick_section_ms[section]+=(double)(now-g_tick_section_start[section])*1000.0/(double)g_interactive_perf_frequency;
+}
+/* Host presentation breakdown (main thread), reported every 10 s: palette conversion + texture upload,
+   render copies (frame + pointer), SDL_RenderPresent, pacing wait. */
+static double g_hostprof_convert_ms,g_hostprof_copy_ms,g_hostprof_present_ms,g_hostprof_wait_ms,g_hostprof_frame_ms;
+static unsigned g_hostprof_frames,g_hostprof_uploads;
+static uint64_t g_hostprof_window_start;
+
 static int SDLCALL tick_profile_sampler(void *unused) {
     (void)unused;
     while(!InterlockedCompareExchange(&g_tick_profile_stop,0,0)) {
@@ -9082,6 +9106,10 @@ static void tick_profile_tick_end(uint32_t seq,uint32_t turn,uint32_t ifc,double
             g_tick_profile_window_ticks?g_tick_profile_window_sum_ms/g_tick_profile_window_ticks:0.0,
             g_tick_profile_window_max_ms,g_tick_profile_window_slow,
             g_tick_profile_window_ticks?g_tick_profile_window_pump_ms/g_tick_profile_window_ticks:0.0);
+        {   const double n=g_tick_profile_window_ticks?(double)g_tick_profile_window_ticks:1.0;
+            fprintf(g_tick_profile_file,"TRACE tick_sections per_tick_ms control_game=%.3f simulation=%.3f draw_game=%.3f post_35C00=%.3f\n",
+                g_tick_section_ms[1]/n,g_tick_section_ms[2]/n,g_tick_section_ms[3]/n,g_tick_section_ms[4]/n);
+            for(unsigned s=0;s<5u;s++) g_tick_section_ms[s]=0.0; }
         fflush(g_tick_profile_file);
         g_tick_profile_window_start=now; g_tick_profile_window_ticks=g_tick_profile_window_slow=0u;
         g_tick_profile_window_sum_ms=g_tick_profile_window_max_ms=g_tick_profile_window_pump_ms=0.0;
@@ -16935,6 +16963,21 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
            (unsigned)(sizeof g_interactive_host_frame_times_ms/sizeof g_interactive_host_frame_times_ms[0]))
             g_interactive_host_frame_times_ms[g_interactive_host_frame_time_count++]=frame_ms;
         window_frames++; window_render_ms+=render_ms; window_frame_ms+=frame_ms;
+        if(g_tick_profile_file) {
+            g_hostprof_frames++; g_hostprof_frame_ms+=frame_ms;
+            if(requested_fps) g_hostprof_wait_ms+=(double)(frame_end-render_end)*1000.0/(double)g_interactive_perf_frequency;
+            if(!g_hostprof_window_start) g_hostprof_window_start=frame_end;
+            const double hsecs=(double)(frame_end-g_hostprof_window_start)/(double)g_interactive_perf_frequency;
+            if(hsecs>=10.0) {
+                const double n=g_hostprof_frames?(double)g_hostprof_frames:1.0,u=g_hostprof_uploads?(double)g_hostprof_uploads:1.0;
+                fprintf(g_tick_profile_file,"TRACE host_window seconds=%.1f render_fps=%.1f texture_uploads_per_s=%.1f mean_frame_ms=%.3f convert_upload_ms_per_upload=%.3f render_copy_ms=%.3f sdl_present_ms=%.3f input_ms=%.3f pacing_wait_ms=%.3f\n",
+                    hsecs,g_hostprof_frames/hsecs,g_hostprof_uploads/hsecs,g_hostprof_frame_ms/n,g_hostprof_convert_ms/u,
+                    g_hostprof_copy_ms/n,g_hostprof_present_ms/n,input_ms,g_hostprof_wait_ms/n);
+                fflush(g_tick_profile_file);
+                g_hostprof_window_start=frame_end; g_hostprof_frames=g_hostprof_uploads=0u;
+                g_hostprof_convert_ms=g_hostprof_copy_ms=g_hostprof_present_ms=g_hostprof_wait_ms=g_hostprof_frame_ms=0.0;
+            }
+        }
         if(window_frames==120u) {
             const double elapsed_ms=(double)(frame_end-window_start)*1000.0/(double)g_interactive_perf_frequency;
             const double fps=elapsed_ms>0.0?120000.0/elapsed_ms:0.0;

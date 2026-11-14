@@ -5634,6 +5634,16 @@ def main()->None:
         "slot=%08X linear=%08X target=%08X selector=%04X base=%08X fault=%u\\n\", "
         "esi,edx,edx+0x5cu,_gw_ea,_gw_target,g_seg_ds,g_ds_base,recomp_memory_fault_pending()); "
         "if (recomp_memory_fault_pending()) { RECOMP_FLAGS_OUT(); return; } }\n    ")
+    # Tick section timing for the game() loop body (host gw_tick_section, a no-op unless GW_TICK_PROFILE is set):
+    # 1 control_game 0x5AE60, 2 simulation 0x93010, 3 draw_game 0x834C0, 4 0x35C00. Guest state untouched.
+    tick_sections=((0x92896,0x5AE60,0x9289B,1),(0x9289B,0x93010,0x928A0,2),(0x928A0,0x834C0,0x928A5,3),(0x928AA,0x35C00,0x928AF,4))
+    tick_section_hits=0
+    for site,target,nxt,sec in tick_sections:
+        call=(f'GW_RECOMP_CALL_AT(0x{site:08X}u,0x{target:x}u,0x{nxt:08X}u,recomp_gw_partial_0x{target:08X});')
+        n=lifted_text.count(call); tick_section_hits+=n
+        lifted_text=lifted_text.replace(call,f'gw_tick_section({sec}u,1); {call} gw_tick_section({sec}u,0);')
+    if tick_section_hits:
+        lifted_text=lifted_text.replace('\nvoid gw_partial_0x','\nvoid gw_tick_section(uint32_t section,int begin);\nvoid gw_partial_0x',1)
     # Opt-in only: this fprintf ran on every 0x80910 call (258 us each to the unbuffered NUL stderr of play mode),
     # which made AI ticks with many cell entities take seconds. The guarded call itself is unchanged.
     if os.environ.get("GW_PACKET_CALLBACK_TRACE")!="1": packet_probe=""
