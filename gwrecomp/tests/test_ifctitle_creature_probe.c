@@ -8155,31 +8155,40 @@ static int interp_enabled(void) {
     if(g_interp_enabled<0) { const char *e=getenv("GW_PRESENT_INTERP"); g_interp_enabled=!(e && e[0]=='0'); }
     return g_interp_enabled;
 }
-/* Best integer translation (dx,dy) with cur[y+dy][x+dx]==prev[y][x] over a fixed sample set of the map area.
-   Searches +-3 around the last translation first, then the full +-48 x +-32 window. Returns 0 if no candidate
-   matches at least 60% of the samples. */
-static int interp_register(const uint8_t *prev,const uint8_t *cur,int w,int *odx,int *ody) {
+/* Score of the translation (dx,dy): fraction (x1000) of sample points with cur[y+dy][x+dx]==prev[y][x], sampled in
+   the part of the map area (x>=176) that stays inside both frames. */
+static int interp_score(const uint8_t *prev,const uint8_t *cur,int w,int dx,int dy) {
     enum { N=320 };
     static int sx[N],sy[N],init;
     if(!init) { uint32_t r=0x9E3779B9u; for(int i=0;i<N;i++) { r=r*1664525u+1013904223u; sx[i]=(int)(r>>8); r=r*1664525u+1013904223u; sy[i]=(int)(r>>8); } init=1; }
-    const int x0=176+48,x1=w-48,y0=32,y1=480-32;
-    if(x1<=x0) return 0;
-    int best=-1,bdx=0,bdy=0;
-    for(int pass=0;pass<2;pass++) {
-        const int cx=pass?0:g_interp_last_dx,cy=pass?0:g_interp_last_dy,rx=pass?48:3,ry=pass?32:3;
-        for(int dy=cy-ry;dy<=cy+ry;dy++) for(int dx=cx-rx;dx<=cx+rx;dx++) {
-            if(dx<-48||dx>48||dy<-32||dy>32) continue;
-            int score=0;
-            for(int i=0;i<N;i++) {
-                const int x=x0+sx[i]%(x1-x0),y=y0+sy[i]%(y1-y0);
-                score+=prev[y*864+x]==cur[(y+dy)*864+(x+dx)];
-            }
-            if(score>best) { best=score; bdx=dx; bdy=dy; }
-        }
-        if(best*10>=N*8) break;            /* local search found a clear match */
-        if(!pass) g_interp_registration_fallbacks++;
+    const int x0=176+(dx<0?-dx:0)+8,x1=w-(dx>0?dx:0)-8,y0=(dy<0?-dy:0)+8,y1=480-(dy>0?dy:0)-8;
+    if(x1-x0<64 || y1-y0<64) return 0;
+    int score=0;
+    for(int i=0;i<N;i++) {
+        const int x=x0+sx[i]%(x1-x0),y=y0+sy[i]%(y1-y0);
+        score+=prev[y*864+x]==cur[(y+dy)*864+(x+dx)];
     }
-    if(best*10<N*6) return 0;
+    return score*1000/N;
+}
+/* Translation of the map content between two guest frames. The view is an orthographic isometric projection, so
+   a camera move (dcx,dcy) in world units (256 per cell, wrapping at 32768) translates the image by
+   (-(dcx-dcy)/8, -(dcx+dcy)/16) pixels; that prediction (and its sign variants) is refined by a +-4 px search.
+   Returns 0 when no candidate matches at least 70% of the samples (the frame is then shown unshifted). */
+static int interp_register(const uint8_t *prev,const uint8_t *cur,int w,int dcx,int dcy,int *odx,int *ody) {
+    dcx=((dcx+16384)&32767)-16384; dcy=((dcy+16384)&32767)-16384;
+    const int px=-(dcx-dcy)/8,py=-(dcx+dcy)/16;
+    const int cand[4][2]={{px,py},{-px,-py},{px,-py},{-px,py}};
+    int best=-1,bdx=0,bdy=0;
+    for(int c=0;c<4;c++) {
+        if(cand[c][0]<-200||cand[c][0]>200||cand[c][1]<-150||cand[c][1]>150) continue;
+        for(int dy=cand[c][1]-4;dy<=cand[c][1]+4;dy++) for(int dx=cand[c][0]-4;dx<=cand[c][0]+4;dx++) {
+            const int s=interp_score(prev,cur,w,dx,dy);
+            if(s>best) { best=s; bdx=dx; bdy=dy; }
+        }
+        if(best>=900) break;
+        if(!c) g_interp_registration_fallbacks++;
+    }
+    if(best<700) return 0;
     *odx=bdx; *ody=bdy; return 1;
 }
 /* Called when a new guest frame is presented: keeps the previous indexed frame, measures the map translation. */
@@ -8197,7 +8206,8 @@ static void interp_new_frame(const gw_interactive_visual_snapshot *visual,const 
     if(g_interp_have_prev && g_interp_w_prev==g_interp_w_cur &&
        (g_interp_cam_prev_x!=g_interp_cam_cur_x || g_interp_cam_prev_y!=g_interp_cam_cur_y)) {
         int dx=0,dy=0;
-        const int found=interp_register(g_interp_idx[0],g_interp_idx[1],g_present_w,&dx,&dy);
+        const int found=interp_register(g_interp_idx[0],g_interp_idx[1],g_present_w,
+            g_interp_cam_cur_x-g_interp_cam_prev_x,g_interp_cam_cur_y-g_interp_cam_prev_y,&dx,&dy);
         if(found) { g_interp_dx=dx; g_interp_dy=dy; g_interp_last_dx=dx; g_interp_last_dy=dy; }
         if(g_interp_registrations<40u)
             gw_flag_trace("TRACE interp registration n=%u camera_delta=%d,%d found=%d d=%d,%d%c",g_interp_registrations,
