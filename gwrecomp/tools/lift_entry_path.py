@@ -3265,8 +3265,8 @@ if partial:
     #    ~25 writers; the sprite drawers clamp col to lbDisplay.width/32-1 and would overrun it at x>=640.
     #  * 0x7C6B0 derives the camera centre from the surface width; it must stay at the 640 centre (x=384).
     widescreen_rules = []
-    def ws_rule(original: str, replacement: str) -> None:
-        widescreen_rules.append((original, replacement))
+    def ws_rule(original: str, replacement: str, optional: bool = False) -> None:
+        widescreen_rules.append((original, replacement, optional))
     ws_width = "MEM32(DS_BASE + (0x376A78))"
     # strip loop: 20 strips at 640, (W+31)/32 otherwise
     ws_rule("_flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(0x14u);\n    _cf = (uint32_t)CMP_B(_flag_a, _flag_b);\n    _flag_k = FK_CMP;\n    if (!gw_recomp_guest_instruction(0x0007C66Fu)) return;",
@@ -3298,13 +3298,14 @@ if partial:
     for site in (0x64EA8, 0x64FA8, 0x8A982, 0x8AC4A, 0x991C4, 0x99C39, 0x9A7CA, 0x9B00C, 0x9B816,
                  0x9C148, 0x9CF76, 0x9D927, 0x9EB16, 0x9FB32):
         ws_rule(f"eax = MEM32(DS_BASE + (0x376A78)); /* 0x{site:08X}: mov eax, dword ptr [0x376a78] */",
-                f"eax = 0x280u; /* 0x{site:08X}: cell-grid column clamp keeps 20 columns */")
+                f"eax = 0x280u; /* 0x{site:08X}: cell-grid column clamp keeps 20 columns */", optional=True)
     # after the dirty-cell copy (0x1CAE0) the widescreen band x=640.. is copied whole from the ring
     for site in (0x7C765, 0x7C76E):
         ws_rule(f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;",
                 f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;\n    if (g_gw_ws_band_copy) g_gw_ws_band_copy(); /* widescreen band */")
     ws_applied = 0
-    for original, replacement in widescreen_rules:
+    ws_optional_missing = []
+    for original, replacement, optional in widescreen_rules:
         site_match = re.search(r"0x([0-9A-Fa-f]{8})", replacement)
         site = int(site_match.group(1), 16) if site_match else 0
         owner = lifted_function_containing(site) if site else None
@@ -3312,6 +3313,9 @@ if partial:
         if owner is None:
             if count:
                 raise SystemExit(f"widescreen rule at 0x{site:08X} matched outside its lifted function")
+            continue
+        if optional and count == 0:
+            ws_optional_missing.append(site)  # owner lifted without this instruction (not reached by the lift)
             continue
         if count != 1:
             raise SystemExit(f"widescreen rule at 0x{site:08X} expected one lifted instruction, got {count}")
@@ -3332,7 +3336,8 @@ if partial:
         if first_func < 0:
             raise SystemExit("widescreen support has no insertion point")
         text = text[:first_func] + ws_support + text[first_func:]
-        print(f"widescreen rules applied: {ws_applied} of {len(widescreen_rules)}", file=sys.stderr)
+        print(f"widescreen rules applied: {ws_applied} of {len(widescreen_rules)}; optional clamp sites not emitted: "
+              + ",".join(f"0x{v:X}" for v in ws_optional_missing), file=sys.stderr)
     # Raster instrumentation is opt-in because most partial closures do not
     # link the graphics-probe callbacks. The dedicated creature probe enables
     # it explicitly; unrelated title/plugin closures remain self-contained.
