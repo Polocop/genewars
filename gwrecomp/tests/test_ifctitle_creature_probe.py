@@ -5634,6 +5634,9 @@ def main()->None:
         "slot=%08X linear=%08X target=%08X selector=%04X base=%08X fault=%u\\n\", "
         "esi,edx,edx+0x5cu,_gw_ea,_gw_target,g_seg_ds,g_ds_base,recomp_memory_fault_pending()); "
         "if (recomp_memory_fault_pending()) { RECOMP_FLAGS_OUT(); return; } }\n    ")
+    # Opt-in only: this fprintf ran on every 0x80910 call (258 us each to the unbuffered NUL stderr of play mode),
+    # which made AI ticks with many cell entities take seconds. The guarded call itself is unchanged.
+    if os.environ.get("GW_PACKET_CALLBACK_TRACE")!="1": packet_probe=""
     if lifted_text.count(packet_frontier)==1:
         lifted_text=lifted_text.replace(packet_frontier,packet_probe+packet_frontier,1)
     elif 'TRACE packet callback operand site=00080921' in lifted_text:
