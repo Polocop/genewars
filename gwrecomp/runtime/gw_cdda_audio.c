@@ -388,9 +388,14 @@ void gw_cdda_pump(void) {
         }
         memcpy(out,raw,bytes);
         const uint8_t v0=g_cdda.volume[0],v1=g_cdda.volume[1],v2=g_cdda.volume[2],v3=g_cdda.volume[3];
+        /* Raw 2352-byte audio sectors of a BIN/CUE image hold 16-bit little-endian stereo PCM
+           (Red Book byte order as stored by CD image rippers). Measured on the Gene Wars disc image:
+           read little-endian a sector is smooth music (mean |delta| / rms = 0.07); read big-endian,
+           as this loop did before, it is full-scale white noise (rms 0.58, |delta| / rms = 1.15),
+           which was the constant hiss under the in-mission CD music. */
         for(size_t i=0;i<bytes;i+=4u) {
-            const int16_t left=(int16_t)((uint16_t)raw[i]<<8|raw[i+1u]);
-            const int16_t right=(int16_t)((uint16_t)raw[i+2u]<<8|raw[i+3u]);
+            const int16_t left=(int16_t)((uint16_t)raw[i+1u]<<8|raw[i]);
+            const int16_t right=(int16_t)((uint16_t)raw[i+3u]<<8|raw[i+2u]);
             /* MSCDEX channels route input L to output L/R, then input R to L/R. */
             const int32_t mixed_left=((int32_t)left*v0+(int32_t)right*v2)/255;
             const int32_t mixed_right=((int32_t)left*v1+(int32_t)right*v3)/255;

@@ -8965,6 +8965,103 @@ static void gw_v15_state(const uint8_t *m,const char *tag) {
 }
 static volatile LONG g_v14_in_tick;
 static volatile uint64_t g_v14_tick_begin;
+
+/* Opt-in tick profiler (GW_TICK_PROFILE=<file>, off by default). While the simulation worker is inside an
+   original-loop tick, a host thread samples the lifted function the guest is executing (g_cur_func: set by
+   RECOMP_ENTER, restored on return) about once per millisecond. Ticks that take at least GW_TICK_PROFILE_MS
+   (default 50 ms) are written with their duration, the virtual SB16 pump time and the most-sampled functions,
+   plus one summary line every 10 s. Read-only: it never writes guest memory or changes control flow. */
+extern uint32_t g_cur_func;
+#define GW_TICK_PROFILE_CAP 4096u
+static FILE *g_tick_profile_file;
+static double g_tick_profile_threshold_ms=50.0;
+static volatile LONG g_tick_profile_n,g_tick_profile_stop;
+static uint32_t g_tick_profile_samples[GW_TICK_PROFILE_CAP];
+static SDL_Thread *g_tick_profile_thread;
+static uint64_t g_tick_profile_window_start;
+static unsigned g_tick_profile_window_ticks,g_tick_profile_window_slow;
+static double g_tick_profile_window_sum_ms,g_tick_profile_window_max_ms,g_tick_profile_window_pump_ms;
+
+static int SDLCALL tick_profile_sampler(void *unused) {
+    (void)unused;
+    while(!InterlockedCompareExchange(&g_tick_profile_stop,0,0)) {
+        if(InterlockedCompareExchange(&g_v14_in_tick,0,0)) {
+            const LONG i=InterlockedIncrement(&g_tick_profile_n)-1;
+            if(i>=0 && (ULONG)i<GW_TICK_PROFILE_CAP)
+                g_tick_profile_samples[i]=*(volatile uint32_t *)&g_cur_func;
+        }
+        Sleep(1u);
+    }
+    return 0;
+}
+
+static void tick_profile_start(void) {
+    if(!g_tick_profile_file) {
+        const char *path=getenv("GW_TICK_PROFILE");
+        if(!path || !path[0]) return;
+        g_tick_profile_file=fopen(path,"ab");
+        if(!g_tick_profile_file) return;
+        const char *ms=getenv("GW_TICK_PROFILE_MS");
+        if(ms && ms[0]) { const double v=atof(ms); if(v>0.0 && v<10000.0) g_tick_profile_threshold_ms=v; }
+    }
+    if(g_tick_profile_thread) return;
+    InterlockedExchange(&g_tick_profile_stop,0);
+    g_tick_profile_thread=SDL_CreateThread(tick_profile_sampler,"GeneWars tick profiler",NULL);
+    g_tick_profile_window_start=SDL_GetPerformanceCounter();
+    fprintf(g_tick_profile_file,"TRACE tick_profile begin threshold_ms=%.1f sampler=%d period_ms=1\n",
+        g_tick_profile_threshold_ms,g_tick_profile_thread!=NULL);
+    fflush(g_tick_profile_file);
+}
+
+static void tick_profile_stop(void) {
+    if(!g_tick_profile_thread) return;
+    InterlockedExchange(&g_tick_profile_stop,1);
+    SDL_WaitThread(g_tick_profile_thread,NULL); g_tick_profile_thread=NULL;
+    if(g_tick_profile_file) { fprintf(g_tick_profile_file,"TRACE tick_profile end\n"); fflush(g_tick_profile_file); }
+}
+
+static void tick_profile_tick_begin(void) { if(g_tick_profile_file) InterlockedExchange(&g_tick_profile_n,0); }
+
+static void tick_profile_tick_end(uint32_t seq,uint32_t turn,uint32_t ifc,double tick_ms,double pump_ms) {
+    if(!g_tick_profile_file) return;
+    g_tick_profile_window_ticks++; g_tick_profile_window_sum_ms+=tick_ms; g_tick_profile_window_pump_ms+=pump_ms;
+    if(tick_ms>g_tick_profile_window_max_ms) g_tick_profile_window_max_ms=tick_ms;
+    if(tick_ms+pump_ms>=g_tick_profile_threshold_ms) {
+        g_tick_profile_window_slow++;
+        LONG n=InterlockedCompareExchange(&g_tick_profile_n,0,0);
+        if(n<0) n=0;
+        if((ULONG)n>GW_TICK_PROFILE_CAP) n=(LONG)GW_TICK_PROFILE_CAP;
+        uint32_t va[64],hits[64]; unsigned distinct=0u,other=0u;
+        for(LONG i=0;i<n;i++) {
+            const uint32_t v=g_tick_profile_samples[i]; unsigned k=0u;
+            while(k<distinct && va[k]!=v) k++;
+            if(k==distinct) { if(distinct==64u) { other++; continue; } va[k]=v; hits[k]=0u; distinct++; }
+            hits[k]++;
+        }
+        fprintf(g_tick_profile_file,"TRACE slow_tick seq=%u turn=%u ifc=%08x tick_ms=%.1f sb16_pump_ms=%.1f samples=%ld top=",
+            seq,turn,ifc,tick_ms,pump_ms,(long)n);
+        for(unsigned r=0u;r<10u && r<distinct;r++) {
+            unsigned best=r;
+            for(unsigned k=r+1u;k<distinct;k++) if(hits[k]>hits[best]) best=k;
+            const uint32_t tv=va[r],th=hits[r]; va[r]=va[best]; hits[r]=hits[best]; va[best]=tv; hits[best]=th;
+            fprintf(g_tick_profile_file,"%s%08x:%u",r?",":"",va[r],hits[r]);
+        }
+        fprintf(g_tick_profile_file," other=%u\n",other);
+        fflush(g_tick_profile_file);
+    }
+    const uint64_t now=SDL_GetPerformanceCounter();
+    if(g_interactive_perf_frequency && now-g_tick_profile_window_start>=10u*g_interactive_perf_frequency) {
+        const double secs=(double)(now-g_tick_profile_window_start)/(double)g_interactive_perf_frequency;
+        fprintf(g_tick_profile_file,"TRACE tick_window seconds=%.1f turn=%u ticks=%u tps=%.1f mean_tick_ms=%.2f max_tick_ms=%.1f slow=%u mean_sb16_pump_ms=%.2f\n",
+            secs,turn,g_tick_profile_window_ticks,(double)g_tick_profile_window_ticks/secs,
+            g_tick_profile_window_ticks?g_tick_profile_window_sum_ms/g_tick_profile_window_ticks:0.0,
+            g_tick_profile_window_max_ms,g_tick_profile_window_slow,
+            g_tick_profile_window_ticks?g_tick_profile_window_pump_ms/g_tick_profile_window_ticks:0.0);
+        fflush(g_tick_profile_file);
+        g_tick_profile_window_start=now; g_tick_profile_window_ticks=g_tick_profile_window_slow=0u;
+        g_tick_profile_window_sum_ms=g_tick_profile_window_max_ms=g_tick_profile_window_pump_ms=0.0;
+    }
+}
 static int g_v14_legacy_stop;   /* GW_V14_LEGACY_STOP=1 restores the v0.3 stop rule (A/B diagnosis only) */
 static SDL_Texture *g_smk_texture;
 static int g_smk_tex_w,g_smk_tex_h;
@@ -15850,6 +15947,7 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
             "simulation worker could not initialize the guest PIT wall clock");
         SDL_AtomicSet(&g_interactive_worker_status,-1); return -1;
     }
+    tick_profile_start();
     while(!SDL_AtomicGet(&g_interactive_worker_stop)) {
         const uint64_t now=SDL_GetPerformanceCounter();
         const double dt=(double)(now-last_schedule)/(double)g_interactive_perf_frequency;
@@ -15910,6 +16008,7 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
         v14_seq++;
         const uint32_t v14_turn_before=current_turn;
         const uint64_t tick0=SDL_GetPerformanceCounter();
+        tick_profile_tick_begin();
         g_v14_tick_begin=tick0; InterlockedExchange(&g_v14_in_tick,1);
         int jump=setjmp(g_native_loop_stop_jmp);
         if(jump==0) {
@@ -15963,6 +16062,8 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
             }
         }
         const double tick_ms=(double)(tick1-tick0)*1000.0/(double)g_interactive_perf_frequency;
+        tick_profile_tick_end(v14_seq,*(uint32_t *)(memory+0x002F1472u),*(uint32_t *)(memory+0x002EF7E8u),tick_ms,
+            (double)(SDL_GetPerformanceCounter()-tick1)*1000.0/(double)g_interactive_perf_frequency);
         {   const uint32_t cc=*(uint32_t *)(memory+0x002EF7E8u),pp=*(uint32_t *)(memory+0x002EF7ECu);
             const uint32_t ta=*(uint32_t *)(memory+0x002F1472u),ph=memory[0x003609E9u];
             if(v14_seq<=2u || cc!=v14_prev_cur || pp!=v14_prev_pend || (cc==0x00360A11u && ph!=v14_prev_phase) ||
@@ -16011,6 +16112,7 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
         g_interactive_worker_turn=*(uint32_t *)(memory+0x002F1472u);
         SDL_AtomicSet(&g_interactive_worker_status,0);
     }
+    tick_profile_stop();
     gw_recomp_pit_realtime_stop(c);
     if(SDL_AtomicGet(&g_interactive_worker_status)==0)
         SDL_AtomicSet(&g_interactive_worker_status,1);

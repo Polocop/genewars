@@ -47,7 +47,8 @@ if ($alpha) {
     $env:GW_INTERACTIVE_START_AT_TITLE = '1'; $env:GW_VSB16 = '1'
     $env:GW_DEMO_VSYNC = '0'; $env:GW_DEMO_CAP_60 = '1'; $env:GW_TARGET_FPS = '60'; $env:GW_DEMO_PACING = 'native'
     if ($cfg.Cue) { $env:GW_CD_AUDIO_CUE = $cfg.Cue } else { Write-Host 'Note: GENEWARS_CUE is not set, so there is no CD music (sound effects only).' -ForegroundColor Yellow }
-    $env:GW_VSB16_LOG = Join-Path $Build 'play.sound.log'
+    # the sound trace is opened for appending: start each session with a fresh file
+    $env:GW_VSB16_LOG = Join-Path $Build 'play.sound.log'; Remove-Item -LiteralPath $env:GW_VSB16_LOG -ErrorAction SilentlyContinue
 } else {
     $env:GWRECOMP_IFCLEVEL_HOST_BOUND_TURN = '420'
     $env:GW_DEMO_VSYNC = '0'; $env:GW_DEMO_CAP_60 = '0'; $env:GW_TARGET_FPS = '240'; $env:GW_DEMO_PACING = '20'
