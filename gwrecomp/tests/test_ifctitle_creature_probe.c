@@ -14172,6 +14172,169 @@ static int run_original_draw_with_widened_surface(const uint8_t *base,
     return out->pixels!=NULL;
 }
 
+/* ---- True widescreen 854x480 (original renderer on a 864-pixel surface; 27 strips of 32 px) ----------------
+   The lifted closure carries the widescreen rules of tools/lift_entry_path.py (strip count, y*width, strip dirty
+   bytes >= 20 outside MapDisplay, 20-column cell grid kept, camera centre at the 640 frame). After the original
+   dirty-cell copy (0x1CAE0) the band x=640..W-1 is copied whole from the map ring buffer here, with the ring
+   mapping of 0x1C600: screen (x,y) <- ring (left + ((x-left) + (ring_x-left)) mod (W-left), (y + ring_y) mod H),
+   left = MapDisplay+0x1D, ring_x = +0x08, ring_y = +0x0A. */
+extern uint32_t g_gw_ws_strip_ext;
+extern void (*g_gw_ws_band_copy)(void);
+static uint32_t g_ws_band_copies;
+static int ws_ring_source(const uint8_t *m,uint32_t width,uint32_t height,uint32_t x,uint32_t y,uint32_t *at) {
+    const uint32_t map=0x00346D70u;
+    const int left=(int)*(const uint16_t *)(m+map+0x1Du);
+    const int ring_x=(int)*(const int16_t *)(m+map+0x08u),ring_y=(int)*(const int16_t *)(m+map+0x0Au);
+    const int ring_w=(int)width-left;
+    if(ring_w<=0 || (int)x<left) return 0;
+    int rx=((int)x-left)+(ring_x-left); rx%=ring_w; if(rx<0) rx+=ring_w;
+    int ry=((int)y+ring_y)%(int)height; if(ry<0) ry+=(int)height;
+    *at=(uint32_t)ry*width+(uint32_t)(left+rx);
+    return 1;
+}
+static void ws_band_copy_impl(void) {
+    uint8_t *m=guest_memory; if(!m) return;
+    const uint32_t width=*(const uint32_t *)(m+0x00376A78u),height=*(const uint32_t *)(m+0x00376A7Cu);
+    if(width<=640u || width>1024u || height!=480u) return;
+    const uint32_t ws=*(const uint32_t *)(m+0x00376A5Cu),ring=*(const uint32_t *)(m+0x002EECA0u);
+    const uint32_t bytes=width*height;
+    if(!ws || !ring || ws>GUEST_LIMIT-bytes || ring>GUEST_LIMIT-bytes) return;
+    for(uint32_t y=0;y<height;y++) for(uint32_t x=640u;x<width;x++) {
+        uint32_t at; if(ws_ring_source(m,width,height,x,y,&at)) m[ws+y*width+x]=m[ring+at];
+    }
+    g_ws_band_copies++;
+}
+
+typedef struct {
+    int ok,invoke_ok,fault; uint32_t end_eip,changed_outside,canary_overwrites;
+    uint8_t *pixels; uint32_t width;
+} ws_pass;
+
+/* One private MapDisplay::Draw (full redraw) on a clone of `base` at surface width `width` (640 = canonical,
+   untouched surface and buffers). Wider surfaces get a fresh WScreen, map ring buffer and strip-flag block in the
+   DPMI address space above the allocator cursor (never granted, so no live block or MCB can be there). */
+static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_services *dos,uint32_t width,ws_pass *out,
+                       uint32_t *alloc_base,uint32_t *alloc_size) {
+    memset(out,0,sizeof *out); out->width=width;
+    memcpy(scratch,base,GUEST_LIMIT);
+    const uint32_t map=0x00346D70u,height=480u,bytes=width*height,guard=64u;
+    uint32_t ws=*(const uint32_t *)(scratch+0x00376A5Cu),ring=*(const uint32_t *)(scratch+0x002EECA0u),flags=0u;
+    uint32_t lo=0u,hi=0u;
+    if(width!=640u) {
+        if(!dos || !dos->allocation_configured) return 0;
+        const uint32_t start=(dos->allocation_cursor+0xFFFu)&~0xFFFu,need=2u*(bytes+guard)+4096u;
+        const uint32_t limit=dos->allocation_end<GUEST_LIMIT?dos->allocation_end:GUEST_LIMIT;
+        if(start<dos->allocation_cursor || start>limit || need>limit-start) return 0;
+        for(uint32_t i=0;i<GW_DOS_MAX_LINEAR_ALLOCATIONS;i++) {
+            const gw_dos_linear_allocation *a=&dos->linear_allocations[i];
+            if(a->active && a->base<start+need && start<a->base+a->size) return 0;
+        }
+        lo=start; hi=start+need;
+        ws=start; ring=start+bytes+guard; flags=ring+bytes+guard;
+        memset(scratch+lo,0,need);
+        memset(scratch+ws+bytes,0xA7,guard); memset(scratch+ring+bytes,0xA7,guard);
+        *(uint32_t *)(scratch+0x00376A5Cu)=ws;
+        *(uint32_t *)(scratch+0x00376A78u)=width;
+        *(uint32_t *)(scratch+0x00376A7Cu)=height;
+        *(uint32_t *)(scratch+0x002EECA0u)=ring;
+        /* setup_vecs (0xE8963) state: poly base, base, pitch, clip width, height (it keeps the pitch it was
+           given at mode setup, so the strip windows inherit it). */
+        const uint32_t vec=0x002DA100u;
+        *(uint32_t *)(scratch+vec+0x00u)=ws-width; *(uint32_t *)(scratch+vec+0x04u)=ws;
+        *(uint32_t *)(scratch+vec+0x10u)=width; *(uint32_t *)(scratch+vec+0x14u)=width; *(uint32_t *)(scratch+vec+0x18u)=height;
+        /* MapDisplay+0x33 is the ring split (0x7A099: width - ring_x), recomputed by the scroll path. */
+        *(uint16_t *)(scratch+map+0x33u)=(uint16_t)(width-*(const uint16_t *)(scratch+map+0x08u));
+        memset(scratch+flags,1u,16u);
+        if(alloc_base) *alloc_base=lo;
+        if(alloc_size) *alloc_size=need;
+    }
+    scratch[map+0x1Cu]|=0x02u;
+    memset(scratch+map+0x11BDu,1u,20u);
+    uint8_t saved_dac[sizeof vga_dac]; memcpy(saved_dac,vga_dac,sizeof saved_dac);
+    double saved_st[8]; memcpy(saved_st,g_st,sizeof saved_st);
+    const int saved_fp_top=g_fp_top; const uint16_t saved_fpu_cw=g_fpu_cw;
+    const ptrdiff_t saved_mem_base=g_mem_base; uint8_t *saved_guest=guest_memory;
+    guest_memory=scratch; g_mem_base=(ptrdiff_t)(uintptr_t)scratch;
+    g_gw_ws_strip_ext=flags; g_gw_ws_band_copy=width!=640u?ws_band_copy_impl:NULL;
+    gw_recomp_context c;
+    out->invoke_ok=invoke(gw_partial_0x0007C610,&c,0x7C610u,scratch,map,0);
+    out->end_eip=c.eip;
+    out->fault=c.memory_fault.pending||c.segment_fault_pending||c.interrupt_trap_pending||c.port_io_trap.pending;
+    g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL;
+    memcpy(vga_dac,saved_dac,sizeof saved_dac);
+    memcpy(g_st,saved_st,sizeof saved_st); g_fp_top=saved_fp_top; g_fpu_cw=saved_fpu_cw;
+    g_mem_base=saved_mem_base; guest_memory=saved_guest;
+    if(width!=640u) for(uint32_t i=0;i<guard;i++)
+        out->canary_overwrites+=(scratch[ws+bytes+i]!=0xA7u)+(scratch[ring+bytes+i]!=0xA7u);
+    for(uint32_t i=0;i<GUEST_LIMIT;i++) {
+        if(i>=lo && i<hi) continue;
+        if(width==640u && i>=ws && i<ws+bytes) continue;
+        out->changed_outside+=(scratch[i]!=base[i]);
+    }
+    if(out->invoke_ok && !out->fault) {
+        out->pixels=(uint8_t *)malloc(bytes);
+        if(out->pixels) memcpy(out->pixels,scratch+ws,bytes);
+    }
+    out->ok=out->pixels!=NULL;
+    return out->ok;
+}
+
+static int run_widescreen_854_probe(uint8_t *memory,const gw_dos_services *dos,uint16_t dos_segment_end) {
+    uint8_t *scratch=(uint8_t *)malloc(GUEST_LIMIT); if(!scratch) return 0;
+    ws_pass c640,wide; uint32_t alloc_base=0,alloc_size=0;
+    const uint32_t W=864u,H=480u,OUTW=854u;
+    const int a=ws_run_pass(memory,scratch,dos,640u,&c640,NULL,NULL);
+    const int mcb640=validate_dos_mcb_chain(scratch,dos_segment_end);
+    g_ws_band_copies=0;
+    const int b=ws_run_pass(memory,scratch,dos,W,&wide,&alloc_base,&alloc_size);
+    const int mcb_wide=validate_dos_mcb_chain(scratch,dos_segment_end);
+    /* Self-check of the ring mapping on the canonical frame: background ring pixels mapped into x=left..639. */
+    unsigned map_match=0,map_tested=0,left_equal=0,band_nonzero=0,band_unique=0,band_overlay=0,band_black_cols=0;
+    unsigned char seen[256]={0};
+    if(b) {
+        const uint32_t ring=alloc_base+W*H+64u;
+        for(uint32_t y=0;y<H;y++) for(uint32_t x=128u;x<640u;x++) {
+            uint32_t at; if(!ws_ring_source(scratch,W,H,x,y,&at)) continue;
+            map_tested++; map_match+=(scratch[ring+at]==wide.pixels[y*W+x]);
+        }
+        for(uint32_t x=640u;x<OUTW;x++) {
+            unsigned col_nonzero=0;
+            for(uint32_t y=0;y<H;y++) {
+                const uint8_t v=wide.pixels[y*W+x]; col_nonzero+=(v!=0u);
+                if(!seen[v]) { seen[v]=1; band_unique++; }
+                uint32_t at; if(ws_ring_source(scratch,W,H,x,y,&at) && scratch[ring+at]!=v) band_overlay++;
+            }
+            band_nonzero+=col_nonzero; band_black_cols+=(col_nonzero==0u);
+        }
+    }
+    if(a&&b) for(uint32_t y=0;y<H;y++) for(uint32_t x=0;x<640u;x++) left_equal+=(c640.pixels[y*640u+x]==wide.pixels[y*W+x]);
+    uint8_t *crop=NULL;
+    if(b) { crop=(uint8_t *)malloc(OUTW*H); if(crop) for(uint32_t y=0;y<H;y++) memcpy(crop+y*OUTW,wide.pixels+y*W,OUTW); }
+    if(a) { (void)save_indexed_bmp24("evidence/ws854_control_640x480.bmp",c640.pixels,640u,H,vga_dac);
+        FILE *r=fopen("evidence/ws854_control_640x480.raw","wb"); if(r) { fwrite(c640.pixels,1,640u*H,r); fclose(r); } }
+    if(crop) { (void)save_indexed_bmp24("evidence/ws854_original_renderer_854x480.bmp",crop,OUTW,H,vga_dac);
+        FILE *r=fopen("evidence/ws854_original_renderer_854x480.raw","wb"); if(r) { fwrite(crop,1,OUTW*H,r); fclose(r); } }
+    FILE *j=fopen("evidence/ws854_probe.json","w");
+    if(j) {
+        fprintf(j,"{\n  \"schema\": \"gwrecomp.true-widescreen-854/v1\",\n  \"snapshot_turn\": %u,\n",*(uint32_t *)(memory+0x002F1472u));
+        fprintf(j,"  \"control_640\": {\"ok\": %d, \"fault\": %d, \"end_eip\": \"0x%08X\", \"changed_guest_bytes_outside_wscreen\": %u, \"MCB_chain_valid\": %d, \"capture\": \"evidence/ws854_control_640x480.bmp\"},\n",
+            c640.ok,c640.fault,c640.end_eip,c640.changed_outside,mcb640);
+        fprintf(j,"  \"wide\": {\"ok\": %d, \"fault\": %d, \"end_eip\": \"0x%08X\", \"surface\": \"%ux%u\", \"output\": \"%ux%u\", \"strips\": %u, \"dpmi_free_range\": [\"0x%08X\", \"0x%08X\"], \"canary_overwrites\": %u, \"changed_guest_bytes_outside_new_buffers\": %u, \"MCB_chain_valid\": %d, \"band_copies\": %u, \"capture\": \"evidence/ws854_original_renderer_854x480.bmp\"},\n",
+            wide.ok,wide.fault,wide.end_eip,W,H,OUTW,H,(W+31u)/32u,alloc_base,alloc_base+alloc_size,wide.canary_overwrites,wide.changed_outside,mcb_wide,g_ws_band_copies);
+        fprintf(j,"  \"left_640_equal_pixels\": %u, \"left_640_total\": %u,\n",left_equal,640u*H);
+        fprintf(j,"  \"ring_mapping_selfcheck_x128_639\": {\"matching\": %u, \"tested\": %u},\n",map_match,map_tested);
+        fprintf(j,"  \"band_x640_853\": {\"nonzero_pixels\": %u, \"total\": %u, \"unique_colors\": %u, \"all_black_columns\": %u, \"pixels_differing_from_ring_background\": %u}\n}\n",
+            band_nonzero,(OUTW-640u)*H,band_unique,band_black_cols,band_overlay);
+        fclose(j);
+    }
+    fprintf(stderr,"TRACE ws854 control_ok=%d wide_ok=%d fault=%d/%d left_equal=%u/%u band_nonzero=%u/%u black_cols=%u overlay=%u canary=%u changed=%u/%u mcb=%d/%d map_selfcheck=%u/%u\n",
+        c640.ok,wide.ok,c640.fault,wide.fault,left_equal,640u*H,band_nonzero,(OUTW-640u)*H,band_black_cols,band_overlay,
+        wide.canary_overwrites,c640.changed_outside,wide.changed_outside,mcb640,mcb_wide,map_match,map_tested);
+    const int ok=a&&b&&!c640.fault&&!wide.fault&&mcb640&&mcb_wide&&wide.canary_overwrites==0u;
+    free(crop); free(c640.pixels); free(wide.pixels); free(scratch);
+    return ok;
+}
+
 static int run_first_lateral_32_probe(uint8_t *memory) {
     uint8_t *scratch=(uint8_t *)malloc(GUEST_LIMIT);
     if(!scratch) return 0;
@@ -20432,6 +20595,19 @@ int main(int argc,char **argv) {
                     validate_dos_mcb_chain(memory,vfs.dos.dos_segment_end) &&
                     run_hybrid_primitive_capture_probe(memory);
                 fprintf(stderr,"TRACE hybrid_terrain_capture_probe ok=%d snapshot_loaded=%d Turn=%u MCB_chain_valid=%d\n",
+                    probe_ok,snapshot_loaded,*(uint32_t *)(memory+0x002F1472u),
+                    validate_dos_mcb_chain(memory,vfs.dos.dos_segment_end));
+                gw_dos_descriptor_clear(&vfs.dos);
+                gw_interrupt_set_callback(NULL,NULL);
+                free(vfs.manifest); free(memory);
+                return probe_ok?0:1;
+            }
+            const char *ws854_probe_env=getenv("GWRECOMP_WIDESCREEN_854_PROBE");
+            if(ws854_probe_env&&ws854_probe_env[0]=='1') {
+                const int probe_ok=snapshot_loaded &&
+                    validate_dos_mcb_chain(memory,vfs.dos.dos_segment_end) &&
+                    run_widescreen_854_probe(memory,&vfs.dos,vfs.dos.dos_segment_end);
+                fprintf(stderr,"TRACE widescreen_854_probe ok=%d snapshot_loaded=%d Turn=%u MCB_chain_valid=%d evidence=evidence/ws854_probe.json\n",
                     probe_ok,snapshot_loaded,*(uint32_t *)(memory+0x002F1472u),
                     validate_dos_mcb_chain(memory,vfs.dos.dos_segment_end));
                 gw_dos_descriptor_clear(&vfs.dos);

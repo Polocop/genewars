@@ -3253,6 +3253,86 @@ if partial:
 
     parameterize_framebuffer_pitch("0x0001C600u", 30)
     parameterize_framebuffer_pitch("0x0001CAE0u", 38)
+
+    # True widescreen (854x480 shown from a 864-pixel surface, 27 strips of 32 px). Every rule below reads the
+    # surface width from lbDisplay.GraphicsScreenWidth (0x376A78) and is value-identical when it is 640, so the
+    # canonical renderer is unchanged.  Audit (GW.EXE 1.1, link VAs):
+    #  * 0x7C610 MapDisplay::Draw draws the map back buffer ([0x114CA0], a horizontal/vertical ring) in vertical
+    #    strips of 32 px, strip i = screen x 32*i, loop bound 20 (0x7C66C) with one dirty byte per strip at
+    #    MapDisplay+0x11BD..+0x11D0 (+0x11D5/+0x11D6 are live fields right behind it).
+    #  * 0x7C230 (strip renderer) and 0x1C600 (ring -> WScreen copy) form y*640 as (5*y) << 7.
+    #  * the 20x15 cell grid at 0x19CBF8 (one byte per 32x32 screen cell, 300 bytes) is indexed row*20+col by
+    #    ~25 writers; the sprite drawers clamp col to lbDisplay.width/32-1 and would overrun it at x>=640.
+    #  * 0x7C6B0 derives the camera centre from the surface width; it must stay at the 640 centre (x=384).
+    widescreen_rules = []
+    def ws_rule(original: str, replacement: str) -> None:
+        widescreen_rules.append((original, replacement))
+    ws_width = "MEM32(DS_BASE + (0x376A78))"
+    # strip loop: 20 strips at 640, (W+31)/32 otherwise
+    ws_rule("_flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(0x14u);\n    _cf = (uint32_t)CMP_B(_flag_a, _flag_b);\n    _flag_k = FK_CMP;\n    if (!gw_recomp_guest_instruction(0x0007C66Fu)) return;",
+            f"_flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(({ws_width} + 31u) >> 5);\n    _cf = (uint32_t)CMP_B(_flag_a, _flag_b);\n    _flag_k = FK_CMP; /* 0x0007C66C: widescreen strip count (20 at 640) */\n    if (!gw_recomp_guest_instruction(0x0007C66Fu)) return;")
+    # strips 20.. keep their dirty byte outside MapDisplay (g_gw_ws_strip_ext, guest linear; 0 = no extension)
+    ws_rule("SET_LO8(edx, MEM8(DS_BASE + (ecx + 0x11BD))); /* 0x0007C674: mov dl, byte ptr [ecx + 0x11bd] */",
+            "SET_LO8(edx, MEM8(GW_WS_STRIP_FLAG(ecx, eax))); /* 0x0007C674: strip dirty byte (strips >= 20 outside MapDisplay) */")
+    ws_rule("MEM8(DS_BASE + (ecx + 0x11BD)) = (uint8_t)(0); /* 0x0007C68A: mov byte ptr [ecx + 0x11bd], 0 */",
+            "MEM8(GW_WS_STRIP_FLAG(ecx, eax)) = (uint8_t)(0); /* 0x0007C68A: strip dirty byte (strips >= 20 outside MapDisplay) */")
+    # y*640 as (5y)<<7 -> y*W (exactly the original shift at 640)
+    for site, reg in ((0x7C342, "edx"), (0x7C380, "eax"), (0x7C3F3, "eax"), (0x7C42F, "eax"),
+                      (0x1C660, "edi"), (0x1C831, "edi"), (0x1C8F0, "edi"), (0x1C8F3, "edx"),
+                      (0x1C927, "ecx"), (0x1C92A, "edx")):
+        ws_rule(f"{reg} = {reg} << 7u; /* 0x{site:08X}: shl {reg}, 7 */",
+                f"{reg} = GW_WS_ROWS_TIMES_WIDTH({reg}); /* 0x{site:08X}: (5*y) << 7 = y*640 -> y*width */")
+    # strips >= 20 do not propagate into the 20-column cell grid (their band is re-copied whole, see 0x7C765)
+    ws_rule("    recomp_begin_memory_access_ex(RECOMP_SEG_SS, 1u, 0x0007C489u, RECOMP_MEM_ACCESS_READ, 105u, \"cmp\");",
+            "    if (MEM8(SS_BASE + (esp + 8)) >= 20u) goto L_0007C57C; /* widescreen strip: no 20-column grid cell */\n"
+            "    recomp_begin_memory_access_ex(RECOMP_SEG_SS, 1u, 0x0007C489u, RECOMP_MEM_ACCESS_READ, 105u, \"cmp\");")
+    # camera centre stays at the 640 centre
+    ws_rule("eax = MEM32(DS_BASE + (0x376A78)); /* 0x0007C6B0: mov eax, dword ptr [0x376a78] */",
+            "eax = 0x280u; /* 0x0007C6B0: camera centre keeps the 640-pixel frame (x=384) */")
+    # sprite window and ring split widths
+    ws_rule("ebx = 0x280u; /* 0x000792FB: mov ebx, 0x280 */",
+            f"ebx = {ws_width}; /* 0x000792FB: parameterized sprite clip width */")
+    ws_rule("ecx = 0x280u; /* 0x0007A099: mov ecx, 0x280 */",
+            f"ecx = {ws_width}; /* 0x0007A099: parameterized ring split width (MapDisplay+0x33) */")
+    # the sprite drawers' grid-column clamp keeps the 20-column grid
+    for site in (0x64EA8, 0x64FA8, 0x8A982, 0x8AC4A, 0x991C4, 0x99C39, 0x9A7CA, 0x9B00C, 0x9B816,
+                 0x9C148, 0x9CF76, 0x9D927, 0x9EB16, 0x9FB32):
+        ws_rule(f"eax = MEM32(DS_BASE + (0x376A78)); /* 0x{site:08X}: mov eax, dword ptr [0x376a78] */",
+                f"eax = 0x280u; /* 0x{site:08X}: cell-grid column clamp keeps 20 columns */")
+    # after the dirty-cell copy (0x1CAE0) the widescreen band x=640.. is copied whole from the ring
+    for site in (0x7C765, 0x7C76E):
+        ws_rule(f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;",
+                f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;\n    if (g_gw_ws_band_copy) g_gw_ws_band_copy(); /* widescreen band */")
+    ws_applied = 0
+    for original, replacement in widescreen_rules:
+        site_match = re.search(r"0x([0-9A-Fa-f]{8})", replacement)
+        site = int(site_match.group(1), 16) if site_match else 0
+        owner = lifted_function_containing(site) if site else None
+        count = text.count(original)
+        if owner is None:
+            if count:
+                raise SystemExit(f"widescreen rule at 0x{site:08X} matched outside its lifted function")
+            continue
+        if count != 1:
+            raise SystemExit(f"widescreen rule at 0x{site:08X} expected one lifted instruction, got {count}")
+        text = text.replace(original, replacement, 1)
+        ws_applied += 1
+    if ws_applied:
+        if "L_0007C57C:" not in text:
+            raise SystemExit("widescreen strip guard needs label L_0007C57C")
+        ws_support = (
+            "\n/* True widescreen support (tools/lift_entry_path.py widescreen_rules). */\n"
+            "uint32_t g_gw_ws_strip_ext = 0u;\n"
+            "void (*g_gw_ws_band_copy)(void) = 0;\n"
+            "#define GW_WS_STRIP_FLAG(base_reg, index) (((uint32_t)(index) < 20u || !g_gw_ws_strip_ext) ? \\\n"
+            "    (uint32_t)(DS_BASE + ((base_reg) + 0x11BDu)) : (uint32_t)(g_gw_ws_strip_ext + ((uint32_t)(index) - 20u)))\n"
+            "#define GW_WS_ROWS_TIMES_WIDTH(v) (MEM32(DS_BASE + (0x376A78)) == 0x280u ? ((v) << 7u) : \\\n"
+            "    (uint32_t)(((int32_t)(v) / 5) * (int32_t)MEM32(DS_BASE + (0x376A78))))\n")
+        first_func = text.find("\nvoid gw_partial_0x")
+        if first_func < 0:
+            raise SystemExit("widescreen support has no insertion point")
+        text = text[:first_func] + ws_support + text[first_func:]
+        print(f"widescreen rules applied: {ws_applied} of {len(widescreen_rules)}", file=sys.stderr)
     # Raster instrumentation is opt-in because most partial closures do not
     # link the graphics-probe callbacks. The dedicated creature probe enables
     # it explicitly; unrelated title/plugin closures remain self-contained.
