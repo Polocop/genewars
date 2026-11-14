@@ -14248,7 +14248,14 @@ static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_service
             memcpy(scratch+ws+y*width,base+old_ws+y*640u,640u);
             memset(scratch+ws+y*width+640u,0,width-640u);
         }
-        memset(scratch+ring,0,bytes);
+        /* The ring also carries the HUD columns that the dirty-cell copy (0x1CAE0) restores: start it as the
+           current 640 ring, widened (Draw redraws every map strip). */
+        const uint32_t old_ring=*(const uint32_t *)(base+0x002EECA0u);
+        if(!old_ring || old_ring>GUEST_LIMIT-640u*480u) return 0;
+        for(uint32_t y=0;y<height;y++) {
+            memcpy(scratch+ring+y*width,base+old_ring+y*640u,640u);
+            memset(scratch+ring+y*width+640u,0,width-640u);
+        }
         memset(scratch+ws+bytes,0xA7,guard); memset(scratch+ring+bytes,0xA7,guard);
         *(uint32_t *)(scratch+0x00376A5Cu)=ws;
         *(uint32_t *)(scratch+0x00376A78u)=width;
@@ -14326,11 +14333,17 @@ static int run_widescreen_854_probe(uint8_t *memory,const gw_dos_services *dos,u
     if(a&&b) for(uint32_t y=0;y<H;y++) for(uint32_t x=0;x<640u;x++) left_equal+=(c640.pixels[y*640u+x]==wide.pixels[y*W+x]);
     uint8_t *crop=NULL;
     if(b) { crop=(uint8_t *)malloc(OUTW*H); if(crop) for(uint32_t y=0;y<H;y++) memcpy(crop+y*OUTW,wide.pixels+y*W,OUTW); }
+    const unsigned turn=*(uint32_t *)(memory+0x002F1472u);
+    char pth[160];
+    if(b) { snprintf(pth,sizeof pth,"evidence/ws854_t%u_ring_864x480.bmp",turn); (void)save_indexed_bmp24(pth,scratch+wide.ring,W,H,vga_dac); }
+    if(a) { snprintf(pth,sizeof pth,"evidence/ws854_t%u_control_640x480.bmp",turn); (void)save_indexed_bmp24(pth,c640.pixels,640u,H,vga_dac); }
     if(a) { (void)save_indexed_bmp24("evidence/ws854_control_640x480.bmp",c640.pixels,640u,H,vga_dac);
         FILE *r=fopen("evidence/ws854_control_640x480.raw","wb"); if(r) { fwrite(c640.pixels,1,640u*H,r); fclose(r); } }
+    if(crop) { snprintf(pth,sizeof pth,"evidence/ws854_t%u_original_renderer_854x480.bmp",turn); (void)save_indexed_bmp24(pth,crop,OUTW,H,vga_dac); }
     if(crop) { (void)save_indexed_bmp24("evidence/ws854_original_renderer_854x480.bmp",crop,OUTW,H,vga_dac);
         FILE *r=fopen("evidence/ws854_original_renderer_854x480.raw","wb"); if(r) { fwrite(crop,1,OUTW*H,r); fclose(r); } }
-    FILE *j=fopen("evidence/ws854_probe.json","w");
+    snprintf(pth,sizeof pth,"evidence/ws854_t%u_probe.json",turn);
+    FILE *j=fopen(pth,"w");
     if(j) {
         fprintf(j,"{\n  \"schema\": \"gwrecomp.true-widescreen-854/v1\",\n  \"snapshot_turn\": %u,\n",*(uint32_t *)(memory+0x002F1472u));
         fprintf(j,"  \"control_640\": {\"ok\": %d, \"fault\": %d, \"end_eip\": \"0x%08X\", \"changed_guest_bytes_outside_wscreen\": %u, \"MCB_chain_valid\": %d, \"capture\": \"evidence/ws854_control_640x480.bmp\"},\n",
