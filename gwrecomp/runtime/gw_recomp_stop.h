@@ -441,4 +441,9 @@ static inline int gw_recomp_le_target_member(uint32_t target,
     } \
 } while (0)
 
+/* Inline fast paths of the per-instruction hooks (opt-in per build: GW_FAST_HOOKS). */
+#if defined(RECOMP_GENERATED_CODE) && defined(GW_FAST_HOOKS)
+#include "gw_fast_hooks.h"
+#endif
+
 #endif

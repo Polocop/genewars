@@ -10,9 +10,16 @@ static atomic_flag gw_context_busy = ATOMIC_FLAG_INIT;
 static gw_recomp_context *active_context;
 static gw_pit8254 *active_pit;
 static gw_port_io_trap last_port_io_trap;
-static uint32_t last_guest_instruction_va;
+/* Exported for the inline fast path of gw_recomp_guest_instruction (gw_fast_hooks.h). */
+uint32_t g_gw_last_guest_va;
+#define last_guest_instruction_va g_gw_last_guest_va
 /* Opt-in instruction watch (G-GP-004). Disabled while instruction_watch_va is 0. */
-static uint32_t instruction_watch_va;
+uint32_t g_gw_instr_watch_va;
+#define instruction_watch_va g_gw_instr_watch_va
+/* 1 while gw_recomp_guest_instruction would only record the EIP and return 1 for every EIP other than the
+   watch: a context is active, it is the realtime-PIT context, and no port-I/O trap is latched (the memory
+   diagnostic flag is checked separately, g_recomp_memory_diag_on). Recomputed at every change of those. */
+int g_gw_instr_fast;
 static gw_recomp_instruction_watch_fn instruction_watch_fn;
 static uint32_t pending_tail_call_va;
 static int pending_tail_call_valid;
@@ -40,12 +47,14 @@ extern void gw_native_w1_092_instruction_observer(uint64_t count,
 extern int gw_native_w1_093_repeat_guard(unsigned int guest_va);
 #endif
 
+static void instr_fast_refresh(void);
 static void latch_port_io_trap(gw_port_io_trap_reason reason,
                                unsigned int operation, unsigned int port,
                                unsigned int width, unsigned int value,
                                unsigned int guest_va) {
     if (last_port_io_trap.pending) return;
     last_port_io_trap.pending = 1u;
+    g_gw_instr_fast = 0;
     last_port_io_trap.reason = (uint8_t)reason;
     last_port_io_trap.port = port;
     last_port_io_trap.operation = operation;
@@ -163,6 +172,7 @@ int gw_recomp_pit_realtime_start(gw_recomp_context *context,
     realtime_pit_host_base=host_counter;
     realtime_pit_frequency=host_frequency;
     realtime_pit_cycle_base=context->pit.virtual_cycles;
+    instr_fast_refresh();
     return 1;
 }
 
@@ -194,6 +204,7 @@ void gw_recomp_pit_realtime_stop(gw_recomp_context *context) {
         realtime_pit_frequency=0;
         realtime_pit_cycle_base=0;
     }
+    instr_fast_refresh();
 }
 
 /* Host-driven guest clock for a bounded host loop (Smacker video): while held, guest
@@ -655,6 +666,16 @@ void gw_recomp_clear_port_io_trap(void) {
     last_port_io_trap.value = 0u;
     last_port_io_trap.guest_va = 0u;
     if (active_context) active_context->port_io_trap = last_port_io_trap;
+    instr_fast_refresh();
+}
+
+static void instr_fast_refresh(void) {
+#if defined(GW_NATIVE_W1_092_HOST_BACKED_GUEST_MEMORY)
+    g_gw_instr_fast = 0;
+#else
+    g_gw_instr_fast = active_context && active_pit && active_context==realtime_pit_context &&
+                      !last_port_io_trap.pending;
+#endif
 }
 
 gw_recomp_status gw_recomp_invoke(recomp_func_t function, gw_recomp_context *context) {
@@ -666,7 +687,7 @@ gw_recomp_status gw_recomp_invoke(recomp_func_t function, gw_recomp_context *con
     }
     active_context=context;
     active_pit=&context->pit;
-    gw_recomp_clear_port_io_trap();
+    gw_recomp_clear_port_io_trap();   /* also refreshes g_gw_instr_fast */
     gw_interrupt_clear_trap();
     recomp_clear_segment_fault();
     recomp_clear_memory_fault();
@@ -678,6 +699,7 @@ gw_recomp_status gw_recomp_invoke(recomp_func_t function, gw_recomp_context *con
     capture_context(context);
     active_pit=0;
     active_context=0;
+    g_gw_instr_fast=0;
     atomic_flag_clear_explicit(&gw_context_busy,memory_order_release);
     return GW_RECOMP_OK;
 }
@@ -687,5 +709,6 @@ void gw_recomp_yield_active_context(void) {
     capture_context(active_context);
     active_pit=0;
     active_context=0;
+    g_gw_instr_fast=0;
     atomic_flag_clear_explicit(&gw_context_busy,memory_order_release);
 }

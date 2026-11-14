@@ -6556,6 +6556,9 @@ def main()->None:
         # Opt-in function-entry counter (GWRECOMP_FUNC_COVERAGE=1). runtime/recomp_types.h
         # routes RECOMP_ENTER to a flag-guarded counter only when this define is present.
         "-DGW_FUNC_COVERAGE_BUILD=1",
+        # Inline fast paths of the per-instruction hooks in generated code (runtime/gw_fast_hooks.h);
+        # same results as the out-of-line runtime functions, which they call outside the plain state.
+        "-DGW_FAST_HOOKS=1",
         "-I",SDL2_INCLUDE]
     if os.environ.get("GW_FULL_TRACE") == "1":
         compile_flags.append("-DGW_FULL_TRACE_BUILD=1")

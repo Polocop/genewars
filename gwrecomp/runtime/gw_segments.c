@@ -12,21 +12,52 @@ static void *active_user;
 static recomp_segment_fault last_fault;
 static recomp_segment_range_fn active_range_validator;
 static void *active_range_user;
-static recomp_memory_fault memory_fault;
+/* Exported for the inline hooks of generated code (gw_fast_hooks.h). */
+recomp_memory_fault g_recomp_memory_fault;
+#define memory_fault g_recomp_memory_fault
 static uint32_t memory_begin, memory_size;
-static uint32_t access_instruction_va, access_width;
-static uint32_t access_instruction_id;
-static uint8_t access_kind;
-static recomp_segment_id access_segment=RECOMP_SEG_DS;
-static char access_mnemonic[16];
-static int access_active;
+gw_recomp_access_state g_recomp_access={0u,0u,0u,RECOMP_SEG_DS,0u,0,""};
+#define access_instruction_va g_recomp_access.instruction_va
+#define access_width g_recomp_access.width
+#define access_instruction_id g_recomp_access.instruction_id
+#define access_kind g_recomp_access.kind
+#define access_segment g_recomp_access.segment
+#define access_mnemonic g_recomp_access.mnemonic
+#define access_active g_recomp_access.active
 static union { uint64_t align; uint8_t bytes[16]; } fault_sink;
 static int memory_diag_enabled;
+int g_recomp_memory_diag_on;
+/* Validated segment windows: for segment register s, while g_recomp_seg_windows[s].gen equals
+   g_recomp_seg_window_gen and the register still holds .selector with base .base, every access of
+   width w>0 at linear L with .lo <= L and L+w <= .hi is one this file's full check accepts
+   (selector nonzero, L >= base, segment limit, memory bounds), so the generated code may skip the call.
+   Filled only from an access the full check accepted; any change to the validator, its limit query,
+   the memory bounds, or the descriptor state behind them invalidates all windows. g_recomp_fastmem_ok
+   is 0 whenever the full check would do more than validate (diagnostics, translator, write observer,
+   null-DS diagnostic, write census). */
+gw_recomp_seg_window g_recomp_seg_windows[8];
+uint32_t g_recomp_seg_window_gen=1u;
+int g_recomp_fastmem_ok;
+static recomp_segment_limit_fn active_limit_query;
+static void *active_limit_user;
+static int census_state;
+static int null_ds_read_diag_enabled;
+static recomp_memory_translate_fn memory_translator;
+static recomp_guest_write_observer_fn guest_write_observer;
+static void fastmem_refresh(void) {
+    g_recomp_fastmem_ok=!memory_diag_enabled && !memory_translator && !guest_write_observer &&
+                        !null_ds_read_diag_enabled && census_state==1;
+}
+void recomp_segment_windows_invalidate(void) {
+    if (++g_recomp_seg_window_gen==0u) g_recomp_seg_window_gen=1u;
+}
+void recomp_set_segment_limit_query(recomp_segment_limit_fn query,void *user) {
+    active_limit_query=query; active_limit_user=user;
+    recomp_segment_windows_invalidate();
+}
 static recomp_memory_backing_fn memory_backing_validator;
 static void *memory_backing_user;
-static recomp_memory_translate_fn memory_translator;
 static void *memory_translator_user;
-static recomp_guest_write_observer_fn guest_write_observer;
 static void *guest_write_observer_user;
 static recomp_memory_diagnostic current_instruction, last_access;
 static recomp_memory_diagnostic dpmi_state;
@@ -35,13 +66,13 @@ static uint32_t memory_diag_guest_begin, memory_diag_guest_end;
 #define RECOMP_CODE_MAP_MAX 16u
 static recomp_code_range code_ranges[RECOMP_CODE_MAP_MAX];
 static uint32_t code_range_count;
-static int null_ds_read_diag_enabled;
 static uint32_t null_ds_read_diag_sequence;
 static uint32_t null_ds_read_diag_printed;
 static recomp_null_ds_read_diagnostic null_ds_read_diag_last_record;
 
 void recomp_null_ds_read_diag_enable(int enabled) {
     null_ds_read_diag_enabled=enabled!=0;
+    fastmem_refresh();
     if (!enabled) {
         null_ds_read_diag_sequence=0;
         null_ds_read_diag_printed=0;
@@ -149,7 +180,9 @@ static void segment_state(recomp_segment_id segment,uint16_t *selector,uint32_t 
     }
 }
 
-void recomp_memory_diag_enable(int enabled) { memory_diag_enabled=enabled!=0; }
+void recomp_memory_diag_enable(int enabled) {
+    memory_diag_enabled=enabled!=0; g_recomp_memory_diag_on=memory_diag_enabled; fastmem_refresh();
+}
 int recomp_memory_diag_enabled(void) { return memory_diag_enabled; }
 void recomp_memory_diag_set_guest_range(uint32_t begin,uint32_t end) {
     memory_diag_guest_begin=begin; memory_diag_guest_end=end;
@@ -245,9 +278,13 @@ static void set_memory_fault(recomp_segment_id segment,uint16_t selector,uint32_
 
 void recomp_set_segment_range_validator(recomp_segment_range_fn validator, void *user) {
     active_range_validator=validator; active_range_user=user;
+    /* a limit query describes one validator: a new validator has none until it registers its own */
+    active_limit_query=0; active_limit_user=0;
+    recomp_segment_windows_invalidate();
 }
 void recomp_set_memory_bounds(uint32_t begin, uint32_t size) {
     memory_begin=begin; memory_size=size;
+    recomp_segment_windows_invalidate();
 }
 void recomp_begin_memory_access(recomp_segment_id segment, uint32_t width, uint32_t instruction_va) {
     recomp_begin_memory_access_ex(segment,width,instruction_va,
@@ -259,8 +296,8 @@ void recomp_begin_memory_access_ex(recomp_segment_id segment, uint32_t width,
     const char *mnemonic) {
     access_segment=segment; access_width=width; access_instruction_va=instruction_va;
     access_instruction_id=instruction_id; access_kind=access; access_active=1;
-    memset(access_mnemonic,0,sizeof access_mnemonic);
-    if (mnemonic) strncpy(access_mnemonic,mnemonic,sizeof access_mnemonic-1u);
+    /* generated code passes string literals: keep the pointer (no per-access copy) */
+    access_mnemonic=mnemonic?mnemonic:"";
     if (memory_diag_enabled) {
         uint16_t selector=0; uint32_t base=0;
         segment_state(segment,&selector,&base);
@@ -334,7 +371,7 @@ static const char *const census_scope_names[CENSUS_SCOPES]={"guest","host"};
 static const char *const census_kind_names[CENSUS_KINDS]={"UNKNOWN","READ","WRITE","READWRITE","OTHER"};
 static const char *const census_outcome_names[CENSUS_OUTCOMES]={"early","seg_reject",
     "fault_suppressed","invalid","checked_no_observer","observed"};
-static int census_state;          /* 0 = not read yet, 1 = off, 2 = on */
+/* census_state (0 = not read yet, 1 = off, 2 = on) is declared with the fast-path state above */
 static int census_via_segment;    /* set while recomp_checked_segment_addr calls the core */
 static int census_scope_host;
 static uint32_t census_counts[CENSUS_ENTRIES][CENSUS_SCOPES][2][CENSUS_KINDS][CENSUS_OUTCOMES];
@@ -367,6 +404,7 @@ static void census_init(void) {
     if (census_state) return;
     env=getenv("GWRECOMP_WRITE_CENSUS");
     census_state=(env && env[0]=='1')?2:1;
+    fastmem_refresh();
     if (census_state==2) atexit(census_dump_at_exit);
 }
 
@@ -552,18 +590,45 @@ uintptr_t recomp_checked_mem_addr(uint32_t segmented_linear, uint32_t width) {
     census_note(census_entry,outcome,access_active,access_kind);
     census_eip_note(instruction_va,census_entry,outcome,access_active,access_kind,
                     census_via_segment?NULL:access_mnemonic);
+    if (g_recomp_fastmem_ok && access_active && selector!=0 && (unsigned)segment<8u) {
+        /* the access was accepted by the full check above; record the window in which every access of
+           this segment register (same selector and base) is accepted by the same check */
+        uint64_t limit_end=0x100000000ull; int known=1;
+        if (active_range_validator)
+            known=active_limit_query && active_limit_query(selector,&limit_end,active_limit_user);
+        if (known) {
+            uint64_t lo=base,hi=(uint64_t)base+limit_end;
+            if (hi>0x100000000ull) hi=0x100000000ull;
+            if (memory_size) {
+                const uint64_t region_end=(uint64_t)memory_begin+memory_size;
+                if (lo<memory_begin) lo=memory_begin;
+                if (hi>region_end) hi=region_end;
+            }
+#ifdef RECOMP_TRACE_LOW_WRITES
+            /* writes below linear 0x100 are traced by the full check: keep them out of every window */
+            if (lo<0x100u) lo=0x100u;
+#endif
+            if (lo<hi && (uint64_t)segmented_linear>=lo && end<=hi) {
+                gw_recomp_seg_window *w=&g_recomp_seg_windows[(unsigned)segment];
+                w->selector=selector; w->base=base; w->lo=(uint32_t)lo; w->hi=hi;
+                w->gen=g_recomp_seg_window_gen;
+            }
+        }
+    }
     return host_address;
 }
 
 void recomp_set_memory_translator(recomp_memory_translate_fn translate,void *user) {
     memory_translator=translate;
     memory_translator_user=user;
+    fastmem_refresh();
 }
 
 void recomp_set_guest_write_observer(recomp_guest_write_observer_fn observer,
                                      void *user) {
     guest_write_observer=observer;
     guest_write_observer_user=user;
+    fastmem_refresh();
 }
 
 uintptr_t recomp_checked_segment_addr(recomp_segment_id segment, uint32_t offset,

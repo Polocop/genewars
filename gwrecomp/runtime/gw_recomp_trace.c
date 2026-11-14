@@ -36,7 +36,9 @@ static control_record controls[CALL_RING_SIZE];
 static interrupt_record interrupts[INTERRUPT_RING_SIZE];
 static interrupt_record last_dos, last_dpmi;
 static uint32_t call_sequence, branch_sequence, control_sequence, interrupt_sequence;
-static int trace_enabled;
+/* exported for the inline enabled check of gw_recomp_trace_branch (gw_fast_hooks.h) */
+int g_gw_trace_enabled;
+#define trace_enabled g_gw_trace_enabled
 static int boundary_stop_enabled, boundary_was_hit;
 static int have_last_dos, have_last_dpmi;
 #define WATCHED_BRANCH_SITES 24u

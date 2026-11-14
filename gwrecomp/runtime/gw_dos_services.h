@@ -221,6 +221,7 @@ int gw_dos_services_real_mode_interrupt(void *user, uint8_t vector,
                                         gw_dos_real_mode_registers *registers);
 int gw_dos_descriptor_base(uint16_t selector, uint32_t *base, void *user);
 int gw_dos_descriptor_range(uint16_t selector, uint32_t offset, uint32_t width, void *user);
+int gw_dos_descriptor_limit(uint16_t selector, uint64_t *end_offset, void *user);
 gw_interrupt_result gw_dos_services_callback(uint8_t vector,
                                               uint32_t instruction_va,
                                               void *user);

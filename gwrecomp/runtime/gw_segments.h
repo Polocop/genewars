@@ -3,6 +3,36 @@
 #include <stdint.h>
 #include "../third_party/pcrecomp/runtime/recomp32/recomp_types.h"
 
+/* State behind the inline hooks of generated code (gw_fast_hooks.h); owned by gw_segments.c. */
+typedef struct gw_recomp_access_state {
+    uint32_t instruction_va, width, instruction_id;
+    recomp_segment_id segment;
+    uint8_t kind;
+    int active;
+    const char *mnemonic;   /* a string literal of the generated code, never copied */
+} gw_recomp_access_state;
+extern gw_recomp_access_state g_recomp_access;
+extern recomp_memory_fault g_recomp_memory_fault;
+extern int g_recomp_memory_diag_on;
+typedef struct gw_recomp_seg_window {
+    uint32_t gen;
+    uint16_t selector;
+    uint32_t base;
+    uint32_t lo;
+    uint64_t hi;
+} gw_recomp_seg_window;
+extern gw_recomp_seg_window g_recomp_seg_windows[8];
+extern uint32_t g_recomp_seg_window_gen;
+extern int g_recomp_fastmem_ok;
+/* Companion of a segment range validator: for a selector the validator would judge, store in *end_offset
+   the exclusive end E such that validator(selector,offset,width) == (width!=0 && offset+width <= E) for
+   every offset and width, and return 1; return 0 when no such E describes the selector. Registered after
+   the validator it describes (recomp_set_segment_range_validator clears it). */
+typedef int (*recomp_segment_limit_fn)(uint16_t selector, uint64_t *end_offset, void *user);
+void recomp_set_segment_limit_query(recomp_segment_limit_fn query, void *user);
+/* Called whenever state a validator or its limit query reads changes (descriptor tables, DOS blocks). */
+void recomp_segment_windows_invalidate(void);
+
 /* Optional guest-physical aperture translation (for banked VGA/VBE windows).
  * Return the host backing for this one guest access, or 0 to reject it. */
 typedef uintptr_t (*recomp_memory_translate_fn)(uint32_t guest_linear,

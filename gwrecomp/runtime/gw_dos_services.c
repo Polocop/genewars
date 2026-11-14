@@ -82,6 +82,7 @@ int gw_dos_dbcs_table_configure(gw_dos_services *services,
 
 int gw_dos_services_real_mode_interrupt(void *user, uint8_t vector,
                                         gw_dos_real_mode_registers *registers) {
+    recomp_segment_windows_invalidate();
     gw_dos_services *services=(gw_dos_services *)user;
     if (!services || !registers || vector!=0x21u ||
         (uint16_t)registers->eax!=0x6300u || !services->dbcs_table_configured ||
@@ -136,6 +137,7 @@ static gw_interrupt_result dos_dpmi_simulate_real_mode_interrupt(
 }
 
 int gw_dos_descriptor_bind(gw_dos_services *services, uint16_t selector, uint32_t base, uint32_t limit) {
+    recomp_segment_windows_invalidate();
     if (!services || selector == 0 || limit == 0 || base > UINT32_MAX - limit) return 0;
     for (uint32_t i = 0; i < services->descriptor_count; ++i) {
         /* RPL is not part of the descriptor-table index. GeneWars startup
@@ -220,6 +222,7 @@ int gw_dos_linear_allocator_configure_from_map(gw_dos_services *services,
 }
 
 void gw_dos_descriptor_clear(gw_dos_services *services) {
+    recomp_segment_windows_invalidate();
     if (!services) return;
     free(services->descriptors); services->descriptors = 0; services->descriptor_count = services->descriptor_capacity = 0;
     free(services->dos_blocks); services->dos_blocks = 0; services->dos_block_count = services->dos_block_capacity = 0;
@@ -281,6 +284,7 @@ int gw_dos_descriptor_base(uint16_t selector, uint32_t *base, void *user) {
 }
 
 int gw_dos_descriptor_unbind(gw_dos_services *services, uint16_t selector) {
+    recomp_segment_windows_invalidate();
     if (!services || !selector) return 0;
     uint16_t descriptor=(uint16_t)(selector & 0xFFFCu);
     for (uint32_t i=0;i<services->descriptor_count;i++) if ((services->descriptors[i].selector & 0xFFFCu)==descriptor) {
@@ -296,6 +300,7 @@ int gw_dos_descriptor_unbind(gw_dos_services *services, uint16_t selector) {
 int gw_dos_memory_allocator_configure(gw_dos_services *services, uint16_t begin_segment,
                                       uint16_t end_segment, uint16_t first_selector,
                                       uint16_t psp_segment) {
+    recomp_segment_windows_invalidate();
     if (!services || begin_segment < psp_segment || begin_segment >= end_segment || end_segment > 0xa000u ||
         first_selector == 0 || (first_selector & 7u) != 4u || !psp_segment) return 0;
     services->dos_segment_begin = begin_segment;
@@ -309,6 +314,7 @@ int gw_dos_memory_allocator_configure(gw_dos_services *services, uint16_t begin_
 }
 
 int gw_dos4gw_flat_heap_configure(gw_dos_services *services, uint16_t selector) {
+    recomp_segment_windows_invalidate();
     if (!services || !selector || !services->guest_memory_configured ||
         services->guest_memory_size == 0) return 0;
     services->dos4gw_flat_heap_selector = selector;
@@ -974,7 +980,46 @@ int gw_dos_descriptor_range(uint16_t selector, uint32_t offset, uint32_t width, 
     return 0;
 }
 
+/* Limit query matching gw_dos_descriptor_range exactly (see recomp_segment_limit_fn): the same lookup
+   order, returning the bound the range check compares against instead of the comparison. */
+int gw_dos_descriptor_limit(uint16_t selector, uint64_t *end_offset, void *user) {
+    gw_dos_services *services=(gw_dos_services *)user;
+    if (!services || !selector || !end_offset) return 0;
+    for (uint32_t i=0;i<services->descriptor_count;i++) {
+        gw_dos_descriptor *d=&services->descriptors[i];
+        if ((d->selector & 0xFFFCu)==(selector & 0xFFFCu)) { *end_offset=(uint64_t)d->limit+1u; return 1; }
+    }
+    uint16_t descriptor=(uint16_t)(selector & 0xFFFCu);
+    if (descriptor==(g_seg_cs & 0xFFFCu) || descriptor==(g_seg_ds & 0xFFFCu) ||
+        descriptor==(g_seg_es & 0xFFFCu) || descriptor==(g_seg_ss & 0xFFFCu) ||
+        descriptor==(g_seg_fs & 0xFFFCu) || descriptor==(g_seg_gs & 0xFFFCu)) {
+        *end_offset=0x100000000ull; return 1;
+    }
+    if (services->measured_ah48_active && selector==services->measured_ah48_segment) {
+        *end_offset=16u; return 1;
+    }
+    for (uint32_t i=0;i<services->dos_block_count;i++) {
+        const gw_dos_memory_block *block=&services->dos_blocks[i];
+        if (!block->selector && block->reserved==1u && block->segment==selector) {
+            *end_offset=(uint64_t)block->paragraphs*16u; return 1;
+        }
+    }
+    return 0;
+}
+
+static gw_interrupt_result dos_services_callback_body(uint8_t vector, uint32_t instruction_va, void *user);
+/* Every DOS/DPMI service may change descriptors, DOS blocks or the AH=48 record that the range check reads:
+   drop the validated segment windows before and after each one. */
 gw_interrupt_result gw_dos_services_callback(uint8_t vector,
+                                              uint32_t instruction_va,
+                                              void *user) {
+    recomp_segment_windows_invalidate();
+    const gw_interrupt_result r=dos_services_callback_body(vector,instruction_va,user);
+    recomp_segment_windows_invalidate();
+    return r;
+}
+
+static gw_interrupt_result dos_services_callback_body(uint8_t vector,
                                               uint32_t instruction_va,
                                               void *user) {
     if (user == 0) return GW_INTERRUPT_TRAPPED;
@@ -1422,6 +1467,7 @@ void gw_dos_services_init(gw_dos_services *services) {
         services->standard_handles_closed=0;
         recomp_set_segment_resolver(gw_dos_descriptor_base, services);
         recomp_set_segment_range_validator(gw_dos_descriptor_range, services);
+        recomp_set_segment_limit_query(gw_dos_descriptor_limit, services);
     }
     gw_interrupt_set_callback(gw_dos_services_callback, services);
 }
