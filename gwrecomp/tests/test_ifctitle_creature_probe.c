@@ -9240,6 +9240,17 @@ void gw_tick_section(uint32_t section,int begin) {
 static HANDLE g_tick_profile_worker;
 static uint32_t g_host_eip_va[GW_HOST_EIP_SLOTS],g_host_eip_hits[GW_HOST_EIP_SLOTS];
 static uint64_t g_host_eip_total,g_host_eip_dropped;
+/* samples outside the executable (system DLLs): the first return address into the executable found on the
+   worker's stack, so the lifted/runtime caller of the DLL code is known */
+static uint32_t g_host_ext_va[4096],g_host_ext_hits[4096];
+static uintptr_t g_host_mod_lo,g_host_mod_hi;
+static void host_ext_note(uint32_t caller) {
+    uint32_t h=(caller*2654435761u)>>20;
+    for(uint32_t probe=0u;probe<64u;probe++,h=(h+1u)&4095u) {
+        if(g_host_ext_va[h]==caller) { g_host_ext_hits[h]++; return; }
+        if(!g_host_ext_va[h]) { g_host_ext_va[h]=caller; g_host_ext_hits[h]=1u; return; }
+    }
+}
 static void host_eip_note(uint32_t eip) {
     uint32_t h=(eip*2654435761u)>>16;
     for(uint32_t probe=0u;probe<64u;probe++,h=(h+1u)&(GW_HOST_EIP_SLOTS-1u)) {
@@ -9257,7 +9268,16 @@ static int SDLCALL tick_profile_sampler(void *unused) {
                 g_tick_profile_samples[i]=*(volatile uint32_t *)&g_cur_func;
             if(g_tick_profile_worker && SuspendThread(g_tick_profile_worker)!=(DWORD)-1) {
                 CONTEXT ctx; memset(&ctx,0,sizeof ctx); ctx.ContextFlags=CONTEXT_CONTROL;
-                if(GetThreadContext(g_tick_profile_worker,&ctx)) host_eip_note((uint32_t)ctx.Eip);
+                if(GetThreadContext(g_tick_profile_worker,&ctx)) {
+                    host_eip_note((uint32_t)ctx.Eip);
+                    if(g_host_mod_hi && (ctx.Eip<g_host_mod_lo || ctx.Eip>=g_host_mod_hi)) {
+                        const uint32_t *sp=(const uint32_t *)(uintptr_t)ctx.Esp; uint32_t caller=1u;
+                        for(int k=0;k<256;k++) { MEMORY_BASIC_INFORMATION mbi;
+                            if(k==0 && (!VirtualQuery(sp,&mbi,sizeof mbi) || mbi.State!=MEM_COMMIT)) break;
+                            if(sp[k]>=g_host_mod_lo && sp[k]<g_host_mod_hi) { caller=sp[k]; break; } }
+                        host_ext_note(caller);
+                    }
+                }
                 ResumeThread(g_tick_profile_worker);
             }
         }
@@ -9273,7 +9293,19 @@ static void host_eip_dump(void) {
     fprintf(f,"module_base=%08x total=%llu dropped=%llu%c",(unsigned)(uintptr_t)GetModuleHandleA(NULL),
         (unsigned long long)g_host_eip_total,(unsigned long long)g_host_eip_dropped,10);
     for(uint32_t k=0u;k<GW_HOST_EIP_SLOTS;k++)
-        if(g_host_eip_va[k]) fprintf(f,"%08x %u%c",g_host_eip_va[k],g_host_eip_hits[k],10);
+        if(g_host_eip_va[k]) {
+            char mod[MAX_PATH]="-"; HMODULE hm=NULL;
+            if(g_host_eip_va[k]<g_host_mod_lo || g_host_eip_va[k]>=g_host_mod_hi) {
+                if(GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                      (LPCSTR)(uintptr_t)g_host_eip_va[k],&hm) && hm) {
+                    char full[MAX_PATH]; if(GetModuleFileNameA(hm,full,MAX_PATH)) { const char *b=strrchr(full,92);
+                        snprintf(mod,sizeof mod,"%s+%x",b?b+1:full,(unsigned)(g_host_eip_va[k]-(uint32_t)(uintptr_t)hm)); }
+                }
+            }
+            fprintf(f,"%08x %u %s%c",g_host_eip_va[k],g_host_eip_hits[k],mod,10);
+        }
+    for(uint32_t k=0u;k<4096u;k++)
+        if(g_host_ext_va[k]) fprintf(f,"X %08x %u%c",g_host_ext_va[k],g_host_ext_hits[k],10);
     fclose(f);
 }
 
@@ -9305,6 +9337,11 @@ static void tick_profile_stop(void) {
 
 static void tick_profile_tick_begin(void) {
     if(!g_tick_profile_file) return;
+    if(!g_host_mod_hi) {
+        const uint8_t *m=(const uint8_t *)GetModuleHandleA(NULL);
+        const IMAGE_NT_HEADERS *nt=(const IMAGE_NT_HEADERS *)(m+((const IMAGE_DOS_HEADER *)m)->e_lfanew);
+        g_host_mod_lo=(uintptr_t)m; g_host_mod_hi=(uintptr_t)m+nt->OptionalHeader.SizeOfImage;
+    }
     if(!g_tick_profile_worker)
         DuplicateHandle(GetCurrentProcess(),GetCurrentThread(),GetCurrentProcess(),&g_tick_profile_worker,
             THREAD_SUSPEND_RESUME|THREAD_GET_CONTEXT|THREAD_QUERY_INFORMATION,FALSE,0);
