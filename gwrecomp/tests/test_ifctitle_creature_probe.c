@@ -14207,7 +14207,7 @@ static void ws_band_copy_impl(void) {
 
 typedef struct {
     int ok,invoke_ok,fault; uint32_t end_eip,changed_outside,canary_overwrites;
-    uint8_t *pixels; uint32_t width;
+    uint8_t *pixels; uint32_t width,ring,flags;
 } ws_pass;
 
 /* One private MapDisplay::Draw (full redraw) on a clone of `base` at surface width `width` (640 = canonical,
@@ -14221,17 +14221,34 @@ static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_service
     uint32_t ws=*(const uint32_t *)(scratch+0x00376A5Cu),ring=*(const uint32_t *)(scratch+0x002EECA0u),flags=0u;
     uint32_t lo=0u,hi=0u;
     if(width!=640u) {
-        if(!dos || !dos->allocation_configured) return 0;
-        const uint32_t start=(dos->allocation_cursor+0xFFFu)&~0xFFFu,need=2u*(bytes+guard)+4096u;
-        const uint32_t limit=dos->allocation_end<GUEST_LIMIT?dos->allocation_end:GUEST_LIMIT;
-        if(start<dos->allocation_cursor || start>limit || need>limit-start) return 0;
-        for(uint32_t i=0;i<GW_DOS_MAX_LINEAR_ALLOCATIONS;i++) {
-            const gw_dos_linear_allocation *a=&dos->linear_allocations[i];
-            if(a->active && a->base<start+need && start<a->base+a->size) return 0;
+        /* The DPMI range is fully granted to the guest CRT at start-up (cursor == end), so the buffers come from
+           the game's own block allocator 0x91E00, the routine that allocated the 640x480 ring at 0x92B7D. */
+        (void)dos;
+        const uint32_t sizes[3]={bytes+guard,bytes+guard,64u};
+        uint32_t got[3]={0,0,0};
+        for(unsigned k=0;k<3u;k++) {
+            gw_recomp_context ac;
+            const ptrdiff_t smb=g_mem_base; uint8_t *sg=guest_memory;
+            guest_memory=scratch; g_mem_base=(ptrdiff_t)(uintptr_t)scratch;
+            const int aok=invoke(gw_partial_0x00091E00,&ac,0x91E00u,scratch,sizes[k],0);
+            g_mem_base=smb; guest_memory=sg;
+            if(!aok || !ac.eax || ac.eax>GUEST_LIMIT-sizes[k]) return 0;
+            got[k]=ac.eax;
         }
-        lo=start; hi=start+need;
-        ws=start; ring=start+bytes+guard; flags=ring+bytes+guard;
-        memset(scratch+lo,0,need);
+        ws=got[0]; ring=got[1]; flags=got[2];
+        lo=ws; hi=ws+sizes[0];
+        if(alloc_base) *alloc_base=ws;
+        if(alloc_size) *alloc_size=sizes[0];
+        out->ring=ring; out->flags=flags;
+        /* Seed the new WScreen with the current 640 frame (HUD x<176 is drawn by other IFC code, not by
+           MapDisplay::Draw) and a black band; the ring starts black (Draw redraws every strip). */
+        const uint32_t old_ws=*(const uint32_t *)(base+0x00376A5Cu);
+        if(!old_ws || old_ws>GUEST_LIMIT-640u*480u) return 0;
+        for(uint32_t y=0;y<height;y++) {
+            memcpy(scratch+ws+y*width,base+old_ws+y*640u,640u);
+            memset(scratch+ws+y*width+640u,0,width-640u);
+        }
+        memset(scratch+ring,0,bytes);
         memset(scratch+ws+bytes,0xA7,guard); memset(scratch+ring+bytes,0xA7,guard);
         *(uint32_t *)(scratch+0x00376A5Cu)=ws;
         *(uint32_t *)(scratch+0x00376A78u)=width;
@@ -14245,8 +14262,6 @@ static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_service
         /* MapDisplay+0x33 is the ring split (0x7A099: width - ring_x), recomputed by the scroll path. */
         *(uint16_t *)(scratch+map+0x33u)=(uint16_t)(width-*(const uint16_t *)(scratch+map+0x08u));
         memset(scratch+flags,1u,16u);
-        if(alloc_base) *alloc_base=lo;
-        if(alloc_size) *alloc_size=need;
     }
     scratch[map+0x1Cu]|=0x02u;
     memset(scratch+map+0x11BDu,1u,20u);
@@ -14268,6 +14283,7 @@ static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_service
         out->canary_overwrites+=(scratch[ws+bytes+i]!=0xA7u)+(scratch[ring+bytes+i]!=0xA7u);
     for(uint32_t i=0;i<GUEST_LIMIT;i++) {
         if(i>=lo && i<hi) continue;
+        if(width!=640u && ((i>=ring && i<ring+bytes+guard) || (i>=flags && i<flags+64u))) continue;
         if(width==640u && i>=ws && i<ws+bytes) continue;
         out->changed_outside+=(scratch[i]!=base[i]);
     }
@@ -14292,7 +14308,7 @@ static int run_widescreen_854_probe(uint8_t *memory,const gw_dos_services *dos,u
     unsigned map_match=0,map_tested=0,left_equal=0,band_nonzero=0,band_unique=0,band_overlay=0,band_black_cols=0;
     unsigned char seen[256]={0};
     if(b) {
-        const uint32_t ring=alloc_base+W*H+64u;
+        const uint32_t ring=wide.ring;
         for(uint32_t y=0;y<H;y++) for(uint32_t x=128u;x<640u;x++) {
             uint32_t at; if(!ws_ring_source(scratch,W,H,x,y,&at)) continue;
             map_tested++; map_match+=(scratch[ring+at]==wide.pixels[y*W+x]);
@@ -14319,8 +14335,8 @@ static int run_widescreen_854_probe(uint8_t *memory,const gw_dos_services *dos,u
         fprintf(j,"{\n  \"schema\": \"gwrecomp.true-widescreen-854/v1\",\n  \"snapshot_turn\": %u,\n",*(uint32_t *)(memory+0x002F1472u));
         fprintf(j,"  \"control_640\": {\"ok\": %d, \"fault\": %d, \"end_eip\": \"0x%08X\", \"changed_guest_bytes_outside_wscreen\": %u, \"MCB_chain_valid\": %d, \"capture\": \"evidence/ws854_control_640x480.bmp\"},\n",
             c640.ok,c640.fault,c640.end_eip,c640.changed_outside,mcb640);
-        fprintf(j,"  \"wide\": {\"ok\": %d, \"fault\": %d, \"end_eip\": \"0x%08X\", \"surface\": \"%ux%u\", \"output\": \"%ux%u\", \"strips\": %u, \"dpmi_free_range\": [\"0x%08X\", \"0x%08X\"], \"canary_overwrites\": %u, \"changed_guest_bytes_outside_new_buffers\": %u, \"MCB_chain_valid\": %d, \"band_copies\": %u, \"capture\": \"evidence/ws854_original_renderer_854x480.bmp\"},\n",
-            wide.ok,wide.fault,wide.end_eip,W,H,OUTW,H,(W+31u)/32u,alloc_base,alloc_base+alloc_size,wide.canary_overwrites,wide.changed_outside,mcb_wide,g_ws_band_copies);
+        fprintf(j,"  \"wide\": {\"ok\": %d, \"fault\": %d, \"end_eip\": \"0x%08X\", \"surface\": \"%ux%u\", \"output\": \"%ux%u\", \"strips\": %u, \"wscreen_block\": [\"0x%08X\", \"0x%08X\"], \"ring_block\": \"0x%08X\", \"allocator\": \"game 0x91E00\", \"canary_overwrites\": %u, \"changed_guest_bytes_outside_new_buffers\": %u, \"MCB_chain_valid\": %d, \"band_copies\": %u, \"capture\": \"evidence/ws854_original_renderer_854x480.bmp\"},\n",
+            wide.ok,wide.fault,wide.end_eip,W,H,OUTW,H,(W+31u)/32u,alloc_base,alloc_base+alloc_size,wide.ring,wide.canary_overwrites,wide.changed_outside,mcb_wide,g_ws_band_copies);
         fprintf(j,"  \"left_640_equal_pixels\": %u, \"left_640_total\": %u,\n",left_equal,640u*H);
         fprintf(j,"  \"ring_mapping_selfcheck_x128_639\": {\"matching\": %u, \"tested\": %u},\n",map_match,map_tested);
         fprintf(j,"  \"band_x640_853\": {\"nonzero_pixels\": %u, \"total\": %u, \"unique_colors\": %u, \"all_black_columns\": %u, \"pixels_differing_from_ring_background\": %u}\n}\n",
