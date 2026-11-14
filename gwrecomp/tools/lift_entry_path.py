@@ -3321,6 +3321,11 @@ if partial:
     ws_rule("    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;",
             "    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;\n"
             "    if (g_gw_ws_strip_ext) { for (uint32_t _k = 0u; _k < 7u; _k++) MEM8(g_gw_ws_strip_ext + _k) = 2u; } /* 0x00079D1C: widescreen strips */")
+    # 0x1C9C0 (cell copy ring -> WScreen on the 20x15 grid) steps 32 rows as 0x5000 and stops at 480 rows as 0x4B000.
+    ws_rule("ebp = ebp + 0x5000u; /* 0x0001CA2C: add ebp, 0x5000 */",
+            f"ebp = ebp + ({ws_width} << 5); /* 0x0001CA2C: 32 surface rows (0x5000 at 640) */")
+    ws_rule("_flag_a = (uint32_t)(ebp); _flag_b = (uint32_t)(0x0004B000u);",
+            f"/* 0x0001CA39: 480 surface rows (0x4B000 at 640) */ _flag_a = (uint32_t)(ebp); _flag_b = (uint32_t)({ws_width} * 480u);")
     ws_applied = 0
     ws_optional_missing = []
     for original, replacement, optional in widescreen_rules:
@@ -3343,7 +3348,7 @@ if partial:
     # window widths); exact at 640.
     if ws_applied:
         for entry, n in (("0x00079510u", 6), ("0x000796F0u", 7), ("0x000799E0u", 8), ("0x00079B80u", 8),
-                         ("0x00079DD0u", 3), ("0x0007A1C0u", 1)):
+                         ("0x00079DD0u", 3), ("0x0007A1C0u", 1), ("0x0001C9C0u", 6)):
             parameterize_framebuffer_pitch(entry, n)
         # Strip levels 20.. live outside MapDisplay: any byte access with displacement 0x11BD whose address falls
         # on strips 20..26 goes to g_gw_ws_strip_ext (no such address is formed at 640).

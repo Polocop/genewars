@@ -16201,6 +16201,19 @@ static uint32_t ws_live_alloc(uint8_t *memory,const gw_recomp_context *parked,ui
        sc.interrupt_trap_pending || sc.port_io_trap.pending) return 0u;
     return (sc.eax && sc.eax<=GUEST_LIMIT-size)?sc.eax:0u;
 }
+/* The game's own whole-redraw request, 0x79D00 (MapDisplay): strip levels 2 (with the lifter hook: strips 20..26
+   too), ring offsets reset, +0x33/+0x35 from lbDisplay, and MapDisplay+0x11D5 = 1 so 0x79320 stamps the static
+   Things (buildings) into the ring again. Same private-stack call as the allocator. */
+static int ws_live_game_redraw(uint8_t *memory,const gw_recomp_context *parked) {
+    const uint32_t esp=(parked->esp-0x4000u)&~0xFu;
+    if(esp<0x2000u || esp+16u>GUEST_LIMIT) return 0;
+    gw_recomp_context sc=*parked;
+    *(uint32_t *)(memory+esp)=RECOMP_RETADDR;
+    sc.esp=esp; sc.eax=0x00346D70u; sc.eip=0x00079D00u; sc.cur_func=0x00079D00u;
+    const gw_recomp_status st=gw_recomp_invoke(gw_partial_0x00079D00,&sc);
+    return st==GW_RECOMP_OK && !sc.memory_fault.pending && !sc.segment_fault_pending &&
+           !sc.interrupt_trap_pending && !sc.port_io_trap.pending;
+}
 static void ws_live_request_redraw(uint8_t *memory,uint32_t width) {
     const uint32_t map=0x00346D70u;
     const uint16_t left=*(const uint16_t *)(memory+map+0x1Du);
@@ -16243,7 +16256,8 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A78u)=W;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_live_ring;
         g_gw_ws_strip_ext=g_ws_live_flags; g_gw_ws_band_copy=ws_band_copy_impl;
-        ws_live_request_redraw(memory,W);
+        if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback
+"); }
         g_ws_live_active=1;
         gw_flag_trace("TRACE widescreen on turn=%u surface=864x480 shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u));
     } else {
@@ -16251,7 +16265,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A78u)=640u;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_saved_ring;
         g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL;
-        ws_live_request_redraw(memory,640u);
+        if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
         g_ws_live_active=0;
         gw_flag_trace("TRACE widescreen off turn=%u ifc=%08X pending=%08X\n",*(const uint32_t *)(memory+0x002F1472u),ifc,pending);
     }
