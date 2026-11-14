@@ -8131,6 +8131,79 @@ static int terrain_window_to_guest_hud(int wx,int wy,int *gx,int *gy) {
    640/640 by default; 854/864 while the game IFC runs on the widened surface. */
 static int g_ws_requested;
 static int g_present_w=640,g_present_pitch=640;
+/* Host presentation breakdown (main thread, GW_TICK_PROFILE), reported every 10 s: palette conversion + texture
+   upload, render copies (frame + pointer), SDL_RenderPresent, pacing wait. */
+static double g_hostprof_convert_ms,g_hostprof_copy_ms,g_hostprof_present_ms,g_hostprof_wait_ms,g_hostprof_frame_ms;
+static unsigned g_hostprof_frames,g_hostprof_uploads;
+static uint64_t g_hostprof_window_start;
+
+/* Presentation-only camera interpolation (GW_PRESENT_INTERP, on by default in play mode). The guest renders
+   one frame per simulation tick; between ticks the host shows the map region moving from the previous tick's
+   frame to the current one: previous frame shifted by a*d under the current frame shifted by -(1-a)*d, where d is
+   the integer translation of the map content between the two frames (measured on their indexed pixels when the
+   MapDisplay camera changed) and a the fraction of the tick interval elapsed. The HUD (x<176) is never shifted.
+   Nothing here reads or writes guest state; the mouse pointer is drawn at its real position every frame. */
+static SDL_Texture *g_interp_prev_texture;
+static uint8_t *g_interp_idx[2];      /* indexed map copies: [0] previous, [1] current, pitch 864 */
+static int g_interp_have_prev,g_interp_dx,g_interp_dy,g_interp_last_dx,g_interp_last_dy;
+static int g_interp_w_prev,g_interp_w_cur;
+static int16_t g_interp_cam_prev_x,g_interp_cam_prev_y,g_interp_cam_cur_x,g_interp_cam_cur_y;
+static uint64_t g_interp_t_prev,g_interp_t_cur;
+static unsigned g_interp_registrations,g_interp_registration_fallbacks,g_interp_frames_shifted;
+static int g_interp_enabled=-1;
+static int interp_enabled(void) {
+    if(g_interp_enabled<0) { const char *e=getenv("GW_PRESENT_INTERP"); g_interp_enabled=!(e && e[0]=='0'); }
+    return g_interp_enabled;
+}
+/* Best integer translation (dx,dy) with cur[y+dy][x+dx]==prev[y][x] over a fixed sample set of the map area.
+   Searches +-3 around the last translation first, then the full +-48 x +-32 window. Returns 0 if no candidate
+   matches at least 60% of the samples. */
+static int interp_register(const uint8_t *prev,const uint8_t *cur,int w,int *odx,int *ody) {
+    enum { N=320 };
+    static int sx[N],sy[N],init;
+    if(!init) { uint32_t r=0x9E3779B9u; for(int i=0;i<N;i++) { r=r*1664525u+1013904223u; sx[i]=(int)(r>>8); r=r*1664525u+1013904223u; sy[i]=(int)(r>>8); } init=1; }
+    const int x0=176+48,x1=w-48,y0=32,y1=480-32;
+    if(x1<=x0) return 0;
+    int best=-1,bdx=0,bdy=0;
+    for(int pass=0;pass<2;pass++) {
+        const int cx=pass?0:g_interp_last_dx,cy=pass?0:g_interp_last_dy,rx=pass?48:3,ry=pass?32:3;
+        for(int dy=cy-ry;dy<=cy+ry;dy++) for(int dx=cx-rx;dx<=cx+rx;dx++) {
+            if(dx<-48||dx>48||dy<-32||dy>32) continue;
+            int score=0;
+            for(int i=0;i<N;i++) {
+                const int x=x0+sx[i]%(x1-x0),y=y0+sy[i]%(y1-y0);
+                score+=prev[y*864+x]==cur[(y+dy)*864+(x+dx)];
+            }
+            if(score>best) { best=score; bdx=dx; bdy=dy; }
+        }
+        if(best*10>=N*8) break;            /* local search found a clear match */
+        if(!pass) g_interp_registration_fallbacks++;
+    }
+    if(best*10<N*6) return 0;
+    *odx=bdx; *ody=bdy; return 1;
+}
+/* Called when a new guest frame is presented: keeps the previous indexed frame, measures the map translation. */
+static void interp_new_frame(const gw_interactive_visual_snapshot *visual,const gw_video_surface *source) {
+    if(!visual || !source) return;
+    if(!g_interp_idx[0]) { g_interp_idx[0]=(uint8_t *)malloc(864u*480u); g_interp_idx[1]=(uint8_t *)malloc(864u*480u); }
+    if(!g_interp_idx[0] || !g_interp_idx[1]) return;
+    uint8_t *t=g_interp_idx[0]; g_interp_idx[0]=g_interp_idx[1]; g_interp_idx[1]=t;
+    for(int y=0;y<480;y++) memcpy(g_interp_idx[1]+(size_t)y*864u,gw_video_surface_row(source,y),(size_t)g_present_w);
+    g_interp_w_prev=g_interp_w_cur; g_interp_w_cur=g_present_w;
+    g_interp_cam_prev_x=g_interp_cam_cur_x; g_interp_cam_prev_y=g_interp_cam_cur_y;
+    g_interp_cam_cur_x=visual->camera_x; g_interp_cam_cur_y=visual->camera_y;
+    g_interp_t_prev=g_interp_t_cur; g_interp_t_cur=visual->captured_at;
+    g_interp_dx=g_interp_dy=0;
+    if(g_interp_have_prev && g_interp_w_prev==g_interp_w_cur &&
+       (g_interp_cam_prev_x!=g_interp_cam_cur_x || g_interp_cam_prev_y!=g_interp_cam_cur_y)) {
+        int dx=0,dy=0;
+        if(interp_register(g_interp_idx[0],g_interp_idx[1],g_present_w,&dx,&dy)) {
+            g_interp_dx=dx; g_interp_dy=dy; g_interp_last_dx=dx; g_interp_last_dy=dy;
+        }
+        g_interp_registrations++;
+    }
+    g_interp_have_prev=1;
+}
 static int set_ifclevel_guest_surface(const uint8_t *pixels) {
     g_ifclevel_guest_surface=(gw_video_surface){
         (uint8_t *)pixels,g_present_w,480,g_present_pitch,1,{0,0,g_present_w,480}
@@ -8490,6 +8563,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         }
         g_ifclevel_demo_texture=g_ifclevel_demo_renderer?SDL_CreateTexture(g_ifclevel_demo_renderer,
             SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,texture_w,texture_h):NULL;
+        if(g_ifclevel_demo_renderer && g_interactive_demo_mode && !g_terrain_modern_backend)
+            g_interp_prev_texture=SDL_CreateTexture(g_ifclevel_demo_renderer,
+                SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,texture_w,texture_h);
         if(g_ifclevel_demo_renderer && g_terrain_modern_backend) {
             g_terrain_cache_texture=SDL_CreateTexture(g_ifclevel_demo_renderer,
                 SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,
@@ -8638,6 +8714,11 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             g_terrain_upload_ms+=(double)(upload_end-upload_start)*1000.0/freq;
             g_terrain_render_frames++;
         } else {
+            if(visual && g_interp_prev_texture && interp_enabled()) {
+                /* the texture with the frame shown so far becomes the previous one; the new frame goes to the other */
+                SDL_Texture *swap=g_interp_prev_texture; g_interp_prev_texture=g_ifclevel_demo_texture; g_ifclevel_demo_texture=swap;
+                interp_new_frame(visual,source);
+            }
             const uint64_t hp_convert0=SDL_GetPerformanceCounter();
             for(int y=0;y<480;y++) {
                 const uint8_t *row=gw_video_surface_row(source,y);
@@ -8766,6 +8847,28 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
             if(!world_ok) { fprintf(stderr,"SDL original terrain composition: %s\n",SDL_GetError()); return 0; }
         }
+    } else if(!g_terrain_modern_backend && visual && g_interp_prev_texture && interp_enabled() &&
+              (g_interp_dx || g_interp_dy) && g_interp_t_cur>g_interp_t_prev && g_interactive_perf_frequency &&
+              (double)(g_interp_t_cur-g_interp_t_prev)<0.2*(double)g_interactive_perf_frequency) {
+        /* camera moved between the last two guest frames: compose the map region at the interpolated offset */
+        double a=(double)(SDL_GetPerformanceCounter()-g_interp_t_cur)/(double)(g_interp_t_cur-g_interp_t_prev);
+        if(a<0.0) a=0.0; if(a>1.0) a=1.0;
+        const double s=(double)dst.w/(double)g_present_w,hud=176.0;
+        const SDL_Rect hud_src={0,0,176,480};
+        const SDL_Rect hud_dst={dst.x,dst.y,(int)(hud*s+0.5),dst.h};
+        const SDL_Rect map_clip={dst.x+(int)(hud*s+0.5),dst.y,dst.w-(int)(hud*s+0.5),dst.h};
+        const SDL_Rect map_src={176,0,g_present_w-176,480};
+        const SDL_FRect prev_dst={(float)(dst.x+(hud+a*g_interp_dx)*s),(float)(dst.y+a*g_interp_dy*s),
+                                  (float)((g_present_w-176)*s),(float)dst.h};
+        const SDL_FRect cur_dst={(float)(dst.x+(hud-(1.0-a)*g_interp_dx)*s),(float)(dst.y-(1.0-a)*g_interp_dy*s),
+                                 (float)((g_present_w-176)*s),(float)dst.h};
+        SDL_RenderSetClipRect(g_ifclevel_demo_renderer,&map_clip);
+        int ok=SDL_RenderCopyF(g_ifclevel_demo_renderer,g_interp_prev_texture,&map_src,&prev_dst)==0 &&
+               SDL_RenderCopyF(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&map_src,&cur_dst)==0;
+        SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
+        ok=ok && SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&hud_src,&hud_dst)==0;
+        if(!ok) { fprintf(stderr,"SDL interpolated present: %s\n",SDL_GetError()); return 0; }
+        if(a<1.0) g_interp_frames_shifted++;
     } else if(SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,
                   g_terrain_modern_backend?NULL:&(SDL_Rect){0,0,g_present_w,480},&dst)!=0) {
         fprintf(stderr,"SDL demo present: %s\n",SDL_GetError()); return 0;
@@ -9025,11 +9128,6 @@ void gw_tick_section(uint32_t section,int begin) {
     else if(g_tick_section_start[section] && g_interactive_perf_frequency)
         g_tick_section_ms[section]+=(double)(now-g_tick_section_start[section])*1000.0/(double)g_interactive_perf_frequency;
 }
-/* Host presentation breakdown (main thread), reported every 10 s: palette conversion + texture upload,
-   render copies (frame + pointer), SDL_RenderPresent, pacing wait. */
-static double g_hostprof_convert_ms,g_hostprof_copy_ms,g_hostprof_present_ms,g_hostprof_wait_ms,g_hostprof_frame_ms;
-static unsigned g_hostprof_frames,g_hostprof_uploads;
-static uint64_t g_hostprof_window_start;
 
 static int SDLCALL tick_profile_sampler(void *unused) {
     (void)unused;
@@ -16995,6 +17093,17 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
                     g_interactive_frame_count,visual->turn,fps,sim_tps,
                     window_frame_ms/120.0,window_render_ms/120.0,
                     (unsigned long long)visual->generation);
+            {   /* session log: render FPS vs simulation ticks per second, every ~10 s */
+                static uint64_t perf_last; static uint64_t perf_updates_last;
+                if(!perf_last) { perf_last=frame_end; perf_updates_last=g_interactive_visual_updates; }
+                const double psecs=(double)(frame_end-perf_last)/(double)g_interactive_perf_frequency;
+                if(psecs>=10.0) {
+                    gw_flag_trace("TRACE perf render_fps=%.1f sim_tps=%.1f target_tps=%u present_target_fps=%u surface=%dx480 interp_shifted_frames=%u registrations=%u fallbacks=%u turn=%u\n",
+                        fps,(double)(g_interactive_visual_updates-perf_updates_last)/psecs,(unsigned)memory[0x002F14A3u],
+                        requested_fps,g_present_w,g_interp_frames_shifted,g_interp_registrations,g_interp_registration_fallbacks,visual->turn);
+                    perf_last=frame_end; perf_updates_last=g_interactive_visual_updates;
+                }
+            }
             window_start=frame_end; window_frames=0u;
             window_render_ms=window_frame_ms=window_wait_ms=0.0;
         }

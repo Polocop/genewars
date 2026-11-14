@@ -15,7 +15,7 @@
  -Build defaults to the newest build\rebuild-* directory. -SmokeFrames N makes the program exit after N frames (smoke test).
  Requires GENEWARS_INSTALL_DIR (your own game files). Logs go to <build>\play.stdout.log / play.stderr.log.
 #>
-param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave, [switch]$OrderLog, [ValidateRange(0,24)][int]$Level = 0, [switch]$Widescreen)
+param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave, [switch]$OrderLog, [ValidateRange(0,24)][int]$Level = 0, [switch]$Widescreen, [ValidateRange(30,240)][int]$Fps = 120)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'gwconfig.ps1')
 $root = Get-GwRoot
@@ -45,7 +45,8 @@ if ($alpha) {
     # Alpha play mode: no harness bound, the original title menu is driven by the user, 60 fps native pacing
     Remove-Item Env:GWRECOMP_IFCLEVEL_HOST_BOUND_TURN -ErrorAction SilentlyContinue
     $env:GW_INTERACTIVE_START_AT_TITLE = '1'; $env:GW_VSB16 = '1'
-    $env:GW_DEMO_VSYNC = '0'; $env:GW_DEMO_CAP_60 = '1'; $env:GW_TARGET_FPS = '60'; $env:GW_DEMO_PACING = 'native'
+    $env:GW_DEMO_VSYNC = '0'; $env:GW_DEMO_CAP_60 = '1'; $env:GW_TARGET_FPS = [string]$Fps;   # presentation rate; the simulation keeps the game's own tick rate
+    $env:GW_DEMO_PACING = 'native'
     if ($cfg.Cue) { $env:GW_CD_AUDIO_CUE = $cfg.Cue } else { Write-Host 'Note: GENEWARS_CUE is not set, so there is no CD music (sound effects only).' -ForegroundColor Yellow }
     # the sound trace is opened for appending: start each session with a fresh file
     $env:GW_VSB16_LOG = Join-Path $Build 'play.sound.log'; Remove-Item -LiteralPath $env:GW_VSB16_LOG -ErrorAction SilentlyContinue
