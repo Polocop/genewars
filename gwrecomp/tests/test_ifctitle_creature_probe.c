@@ -16008,6 +16008,12 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
     SDL_LockMutex(g_interactive_snapshot_mutex);
     memcpy(g_interactive_published_snapshot.wscreen,memory+wscreen_guest,frame_bytes);
     g_interactive_published_snapshot.wscreen_pitch=pitch;
+    if(g_ws_requested && (generation%200u)==1u) {
+        unsigned nz=0; for(uint32_t y=0;y<480u;y+=4) for(uint32_t x=176u;x<640u;x+=4) nz+=g_interactive_published_snapshot.wscreen[y*pitch+x]!=0u;
+        gw_flag_trace("TRACE widescreen publish gen=%llu turn=%u ws=%08X pitch=%u lb_ws=%08X lb_w=%u map_nonzero=%u/%u\n",
+            (unsigned long long)generation,*(uint32_t *)(memory+0x002F1472u),wscreen_guest,pitch,
+            *(uint32_t *)(memory+0x00376A5Cu),*(uint32_t *)(memory+0x00376A78u),nz,120u*116u);
+    }
     memcpy(g_interactive_published_snapshot.palette,vga_dac,
         sizeof g_interactive_published_snapshot.palette);
     memcpy(g_interactive_published_snapshot.world,memory+world_guest,
