@@ -9232,6 +9232,22 @@ void gw_tick_section(uint32_t section,int begin) {
         g_tick_section_ms[section]+=(double)(now-g_tick_section_start[section])*1000.0/(double)g_interactive_perf_frequency;
 }
 
+/* Host-code sampling (same GW_TICK_PROFILE gate): the sampler also suspends the simulation worker for a moment
+   and records the host EIP it was executing, so the cost inside the lifted code (per-instruction hooks, checked
+   memory accesses) can be attributed to C functions offline with nm. Cumulative over the session; dumped at stop
+   to <GW_TICK_PROFILE>.eip with the module base. Read-only: the worker is only paused and resumed. */
+#define GW_HOST_EIP_SLOTS 65536u
+static HANDLE g_tick_profile_worker;
+static uint32_t g_host_eip_va[GW_HOST_EIP_SLOTS],g_host_eip_hits[GW_HOST_EIP_SLOTS];
+static uint64_t g_host_eip_total,g_host_eip_dropped;
+static void host_eip_note(uint32_t eip) {
+    uint32_t h=(eip*2654435761u)>>16;
+    for(uint32_t probe=0u;probe<64u;probe++,h=(h+1u)&(GW_HOST_EIP_SLOTS-1u)) {
+        if(g_host_eip_va[h]==eip) { g_host_eip_hits[h]++; g_host_eip_total++; return; }
+        if(!g_host_eip_va[h]) { g_host_eip_va[h]=eip; g_host_eip_hits[h]=1u; g_host_eip_total++; return; }
+    }
+    g_host_eip_dropped++;
+}
 static int SDLCALL tick_profile_sampler(void *unused) {
     (void)unused;
     while(!InterlockedCompareExchange(&g_tick_profile_stop,0,0)) {
@@ -9239,10 +9255,26 @@ static int SDLCALL tick_profile_sampler(void *unused) {
             const LONG i=InterlockedIncrement(&g_tick_profile_n)-1;
             if(i>=0 && (ULONG)i<GW_TICK_PROFILE_CAP)
                 g_tick_profile_samples[i]=*(volatile uint32_t *)&g_cur_func;
+            if(g_tick_profile_worker && SuspendThread(g_tick_profile_worker)!=(DWORD)-1) {
+                CONTEXT ctx; memset(&ctx,0,sizeof ctx); ctx.ContextFlags=CONTEXT_CONTROL;
+                if(GetThreadContext(g_tick_profile_worker,&ctx)) host_eip_note((uint32_t)ctx.Eip);
+                ResumeThread(g_tick_profile_worker);
+            }
         }
         Sleep(1u);
     }
     return 0;
+}
+static void host_eip_dump(void) {
+    const char *path=getenv("GW_TICK_PROFILE");
+    if(!path || !path[0] || !g_host_eip_total) return;
+    char out[1024]; snprintf(out,sizeof out,"%s.eip",path);
+    FILE *f=fopen(out,"wb"); if(!f) return;
+    fprintf(f,"module_base=%08x total=%llu dropped=%llu%c",(unsigned)(uintptr_t)GetModuleHandleA(NULL),
+        (unsigned long long)g_host_eip_total,(unsigned long long)g_host_eip_dropped,10);
+    for(uint32_t k=0u;k<GW_HOST_EIP_SLOTS;k++)
+        if(g_host_eip_va[k]) fprintf(f,"%08x %u%c",g_host_eip_va[k],g_host_eip_hits[k],10);
+    fclose(f);
 }
 
 static void tick_profile_start(void) {
@@ -9267,10 +9299,17 @@ static void tick_profile_stop(void) {
     if(!g_tick_profile_thread) return;
     InterlockedExchange(&g_tick_profile_stop,1);
     SDL_WaitThread(g_tick_profile_thread,NULL); g_tick_profile_thread=NULL;
+    host_eip_dump();
     if(g_tick_profile_file) { fprintf(g_tick_profile_file,"TRACE tick_profile end\n"); fflush(g_tick_profile_file); }
 }
 
-static void tick_profile_tick_begin(void) { if(g_tick_profile_file) InterlockedExchange(&g_tick_profile_n,0); }
+static void tick_profile_tick_begin(void) {
+    if(!g_tick_profile_file) return;
+    if(!g_tick_profile_worker)
+        DuplicateHandle(GetCurrentProcess(),GetCurrentThread(),GetCurrentProcess(),&g_tick_profile_worker,
+            THREAD_SUSPEND_RESUME|THREAD_GET_CONTEXT|THREAD_QUERY_INFORMATION,FALSE,0);
+    InterlockedExchange(&g_tick_profile_n,0);
+}
 
 static void tick_profile_tick_end(uint32_t seq,uint32_t turn,uint32_t ifc,double tick_ms,double pump_ms) {
     if(!g_tick_profile_file) return;
