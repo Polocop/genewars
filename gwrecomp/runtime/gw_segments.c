@@ -46,10 +46,10 @@ static recomp_memory_translate_fn memory_translator;
 static recomp_guest_write_observer_fn guest_write_observer;
 static void fastmem_refresh(void) {
     g_recomp_fastmem_ok=!memory_diag_enabled && !memory_translator && !guest_write_observer &&
-                        !null_ds_read_diag_enabled && census_state==1;
+                        census_state==1;
 }
 /* Bit mask of what keeps g_recomp_fastmem_ok at 0: 1 memory diagnostic, 2 translator, 4 write observer,
-   8 null-DS diagnostic, 16 write census on, 32 census not read yet. */
+   8 null-DS diagnostic (informational: it only narrows the windows), 16 write census on, 32 census not read yet. */
 unsigned recomp_fastmem_blockers(void) {
     return (memory_diag_enabled?1u:0u)|(memory_translator?2u:0u)|(guest_write_observer?4u:0u)|
            (null_ds_read_diag_enabled?8u:0u)|(census_state==2?16u:0u)|(census_state==0?32u:0u);
@@ -78,7 +78,7 @@ static recomp_null_ds_read_diagnostic null_ds_read_diag_last_record;
 
 void recomp_null_ds_read_diag_enable(int enabled) {
     null_ds_read_diag_enabled=enabled!=0;
-    fastmem_refresh();
+    recomp_segment_windows_invalidate();   /* windows exclude linear < 0x1000 only while it is on */
     if (!enabled) {
         null_ds_read_diag_sequence=0;
         null_ds_read_diag_printed=0;
@@ -614,6 +614,8 @@ uintptr_t recomp_checked_mem_addr(uint32_t segmented_linear, uint32_t width) {
             /* writes below linear 0x100 are traced by the full check: keep them out of every window */
             if (lo<0x100u) lo=0x100u;
 #endif
+            /* the null-DS read diagnostic watches linear 0..0xFFF: keep that range on the full check */
+            if (null_ds_read_diag_enabled && lo<0x1000u) lo=0x1000u;
             if (lo<hi && (uint64_t)segmented_linear>=lo && end<=hi) {
                 gw_recomp_seg_window *w=&g_recomp_seg_windows[(unsigned)segment];
                 w->selector=selector; w->base=base; w->lo=(uint32_t)lo; w->hi=hi;
