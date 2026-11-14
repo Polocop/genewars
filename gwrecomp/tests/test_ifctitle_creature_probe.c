@@ -14217,6 +14217,12 @@ static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_service
                        uint32_t *alloc_base,uint32_t *alloc_size,uint8_t strip_level,int clear_ring) {
     memset(out,0,sizeof *out); out->width=width;
     memcpy(scratch,base,GUEST_LIMIT);
+    /* GWRECOMP_WS854_SHIFT_CELLS=n moves the projection origin (link 0x184AAC/0x184AB0: map column/row of
+       strip 0) n cells along the screen-x diagonal on this clone, so Things that sit inside the 640 frame
+       are drawn n*64 px further right (into the widescreen band). Same shift for every pass of a probe. */
+    {   const char *sh=getenv("GWRECOMP_WS854_SHIFT_CELLS");
+        const int n=sh&&sh[0]?atoi(sh):0;
+        if(n) { *(int32_t *)(scratch+0x0035EAACu)-=n; *(int32_t *)(scratch+0x0035EAB0u)+=n; } }
     const uint32_t map=0x00346D70u,height=480u,bytes=width*height,guard=64u;
     uint32_t ws=*(const uint32_t *)(scratch+0x00376A5Cu),ring=*(const uint32_t *)(scratch+0x002EECA0u),flags=0u;
     uint32_t lo=0u,hi=0u;
