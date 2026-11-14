@@ -14253,8 +14253,9 @@ static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_service
         const uint32_t old_ring=*(const uint32_t *)(base+0x002EECA0u);
         if(!old_ring || old_ring>GUEST_LIMIT-640u*480u) return 0;
         for(uint32_t y=0;y<height;y++) {
-            memcpy(scratch+ring+y*width,base+old_ring+y*640u,640u);
-            memset(scratch+ring+y*width+640u,0,width-640u);
+            const uint32_t hud=*(const uint16_t *)(scratch+map+0x1Du);
+            memset(scratch+ring+y*width,0,width);
+            memcpy(scratch+ring+y*width,base+old_ring+y*640u,hud<=640u?hud:640u);
         }
         memset(scratch+ws+bytes,0xA7,guard); memset(scratch+ring+bytes,0xA7,guard);
         *(uint32_t *)(scratch+0x00376A5Cu)=ws;
@@ -14279,7 +14280,11 @@ static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_service
     guest_memory=scratch; g_mem_base=(ptrdiff_t)(uintptr_t)scratch;
     g_gw_ws_strip_ext=flags; g_gw_ws_band_copy=width!=640u?ws_band_copy_impl:NULL;
     gw_recomp_context c;
-    out->invoke_ok=invoke(gw_partial_0x0007C610,&c,0x7C610u,scratch,map,0);
+    /* GWRECOMP_WS854_GAME_DRAW=1: the whole original draw_game dispatch (map, Things, HUD) instead of only
+       MapDisplay::Draw, which draws terrain but no entities. */
+    const char *gd=getenv("GWRECOMP_WS854_GAME_DRAW");
+    if(gd && gd[0]=='1') out->invoke_ok=invoke(gw_original_draw_game_draw_dispatch,&c,0x83559u,scratch,0,0);
+    else out->invoke_ok=invoke(gw_partial_0x0007C610,&c,0x7C610u,scratch,map,0);
     out->end_eip=c.eip;
     out->fault=c.memory_fault.pending||c.segment_fault_pending||c.interrupt_trap_pending||c.port_io_trap.pending;
     g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL;
