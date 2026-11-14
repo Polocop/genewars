@@ -7891,6 +7891,8 @@ typedef struct gw_interactive_visual_snapshot {
     uint32_t turn;
     int16_t camera_x,camera_y;
     int16_t ring_x,ring_y,ring_left; /* MapDisplay +0x08/+0x0A/+0x1D: the view's ring scroll offsets */
+    uint8_t panel_bg[480u*48u];      /* map background (from the ring) under x=128..175, to tell panel art from map */
+    int panel_bg_valid;
     uint64_t generation;
     uint64_t captured_at;
     int valid;
@@ -8788,9 +8790,13 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                     if(g_interp_panel_texture) SDL_SetTextureBlendMode(g_interp_panel_texture,SDL_BLENDMODE_BLEND);
                 }
                 if(g_interp_panel_texture) {
-                    for(int y=0;y<480;y++) for(int x=0;x<48;x++)
-                        g_interp_panel_rgba[y*48+x]=g_interp_panel_map[y*48+x]?0u:
-                            g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+128u+(unsigned)x];
+                    /* panel art = pixels that differ from the map background the ring holds at that spot */
+                    for(int y=0;y<480;y++) for(int x=0;x<48;x++) {
+                        const int panel=visual->panel_bg_valid?
+                            visual->wscreen[(size_t)y*visual->wscreen_pitch+128u+(unsigned)x]!=visual->panel_bg[y*48+x]:
+                            !g_interp_panel_map[y*48+x];
+                        g_interp_panel_rgba[y*48+x]=panel?g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+128u+(unsigned)x]:0u;
+                    }
                     SDL_UpdateTexture(g_interp_panel_texture,NULL,g_interp_panel_rgba,48*(int)sizeof(uint32_t));
                 }
             }
@@ -16231,6 +16237,14 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
     g_interactive_published_snapshot.ring_x=*(int16_t *)(memory+map_guest+0x08u);
     g_interactive_published_snapshot.ring_y=*(int16_t *)(memory+map_guest+0x0Au);
     g_interactive_published_snapshot.ring_left=*(int16_t *)(memory+map_guest+0x1Du);
+    {   const uint32_t ring=*(const uint32_t *)(memory+0x002EECA0u);
+        g_interactive_published_snapshot.panel_bg_valid=ring && ring<=GUEST_LIMIT-pitch*480u &&
+            *(const uint16_t *)(memory+map_guest+0x1Du)==128u;
+        if(g_interactive_published_snapshot.panel_bg_valid)
+            for(uint32_t y=0;y<480u;y++) for(uint32_t x=128u;x<176u;x++) {
+                uint32_t at=0; g_interactive_published_snapshot.panel_bg[y*48u+(x-128u)]=
+                    ws_ring_source(memory,pitch,480u,x,y,&at)?memory[ring+at]:0u;
+            } }
     g_interactive_published_snapshot.generation=generation;
     g_interactive_published_snapshot.captured_at=SDL_GetPerformanceCounter();
     g_interactive_published_snapshot.valid=1;
