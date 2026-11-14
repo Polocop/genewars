@@ -7890,6 +7890,7 @@ typedef struct gw_interactive_visual_snapshot {
     uint32_t wscreen_pitch; /* 640, or 864 while the live widescreen surface is active */
     uint32_t turn;
     int16_t camera_x,camera_y;
+    int16_t ring_x,ring_y,ring_left; /* MapDisplay +0x08/+0x0A/+0x1D: the view's ring scroll offsets */
     uint64_t generation;
     uint64_t captured_at;
     int valid;
@@ -8148,6 +8149,7 @@ static uint8_t *g_interp_idx[2];      /* indexed map copies: [0] previous, [1] c
 static int g_interp_have_prev,g_interp_dx,g_interp_dy,g_interp_last_dx,g_interp_last_dy;
 static int g_interp_w_prev,g_interp_w_cur;
 static int16_t g_interp_cam_prev_x,g_interp_cam_prev_y,g_interp_cam_cur_x,g_interp_cam_cur_y,g_interp_cam_pp_x,g_interp_cam_pp_y;
+static int g_interp_ring_dx_prev,g_interp_ring_dy_prev; static int16_t g_interp_ring_x,g_interp_ring_y;
 static uint64_t g_interp_t_prev,g_interp_t_cur;
 static unsigned g_interp_registrations,g_interp_registration_fallbacks,g_interp_frames_shifted;
 static int g_interp_enabled=-1;
@@ -8174,23 +8176,36 @@ static int interp_score(const uint8_t *prev,const uint8_t *cur,int w,int dx,int 
    a camera move (dcx,dcy) in world units (256 per cell, wrapping at 32768) translates the image by
    (-(dcx-dcy)/8, -(dcx+dcy)/16) pixels; that prediction (and its sign variants) is refined by a +-4 px search.
    Returns 0 when no candidate matches at least 70% of the samples (the frame is then shown unshifted). */
-static int interp_register(const uint8_t *prev,const uint8_t *cur,int w,int dcx,int dcy,int lcx,int lcy,int *odx,int *ody) {
-    /* (dcx,dcy): camera change between the two snapshots; (lcx,lcy): the change one snapshot earlier. The camera
-       field is published after the tick's camera update, so a frame can lag its camera by one tick. */
-    dcx=((dcx+16384)&32767)-16384; dcy=((dcy+16384)&32767)-16384;
-    lcx=((lcx+16384)&32767)-16384; lcy=((lcy+16384)&32767)-16384;
-    const int cand[2][2]={{-(dcx-dcy)/8,-(dcx+dcy)/16},{-(lcx-lcy)/8,-(lcx+lcy)/16}};
-    int best=-1,bdx=0,bdy=0;
-    for(int c=0;c<2;c++) {
-        if(cand[c][0]<-200||cand[c][0]>200||cand[c][1]<-150||cand[c][1]>150) continue;
-        for(int dy=cand[c][1]-8;dy<=cand[c][1]+8;dy++) for(int dx=cand[c][0]-8;dx<=cand[c][0]+8;dx++) {
-            const int s=interp_score(prev,cur,w,dx,dy);
-            if(s>best) { best=s; bdx=dx; bdy=dy; }
-        }
-        if(best>=900) break;
-        if(!c) g_interp_registration_fallbacks++;
+/* Translation of the map content between two guest frames. The ring scroll offsets (MapDisplay +0x08/+0x0A) move
+   by exactly the view's pixel scroll, so their change (wrapped by the ring width and 480) is the translation; the
+   indexed pixels only decide between the current and the one-tick-lagged change and their sign (non-black samples
+   only, since fog matches anything). Returns 0 when no candidate matches 70% of at least 48 textured samples. */
+static int interp_score_textured(const uint8_t *prev,const uint8_t *cur,int w,int dx,int dy,int *valid) {
+    enum { N=480 };
+    static int sx[N],sy[N],init;
+    if(!init) { uint32_t r=0x7F4A7C15u; for(int i=0;i<N;i++) { r=r*1664525u+1013904223u; sx[i]=(int)(r>>8); r=r*1664525u+1013904223u; sy[i]=(int)(r>>8); } init=1; }
+    const int x0=176+(dx<0?-dx:0)+4,x1=w-(dx>0?dx:0)-4,y0=(dy<0?-dy:0)+4,y1=480-(dy>0?dy:0)-4;
+    *valid=0;
+    if(x1-x0<32 || y1-y0<32) return 0;
+    int score=0;
+    for(int i=0;i<N;i++) {
+        const int x=x0+sx[i]%(x1-x0),y=y0+sy[i]%(y1-y0);
+        const uint8_t p=prev[y*864+x];
+        if(!p) continue;
+        (*valid)++; score+=p==cur[(y+dy)*864+(x+dx)];
     }
-    if(best<700) return 0;
+    return *valid?score*1000/(*valid):0;
+}
+static int interp_register(const uint8_t *prev,const uint8_t *cur,int w,int rdx,int rdy,int ldx,int ldy,int *odx,int *ody) {
+    const int cand[4][2]={{-rdx,-rdy},{rdx,rdy},{-ldx,-ldy},{ldx,ldy}};
+    int best=-1,bdx=0,bdy=0,bvalid=0;
+    for(int c=0;c<4;c++) {
+        if(!cand[c][0] && !cand[c][1]) continue;
+        if(cand[c][0]<-300||cand[c][0]>300||cand[c][1]<-200||cand[c][1]>200) continue;
+        int valid=0; const int s=interp_score_textured(prev,cur,w,cand[c][0],cand[c][1],&valid);
+        if(valid>=48 && s>best) { best=s; bdx=cand[c][0]; bdy=cand[c][1]; bvalid=valid; }
+    }
+    if(best<700 || bvalid<48) { g_interp_registration_fallbacks++; return 0; }
     *odx=bdx; *ody=bdy; return 1;
 }
 /* Called when a new guest frame is presented: keeps the previous indexed frame, measures the map translation. */
@@ -8206,19 +8221,28 @@ static void interp_new_frame(const gw_interactive_visual_snapshot *visual,const 
     g_interp_cam_cur_x=visual->camera_x; g_interp_cam_cur_y=visual->camera_y;
     g_interp_t_prev=g_interp_t_cur; g_interp_t_cur=visual->captured_at;
     g_interp_dx=g_interp_dy=0;
+    int ring_dx=0,ring_dy=0;
+    {   const int ring_w=(g_present_w==854?864:640)-visual->ring_left;
+        if(g_interp_have_prev && ring_w>0) {
+            int rx=visual->ring_x-g_interp_ring_x,ry=visual->ring_y-g_interp_ring_y;
+            rx%=ring_w; if(rx>ring_w/2) rx-=ring_w; if(rx<-ring_w/2) rx+=ring_w;
+            ry%=480; if(ry>240) ry-=480; if(ry<-240) ry+=480;
+            ring_dx=rx; ring_dy=ry;
+        }
+        g_interp_ring_x=visual->ring_x; g_interp_ring_y=visual->ring_y;
+    }
     if(g_interp_have_prev && g_interp_w_prev==g_interp_w_cur &&
-       (g_interp_cam_prev_x!=g_interp_cam_cur_x || g_interp_cam_prev_y!=g_interp_cam_cur_y ||
-        g_interp_cam_pp_x!=g_interp_cam_prev_x || g_interp_cam_pp_y!=g_interp_cam_prev_y)) {
+       (ring_dx || ring_dy || g_interp_ring_dx_prev || g_interp_ring_dy_prev)) {
         int dx=0,dy=0;
         const int found=interp_register(g_interp_idx[0],g_interp_idx[1],g_present_w,
-            g_interp_cam_cur_x-g_interp_cam_prev_x,g_interp_cam_cur_y-g_interp_cam_prev_y,
-            g_interp_cam_prev_x-g_interp_cam_pp_x,g_interp_cam_prev_y-g_interp_cam_pp_y,&dx,&dy);
+            ring_dx,ring_dy,g_interp_ring_dx_prev,g_interp_ring_dy_prev,&dx,&dy);
         if(found) { g_interp_dx=dx; g_interp_dy=dy; g_interp_last_dx=dx; g_interp_last_dy=dy; }
         if(g_interp_registrations<40u)
-            gw_flag_trace("TRACE interp registration n=%u camera_delta=%d,%d found=%d d=%d,%d%c",g_interp_registrations,
-                g_interp_cam_cur_x-g_interp_cam_prev_x,g_interp_cam_cur_y-g_interp_cam_prev_y,found,dx,dy,10);
+            gw_flag_trace("TRACE interp registration n=%u ring_delta=%d,%d lagged=%d,%d found=%d d=%d,%d%c",g_interp_registrations,
+                ring_dx,ring_dy,g_interp_ring_dx_prev,g_interp_ring_dy_prev,found,dx,dy,10);
         g_interp_registrations++;
     }
+    g_interp_ring_dx_prev=ring_dx; g_interp_ring_dy_prev=ring_dy;
     g_interp_have_prev=1;
 }
 static int set_ifclevel_guest_surface(const uint8_t *pixels) {
@@ -16162,6 +16186,9 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
     g_interactive_published_snapshot.turn=*(uint32_t *)(memory+0x002F1472u);
     g_interactive_published_snapshot.camera_x=(int16_t)*(uint16_t *)(memory+map_guest+0x10u);
     g_interactive_published_snapshot.camera_y=(int16_t)*(uint16_t *)(memory+map_guest+0x12u);
+    g_interactive_published_snapshot.ring_x=*(int16_t *)(memory+map_guest+0x08u);
+    g_interactive_published_snapshot.ring_y=*(int16_t *)(memory+map_guest+0x0Au);
+    g_interactive_published_snapshot.ring_left=*(int16_t *)(memory+map_guest+0x1Du);
     g_interactive_published_snapshot.generation=generation;
     g_interactive_published_snapshot.captured_at=SDL_GetPerformanceCounter();
     g_interactive_published_snapshot.valid=1;
