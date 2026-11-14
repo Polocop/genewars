@@ -8144,7 +8144,10 @@ static uint64_t g_hostprof_window_start;
    the integer translation of the map content between the two frames (measured on their indexed pixels when the
    MapDisplay camera changed) and a the fraction of the tick interval elapsed. The HUD (x<176) is never shifted.
    Nothing here reads or writes guest state; the mouse pointer is drawn at its real position every frame. */
-static SDL_Texture *g_interp_prev_texture;
+static SDL_Texture *g_interp_prev_texture,*g_interp_panel_texture;
+static uint8_t g_interp_panel_map[480*48];   /* x=128..175: 1 = seen changing while scrolling (map), 0 = panel */
+static uint32_t g_interp_panel_rgba[480*48];
+static char g_present_dump_path[900];
 static uint8_t *g_interp_idx[2];      /* indexed map copies: [0] previous, [1] current, pitch 864 */
 static int g_interp_have_prev,g_interp_dx,g_interp_dy,g_interp_last_dx,g_interp_last_dy;
 static int g_interp_w_prev,g_interp_w_cur;
@@ -8239,6 +8242,12 @@ static void interp_new_frame(const gw_interactive_visual_snapshot *visual,const 
             gw_flag_trace("TRACE interp registration n=%u ring_delta=%d,%d lagged=%d,%d found=%d d=%d,%d%c",g_interp_registrations,
                 ring_dx,ring_dy,g_interp_ring_dx_prev,g_interp_ring_dy_prev,found,dx,dy,10);
         g_interp_registrations++;
+    }
+    /* Panel mask for x=128..175: the map starts at x=128 (MapDisplay+0x1D), the panel art reaches x=175 only in
+       some rows. A pixel there that changes while the view scrolls is map; one that never does is panel. */
+    if(g_interp_have_prev && g_interp_w_prev==g_interp_w_cur && (ring_dx || ring_dy)) {
+        for(int y=0;y<480;y++) for(int x=128;x<176;x++)
+            if(g_interp_idx[0][(size_t)y*864u+x]!=g_interp_idx[1][(size_t)y*864u+x]) g_interp_panel_map[y*48+(x-128)]=1u;
     }
     g_interp_ring_dx_prev=ring_dx; g_interp_ring_dy_prev=ring_dy;
     g_interp_have_prev=1;
@@ -8771,6 +8780,20 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                                  texture_w*(int)sizeof(uint32_t))!=0) {
                 fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
             }
+            if(visual && g_interp_prev_texture && interp_enabled()) {
+                /* panel overlay x=128..175 of the current frame: opaque where the pixel is panel, clear where map */
+                if(!g_interp_panel_texture) {
+                    g_interp_panel_texture=SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,
+                        SDL_TEXTUREACCESS_STREAMING,48,480);
+                    if(g_interp_panel_texture) SDL_SetTextureBlendMode(g_interp_panel_texture,SDL_BLENDMODE_BLEND);
+                }
+                if(g_interp_panel_texture) {
+                    for(int y=0;y<480;y++) for(int x=0;x<48;x++)
+                        g_interp_panel_rgba[y*48+x]=g_interp_panel_map[y*48+x]?0u:
+                            g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+128u+(unsigned)x];
+                    SDL_UpdateTexture(g_interp_panel_texture,NULL,g_interp_panel_rgba,48*(int)sizeof(uint32_t));
+                }
+            }
             if(g_interactive_perf_frequency) {
                 g_hostprof_convert_ms+=(double)(SDL_GetPerformanceCounter()-hp_convert0)*1000.0/(double)g_interactive_perf_frequency;
                 g_hostprof_uploads++;
@@ -8811,6 +8834,8 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 for(size_t i=0;i<n;i++) if(!((stem[i]>='a'&&stem[i]<='z')||(stem[i]>='A'&&stem[i]<='Z')||(stem[i]>='0'&&stem[i]<='9')||stem[i]=='_'||stem[i]=='-')) { stem[i]=0; break; }
                 if(!stem[0]) snprintf(stem,sizeof stem,"frame");
                 char out[900]; snprintf(out,sizeof out,"%s/%s.bmp",dump_dir,stem);
+                /* stems starting with pres_ capture the composed window output (after interpolation and pointer) */
+                if(!strncmp(stem,"pres_",5)) snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s",out); else {
                 SDL_Surface *ds=SDL_CreateRGBSurfaceWithFormatFrom((void *)g_ifclevel_demo_rgba,g_present_w,480,32,texture_w*(int)sizeof(uint32_t),SDL_PIXELFORMAT_ARGB8888);
                 if(ds) { SDL_SaveBMP(ds,out); SDL_FreeSurface(ds); }
                 if(getenv("GW_MEM_DUMP") && guest_memory) { /* read-only copy of the first 4 MiB of guest memory, for offline diffing */
@@ -8825,6 +8850,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                         snprintf(out,sizeof out,"%s/%s.ring%u.raw",dump_dir,stem,dw);
                         mf=fopen(out,"wb"); if(mf) { fwrite(guest_memory+dring,1,(size_t)dw*dh,mf); fclose(mf); }
                     }
+                }
                 }
             }
         }
@@ -8890,20 +8916,26 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         /* camera moved between the last two guest frames: compose the map region at the interpolated offset */
         double a=(double)(SDL_GetPerformanceCounter()-g_interp_t_cur)/(double)(g_interp_t_cur-g_interp_t_prev);
         if(a<0.0) a=0.0; if(a>1.0) a=1.0;
-        const double s=(double)dst.w/(double)g_present_w,hud=176.0;
-        const SDL_Rect hud_src={0,0,176,480};
-        const SDL_Rect hud_dst={dst.x,dst.y,(int)(hud*s+0.5),dst.h};
-        const SDL_Rect map_clip={dst.x+(int)(hud*s+0.5),dst.y,dst.w-(int)(hud*s+0.5),dst.h};
-        const SDL_Rect map_src={176,0,g_present_w-176,480};
-        const SDL_FRect prev_dst={(float)(dst.x+(hud+a*g_interp_dx)*s),(float)(dst.y+a*g_interp_dy*s),
-                                  (float)((g_present_w-176)*s),(float)dst.h};
-        const SDL_FRect cur_dst={(float)(dst.x+(hud-(1.0-a)*g_interp_dx)*s),(float)(dst.y-(1.0-a)*g_interp_dy*s),
-                                 (float)((g_present_w-176)*s),(float)dst.h};
+        /* map from its real left edge x=128 (MapDisplay+0x1D); panel x<128 from the current frame, and its art
+           in x=128..175 drawn over the shifted map through the learned panel mask */
+        const double s=(double)dst.w/(double)g_present_w,left=128.0;
+        const SDL_Rect hud_src={0,0,128,480};
+        const SDL_Rect hud_dst={dst.x,dst.y,(int)(left*s+0.5),dst.h};
+        const SDL_Rect map_clip={dst.x+(int)(left*s+0.5),dst.y,dst.w-(int)(left*s+0.5),dst.h};
+        const SDL_Rect map_src={128,0,g_present_w-128,480};
+        const SDL_FRect prev_dst={(float)(dst.x+(left+a*g_interp_dx)*s),(float)(dst.y+a*g_interp_dy*s),
+                                  (float)((g_present_w-128)*s),(float)dst.h};
+        const SDL_FRect cur_dst={(float)(dst.x+(left-(1.0-a)*g_interp_dx)*s),(float)(dst.y-(1.0-a)*g_interp_dy*s),
+                                 (float)((g_present_w-128)*s),(float)dst.h};
         SDL_RenderSetClipRect(g_ifclevel_demo_renderer,&map_clip);
         int ok=SDL_RenderCopyF(g_ifclevel_demo_renderer,g_interp_prev_texture,&map_src,&prev_dst)==0 &&
                SDL_RenderCopyF(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&map_src,&cur_dst)==0;
         SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
         ok=ok && SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&hud_src,&hud_dst)==0;
+        if(ok && g_interp_panel_texture) {
+            const SDL_Rect panel_dst={dst.x+(int)(left*s+0.5),dst.y,(int)(176.0*s+0.5)-(int)(left*s+0.5),dst.h};
+            ok=SDL_RenderCopy(g_ifclevel_demo_renderer,g_interp_panel_texture,NULL,&panel_dst)==0;
+        }
         if(!ok) { fprintf(stderr,"SDL interpolated present: %s\n",SDL_GetError()); return 0; }
         if(a<1.0) g_interp_frames_shifted++;
     } else if(SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,
@@ -9040,6 +9072,18 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 (int)(64*sx+0.5),(int)(64*sy+0.5)};
             SDL_RenderCopy(g_ifclevel_demo_renderer,pointer_texture,NULL,&pointer_dst);
         }
+    }
+    if(g_present_dump_path[0]) {   /* QA: the composed output the window shows (GW_FRAME_DUMP_DIR, stem pres_*) */
+        int ow=0,oh=0;
+        if(SDL_GetRendererOutputSize(g_ifclevel_demo_renderer,&ow,&oh)==0 && ow>0 && oh>0) {
+            SDL_Surface *ps=SDL_CreateRGBSurfaceWithFormat(0,ow,oh,32,SDL_PIXELFORMAT_ARGB8888);
+            if(ps) {
+                if(SDL_RenderReadPixels(g_ifclevel_demo_renderer,NULL,SDL_PIXELFORMAT_ARGB8888,ps->pixels,ps->pitch)==0)
+                    SDL_SaveBMP(ps,g_present_dump_path);
+                SDL_FreeSurface(ps);
+            }
+        }
+        g_present_dump_path[0]=0;
     }
     const uint64_t render_present_start=SDL_GetPerformanceCounter(); if(g_interactive_perf_frequency) g_hostprof_copy_ms+=(double)(render_present_start-hp_copy0)*1000.0/(double)g_interactive_perf_frequency;
     SDL_RenderPresent(g_ifclevel_demo_renderer);
