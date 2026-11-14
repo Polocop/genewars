@@ -14214,7 +14214,7 @@ typedef struct {
    untouched surface and buffers). Wider surfaces get a fresh WScreen, map ring buffer and strip-flag block in the
    DPMI address space above the allocator cursor (never granted, so no live block or MCB can be there). */
 static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_services *dos,uint32_t width,ws_pass *out,
-                       uint32_t *alloc_base,uint32_t *alloc_size) {
+                       uint32_t *alloc_base,uint32_t *alloc_size,uint8_t strip_level,int clear_ring) {
     memset(out,0,sizeof *out); out->width=width;
     memcpy(scratch,base,GUEST_LIMIT);
     const uint32_t map=0x00346D70u,height=480u,bytes=width*height,guard=64u;
@@ -14269,10 +14269,16 @@ static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_service
         *(uint32_t *)(scratch+vec+0x10u)=width; *(uint32_t *)(scratch+vec+0x14u)=width; *(uint32_t *)(scratch+vec+0x18u)=height;
         /* MapDisplay+0x33 is the ring split (0x7A099: width - ring_x), recomputed by the scroll path. */
         *(uint16_t *)(scratch+map+0x33u)=(uint16_t)(width-*(const uint16_t *)(scratch+map+0x08u));
-        memset(scratch+flags,1u,16u);
+        memset(scratch+flags,strip_level,16u);
     }
     scratch[map+0x1Cu]|=0x02u;
-    memset(scratch+map+0x11BDu,1u,20u);
+    /* Strip dirty bytes are levels (callers store max(old,new)): 1 = partial redraw through 0x665B0,
+       higher = whole strip through 0x65F20. */
+    memset(scratch+map+0x11BDu,strip_level,20u);
+    if(width==640u && clear_ring) {
+        const uint32_t hud=*(const uint16_t *)(scratch+map+0x1Du);
+        for(uint32_t y=0;y<height;y++) memset(scratch+ring+y*640u+hud,0,640u-hud);
+    }
     uint8_t saved_dac[sizeof vga_dac]; memcpy(saved_dac,vga_dac,sizeof saved_dac);
     double saved_st[8]; memcpy(saved_st,g_st,sizeof saved_st);
     const int saved_fp_top=g_fp_top; const uint16_t saved_fpu_cw=g_fpu_cw;
@@ -14297,6 +14303,7 @@ static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_service
         if(i>=lo && i<hi) continue;
         if(width!=640u && ((i>=ring && i<ring+bytes+guard) || (i>=flags && i<flags+64u))) continue;
         if(width==640u && i>=ws && i<ws+bytes) continue;
+        if(width==640u && clear_ring && i>=ring && i<ring+bytes) continue;
         out->changed_outside+=(scratch[i]!=base[i]);
     }
     if(out->invoke_ok && !out->fault) {
@@ -14309,12 +14316,18 @@ static int ws_run_pass(const uint8_t *base,uint8_t *scratch,const gw_dos_service
 
 static int run_widescreen_854_probe(uint8_t *memory,const gw_dos_services *dos,uint16_t dos_segment_end) {
     uint8_t *scratch=(uint8_t *)malloc(GUEST_LIMIT); if(!scratch) return 0;
-    ws_pass c640,wide; uint32_t alloc_base=0,alloc_size=0;
+    ws_pass c640,full640,wide; uint32_t alloc_base=0,alloc_size=0;
     const uint32_t W=864u,H=480u,OUTW=854u;
-    const int a=ws_run_pass(memory,scratch,dos,640u,&c640,NULL,NULL);
+    const int a=ws_run_pass(memory,scratch,dos,640u,&c640,NULL,NULL,1u,0);
     const int mcb640=validate_dos_mcb_chain(scratch,dos_segment_end);
+    /* Whole-strip redraw at 640 from an empty ring: shows the level-2 path rebuilds the canonical frame. */
+    const int f=ws_run_pass(memory,scratch,dos,640u,&full640,NULL,NULL,2u,1);
+    unsigned full_equal=0;
+    if(a&&f) for(uint32_t i=0;i<640u*480u;i++) full_equal+=(c640.pixels[i]==full640.pixels[i]);
+    if(f) { char fp[160]; snprintf(fp,sizeof fp,"evidence/ws854_t%u_full640_640x480.bmp",*(uint32_t *)(memory+0x002F1472u));
+        (void)save_indexed_bmp24(fp,full640.pixels,640u,480u,vga_dac); }
     g_ws_band_copies=0;
-    const int b=ws_run_pass(memory,scratch,dos,W,&wide,&alloc_base,&alloc_size);
+    const int b=ws_run_pass(memory,scratch,dos,W,&wide,&alloc_base,&alloc_size,2u,1);
     const int mcb_wide=validate_dos_mcb_chain(scratch,dos_segment_end);
     /* Self-check of the ring mapping on the canonical frame: background ring pixels mapped into x=left..639. */
     unsigned map_match=0,map_tested=0,left_equal=0,band_nonzero=0,band_unique=0,band_overlay=0,band_black_cols=0;
@@ -14355,17 +14368,19 @@ static int run_widescreen_854_probe(uint8_t *memory,const gw_dos_services *dos,u
             c640.ok,c640.fault,c640.end_eip,c640.changed_outside,mcb640);
         fprintf(j,"  \"wide\": {\"ok\": %d, \"fault\": %d, \"end_eip\": \"0x%08X\", \"surface\": \"%ux%u\", \"output\": \"%ux%u\", \"strips\": %u, \"wscreen_block\": [\"0x%08X\", \"0x%08X\"], \"ring_block\": \"0x%08X\", \"allocator\": \"game 0x91E00\", \"canary_overwrites\": %u, \"changed_guest_bytes_outside_new_buffers\": %u, \"MCB_chain_valid\": %d, \"band_copies\": %u, \"capture\": \"evidence/ws854_original_renderer_854x480.bmp\"},\n",
             wide.ok,wide.fault,wide.end_eip,W,H,OUTW,H,(W+31u)/32u,alloc_base,alloc_base+alloc_size,wide.ring,wide.canary_overwrites,wide.changed_outside,mcb_wide,g_ws_band_copies);
+        fprintf(j,"  \"full_redraw_640_from_empty_ring\": {\"ok\": %d, \"fault\": %d, \"equal_to_control_pixels\": %u},\n",full640.ok,full640.fault,full_equal);
         fprintf(j,"  \"left_640_equal_pixels\": %u, \"left_640_total\": %u,\n",left_equal,640u*H);
         fprintf(j,"  \"ring_mapping_selfcheck_x128_639\": {\"matching\": %u, \"tested\": %u},\n",map_match,map_tested);
         fprintf(j,"  \"band_x640_853\": {\"nonzero_pixels\": %u, \"total\": %u, \"unique_colors\": %u, \"all_black_columns\": %u, \"pixels_differing_from_ring_background\": %u}\n}\n",
             band_nonzero,(OUTW-640u)*H,band_unique,band_black_cols,band_overlay);
         fclose(j);
     }
+    fprintf(stderr,"TRACE ws854 full640_equal=%u/%u\n",full_equal,640u*H);
     fprintf(stderr,"TRACE ws854 control_ok=%d wide_ok=%d fault=%d/%d left_equal=%u/%u band_nonzero=%u/%u black_cols=%u overlay=%u canary=%u changed=%u/%u mcb=%d/%d map_selfcheck=%u/%u\n",
         c640.ok,wide.ok,c640.fault,wide.fault,left_equal,640u*H,band_nonzero,(OUTW-640u)*H,band_black_cols,band_overlay,
         wide.canary_overwrites,c640.changed_outside,wide.changed_outside,mcb640,mcb_wide,map_match,map_tested);
     const int ok=a&&b&&!c640.fault&&!wide.fault&&mcb640&&mcb_wide&&wide.canary_overwrites==0u;
-    free(crop); free(c640.pixels); free(wide.pixels); free(scratch);
+    free(crop); free(c640.pixels); free(full640.pixels); free(wide.pixels); free(scratch);
     return ok;
 }
 
