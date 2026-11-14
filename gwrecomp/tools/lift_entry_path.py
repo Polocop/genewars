@@ -3303,6 +3303,27 @@ if partial:
     for site in (0x7C765, 0x7C76E):
         ws_rule(f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;",
                 f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;\n    if (g_gw_ws_band_copy) g_gw_ws_band_copy(); /* widescreen band */")
+    # Phase 4: ring scroll, strip marking and the right-edge scroll test.
+    ws_strips = f"(({ws_width} + 31u) >> 5)"
+    for site, reg in ((0x79689, "edx"), (0x796DF, "edx"), (0x7991C, "edx"), (0x799C8, "edx"), (0x7A2A3, "edx")):
+        ws_rule(f"/* cmp {reg}, 0x14u */ /* 0x{site:08X}: cmp {reg}, 0x14 */\n    _flag_a = (uint32_t)({reg}); _flag_b = (uint32_t)(0x14u);",
+                f"/* 0x{site:08X}: strip bound (20 at 640) */\n    _flag_a = (uint32_t)({reg}); _flag_b = (uint32_t)({ws_strips});")
+    for site in (0x79BCD, 0x79C87):
+        ws_rule(f"eax = 0x13u; /* 0x{site:08X}: mov eax, 0x13 */",
+                f"eax = {ws_strips} - 1u; /* 0x{site:08X}: last strip (19 at 640) */")
+    ws_rule("SET_LO8(eax, 0x13u); /* 0x0007A2A8: mov al, 0x13 */",
+            f"SET_LO8(eax, {ws_strips} - 1u); /* 0x0007A2A8: last strip (19 at 640) */")
+    for site, reg in ((0x7958D, "edx"), (0x79650, "edx"), (0x7977E, "eax"), (0x797F1, "eax"),
+                      (0x79849, "eax"), (0x798E0, "eax"), (0x79940, "edx"), (0x79988, "edx")):
+        ws_rule(f"{reg} = {reg} << 7u; /* 0x{site:08X}: shl {reg}, 7 */",
+                f"{reg} = GW_WS_ROWS_TIMES_WIDTH({reg}); /* 0x{site:08X}: (5*y) << 7 = y*640 -> y*width */")
+    # right-edge scroll: mouse x == 639 -> last visible column (853 on the widescreen surface)
+    ws_rule("/* cmp eax, 0x27Fu */ /* 0x00079E9B: cmp eax, 0x27f */\n    _flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(0x27Fu);",
+            "/* 0x00079E9B: right-edge scroll column (639 at 640) */\n    _flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(GW_WS_VIEW_W - 1u);")
+    # 0x79D00 (request a whole redraw) fills the 20 MapDisplay strip levels with 2; fill the extension too
+    ws_rule("    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;",
+            "    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;\n"
+            "    if (g_gw_ws_strip_ext) { for (uint32_t _k = 0u; _k < 7u; _k++) MEM8(g_gw_ws_strip_ext + _k) = 2u; } /* 0x00079D1C: widescreen strips */")
     ws_applied = 0
     ws_optional_missing = []
     for original, replacement, optional in widescreen_rules:
@@ -3321,6 +3342,17 @@ if partial:
             raise SystemExit(f"widescreen rule at 0x{site:08X} expected one lifted instruction, got {count}")
         text = text.replace(original, replacement, 1)
         ws_applied += 1
+    # Phase 4: the ring scroll routines take every 640 literal as the surface width (ring wrap, y*640 rows,
+    # window widths); exact at 640.
+    if ws_applied:
+        for entry, n in (("0x00079510u", 6), ("0x000796F0u", 7), ("0x000799E0u", 8), ("0x00079B80u", 8),
+                         ("0x00079DD0u", 3), ("0x0007A1C0u", 1)):
+            parameterize_framebuffer_pitch(entry, n)
+        # Strip levels 20.. live outside MapDisplay: any byte access with displacement 0x11BD whose address falls
+        # on strips 20..26 goes to g_gw_ws_strip_ext (no such address is formed at 640).
+        n11 = len(re.findall(r"MEM8\(DS_BASE \+ \(([^()]*?) \+ 0x11BD\)\)", text))
+        text = re.sub(r"MEM8\(DS_BASE \+ \(([^()]*?) \+ 0x11BD\)\)", r"MEM8(GW_WS_FLAG_EA(DS_BASE + (\1 + 0x11BD)))", text)
+        print(f"widescreen strip-level accesses redirected: {n11}", file=sys.stderr)
     if ws_applied:
         if "L_0007C57C:" not in text:
             raise SystemExit("widescreen strip guard needs label L_0007C57C")
@@ -3330,6 +3362,10 @@ if partial:
             "void (*g_gw_ws_band_copy)(void) = 0;\n"
             "#define GW_WS_STRIP_FLAG(base_reg, index) (((uint32_t)(index) < 20u || !g_gw_ws_strip_ext) ? \\\n"
             "    (uint32_t)(DS_BASE + ((base_reg) + 0x11BDu)) : (uint32_t)(g_gw_ws_strip_ext + ((uint32_t)(index) - 20u)))\n"
+            "#define GW_WS_STRIPS ((MEM32(DS_BASE + (0x376A78)) + 31u) >> 5)\n"
+            "#define GW_WS_VIEW_W (MEM32(DS_BASE + (0x376A78)) == 864u ? 854u : MEM32(DS_BASE + (0x376A78)))\n"
+            "#define GW_WS_FLAG_EA(ea) ((((uint32_t)(ea) - 0x00346D70u - 0x11BDu - 20u) < 7u && g_gw_ws_strip_ext) ? \\\n"
+            "    (uint32_t)(g_gw_ws_strip_ext + ((uint32_t)(ea) - 0x00346D70u - 0x11BDu - 20u)) : (uint32_t)(ea))\n"
             "#define GW_WS_ROWS_TIMES_WIDTH(v) (MEM32(DS_BASE + (0x376A78)) == 0x280u ? ((v) << 7u) : \\\n"
             "    (uint32_t)(((int32_t)(v) / 5) * (int32_t)MEM32(DS_BASE + (0x376A78))))\n")
         first_func = text.find("\nvoid gw_partial_0x")

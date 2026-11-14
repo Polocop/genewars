@@ -15,7 +15,7 @@
  -Build defaults to the newest build\rebuild-* directory. -SmokeFrames N makes the program exit after N frames (smoke test).
  Requires GENEWARS_INSTALL_DIR (your own game files). Logs go to <build>\play.stdout.log / play.stderr.log.
 #>
-param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave, [switch]$OrderLog, [ValidateRange(0,24)][int]$Level = 0)
+param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave, [switch]$OrderLog, [ValidateRange(0,24)][int]$Level = 0, [switch]$Widescreen)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'gwconfig.ps1')
 $root = Get-GwRoot
@@ -69,6 +69,7 @@ try {
     if ($SkipIntro) { $argLine += ' --skip-intro' }
     if ($OrderLog) { $argLine += ' --order-log' }
     if ($Level -gt 1) { if ($LoadSave) { throw '-Level starts a new game; it cannot be combined with -LoadSave' }; $argLine += (' --level {0}' -f $Level) }
+    if ($Widescreen) { $argLine += ' --widescreen' }   # 854x480 in missions (true widescreen of the original renderer)
     if ($LoadSave) { $argLine += (' --load-save "{0}"' -f (Resolve-Path -LiteralPath $LoadSave).Path) }
     if ($Detach) {   # for automated interactive tests: start the game and return its process id
         $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $br -PassThru -RedirectStandardOutput $out -RedirectStandardError $err

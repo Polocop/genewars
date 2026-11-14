@@ -7879,7 +7879,7 @@ static uint32_t *g_ifclevel_demo_rgba;
 /* Interactive mode has one owner for mutable guest RAM: the simulation
    worker. SDL's main thread receives only this immutable-at-publication
    visual snapshot and input events queued at the device boundary. */
-#define GW_INTERACTIVE_WSCREEN_BYTES (640u*480u)
+#define GW_INTERACTIVE_WSCREEN_BYTES (864u*480u) /* widescreen surface pitch 864 (854 shown); 640x480 otherwise */
 #define GW_INTERACTIVE_WORLD_BYTES (128u*128u*14u)
 #define GW_MODERN_HUD_WIDTH 176u /* measured right edge of the original panel in the 640x480 frame */
 #define GW_INTERACTIVE_KEY_QUEUE 512u
@@ -7887,6 +7887,7 @@ typedef struct gw_interactive_visual_snapshot {
     uint8_t wscreen[GW_INTERACTIVE_WSCREEN_BYTES];
     uint8_t palette[768u];
     uint8_t world[GW_INTERACTIVE_WORLD_BYTES];
+    uint32_t wscreen_pitch; /* 640, or 864 while the live widescreen surface is active */
     uint32_t turn;
     int16_t camera_x,camera_y;
     uint64_t generation;
@@ -8126,15 +8127,19 @@ static int terrain_window_to_guest_hud(int wx,int wy,int *gx,int *gy) {
     return 1;
 }
 
+/* True widescreen (GW_WIDESCREEN=1 / --widescreen): presented width and source pitch of the current frame.
+   640/640 by default; 854/864 while the game IFC runs on the widened surface. */
+static int g_ws_requested;
+static int g_present_w=640,g_present_pitch=640;
 static int set_ifclevel_guest_surface(const uint8_t *pixels) {
     g_ifclevel_guest_surface=(gw_video_surface){
-        (uint8_t *)pixels,640,480,640,1,{0,0,640,480}
+        (uint8_t *)pixels,g_present_w,480,g_present_pitch,1,{0,0,g_present_w,480}
     };
     return gw_video_surface_valid(&g_ifclevel_guest_surface);
 }
 
 static SDL_Rect ifclevel_presentation_rect(void) {
-    int source_w=640,source_h=480;
+    int source_w=g_present_w,source_h=480;
     if(g_terrain_modern_backend) { source_w=g_terrain_width; source_h=g_terrain_height; }
     SDL_Rect rect={0,0,source_w,source_h};
     int out_w=source_w,out_h=source_h;
@@ -8432,6 +8437,15 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
     const char *terrain_capture_path=capture_path;
     if(!terrain_capture_path && g_terrain_modern_backend && !g_terrain_capture_done)
         terrain_capture_path=getenv("GW_TERRAIN_CAPTURE_FRAME");
+    {   const int pitch=(visual && visual->wscreen_pitch==864u)?864:640;
+        const int shown=pitch==864?854:640;
+        if(shown!=g_present_w && g_ifclevel_demo_window && g_interactive_demo_mode) {
+            int ww=0,wh=0; SDL_GetWindowSize(g_ifclevel_demo_window,&ww,&wh);
+            if(shown==854 && ww==1200 && wh==900) SDL_SetWindowSize(g_ifclevel_demo_window,1600,900);
+            else if(shown==640 && ww==1600 && wh==900) SDL_SetWindowSize(g_ifclevel_demo_window,1200,900);
+        }
+        g_present_pitch=pitch; g_present_w=shown;
+    }
     if(!pixels || !palette ||
        (!g_terrain_modern_backend && !set_ifclevel_guest_surface(pixels))) return 0;
     const gw_video_surface *source=&g_ifclevel_guest_surface;
@@ -8439,6 +8453,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
        !terrain_load_atlas(guest_memory)) g_terrain_modern_backend=0;
     int texture_w=640,texture_h=480;
     (void)terrain_backend_texture_size(&texture_w,&texture_h);
+    if(!g_terrain_modern_backend && g_ws_requested) texture_w=854;
     const size_t pixel_count=(size_t)texture_w*(size_t)texture_h;
     if(!sdl_input_initialized && SDL_Init(SDL_INIT_VIDEO)!=0) {
         fprintf(stderr,"SDL_Init: %s\n",SDL_GetError()); return 0;
@@ -8625,16 +8640,16 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         } else {
             for(int y=0;y<480;y++) {
                 const uint8_t *row=gw_video_surface_row(source,y);
-                for(int x=0;x<640;x++) {
+                for(int x=0;x<g_present_w;x++) {
                     const uint32_t k=row[x];
                     const uint32_t r=(uint32_t)palette[k*3u+0u]*255u/63u;
                     const uint32_t g=(uint32_t)palette[k*3u+1u]*255u/63u;
                     const uint32_t b=(uint32_t)palette[k*3u+2u]*255u/63u;
-                    g_ifclevel_demo_rgba[(size_t)y*640u+x]=0xFF000000u|(r<<16)|(g<<8)|b;
+                    g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+x]=0xFF000000u|(r<<16)|(g<<8)|b;
                 }
             }
             if(SDL_UpdateTexture(g_ifclevel_demo_texture,NULL,g_ifclevel_demo_rgba,
-                                 640*(int)sizeof(uint32_t))!=0) {
+                                 texture_w*(int)sizeof(uint32_t))!=0) {
                 fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
             }
         }
@@ -8673,7 +8688,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 for(size_t i=0;i<n;i++) if(!((stem[i]>='a'&&stem[i]<='z')||(stem[i]>='A'&&stem[i]<='Z')||(stem[i]>='0'&&stem[i]<='9')||stem[i]=='_'||stem[i]=='-')) { stem[i]=0; break; }
                 if(!stem[0]) snprintf(stem,sizeof stem,"frame");
                 char out[900]; snprintf(out,sizeof out,"%s/%s.bmp",dump_dir,stem);
-                SDL_Surface *ds=SDL_CreateRGBSurfaceWithFormatFrom((void *)g_ifclevel_demo_rgba,640,480,32,640*(int)sizeof(uint32_t),SDL_PIXELFORMAT_ARGB8888);
+                SDL_Surface *ds=SDL_CreateRGBSurfaceWithFormatFrom((void *)g_ifclevel_demo_rgba,g_present_w,480,32,texture_w*(int)sizeof(uint32_t),SDL_PIXELFORMAT_ARGB8888);
                 if(ds) { SDL_SaveBMP(ds,out); SDL_FreeSurface(ds); }
                 if(getenv("GW_MEM_DUMP") && guest_memory) { /* read-only copy of the first 4 MiB of guest memory, for offline diffing */
                     snprintf(out,sizeof out,"%s/%s.mem",dump_dir,stem);
@@ -8736,7 +8751,8 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
             if(!world_ok) { fprintf(stderr,"SDL original terrain composition: %s\n",SDL_GetError()); return 0; }
         }
-    } else if(SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,NULL,&dst)!=0) {
+    } else if(SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,
+                  g_terrain_modern_backend?NULL:&(SDL_Rect){0,0,g_present_w,480},&dst)!=0) {
         fprintf(stderr,"SDL demo present: %s\n",SDL_GetError()); return 0;
     }
     if(g_terrain_modern_backend && g_terrain_cache_texture_initialized && visual &&
@@ -8862,7 +8878,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 pointer_rgba[y*64u+x]=value;
             }
             SDL_UpdateTexture(pointer_texture,NULL,pointer_rgba,64*(int)sizeof(uint32_t));
-            const double sx=(double)dst.w/640.0,sy=(double)dst.h/480.0;
+            const double sx=(double)dst.w/(double)g_present_w,sy=(double)dst.h/480.0;
             const int px=ptr_x+ptr_hot_x;
             const int py=ptr_y+ptr_hot_y;
             SDL_Rect pointer_dst={dst.x+(int)(px*sx),dst.y+(int)(py*sy),
@@ -15287,8 +15303,8 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
                 }
             }
             if(g_ifclevel_demo_mode && g_interactive_demo_mode &&
-               (x<0 || x>=640 || y<0 || y>=480)) continue;
-            if(x<0)x=0; if(x>639)x=639; if(y<0)y=0; if(y>479)y=479;
+               (x<0 || x>=g_present_w || y<0 || y>=480)) continue;
+            if(x<0)x=0; if(x>g_present_w-1)x=g_present_w-1; if(y<0)y=0; if(y>479)y=479;
             if(memory) {
                 *(int32_t *)(memory+0x00376AA8u)=x; /* lbDisplay.MMouseX */
                 *(int32_t *)(memory+0x00376AACu)=y; /* lbDisplay.MMouseY */
@@ -15956,13 +15972,20 @@ static int invoke_original_startup_prefix(gw_recomp_context *c,uint8_t *memory) 
 static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen_guest,
                                                 uint64_t generation) {
     const uint32_t world_guest=0x002F4F86u,map_guest=0x00346D70u;
+    /* While the live widescreen surface is active (GW_WIDESCREEN=1, game IFC) the frame is lbDisplay's own
+       864-pitch WScreen; otherwise the canonical 640x480 WScreen. */
+    uint32_t pitch=640u;
+    if(memory && *(const uint32_t *)(memory+0x00376A78u)==864u && *(const uint32_t *)(memory+0x00376A7Cu)==480u) {
+        pitch=864u; wscreen_guest=*(const uint32_t *)(memory+0x00376A5Cu);
+    }
+    const uint32_t frame_bytes=pitch*480u;
     if(!memory || !g_interactive_snapshot_mutex ||
-       wscreen_guest+GW_INTERACTIVE_WSCREEN_BYTES>GUEST_LIMIT ||
+       wscreen_guest>GUEST_LIMIT-frame_bytes ||
        world_guest+GW_INTERACTIVE_WORLD_BYTES>GUEST_LIMIT ||
        map_guest+0x14u>GUEST_LIMIT) return;
     SDL_LockMutex(g_interactive_snapshot_mutex);
-    memcpy(g_interactive_published_snapshot.wscreen,memory+wscreen_guest,
-        GW_INTERACTIVE_WSCREEN_BYTES);
+    memcpy(g_interactive_published_snapshot.wscreen,memory+wscreen_guest,frame_bytes);
+    g_interactive_published_snapshot.wscreen_pitch=pitch;
     memcpy(g_interactive_published_snapshot.palette,vga_dac,
         sizeof g_interactive_published_snapshot.palette);
     memcpy(g_interactive_published_snapshot.world,memory+world_guest,
@@ -16146,6 +16169,81 @@ static int gw_vsb16_run_mixer_service(void *user) {
     return ok;
 }
 
+/* ---- Live true widescreen (GW_WIDESCREEN=1 / --widescreen) ---------------------------------------------------
+   Runs on the simulation thread between ticks, with the guest parked. While the game IFC (0x35FE9A) is current,
+   lbDisplay points at a 864x480 WScreen and the map ring buffer is 864x480 too (both from the game's allocator
+   0x91E00, called on a private stack below the parked one, like the Miles mixer service); strip levels 20..26
+   live in a third block. Leaving the game IFC restores the canonical 640x480 buffers. Every switch requests a
+   whole-strip redraw with the ring offsets reset. The lifted renderer follows lbDisplay.GraphicsScreenWidth. */
+static int g_ws_live_active;
+static uint32_t g_ws_live_ws,g_ws_live_ring,g_ws_live_flags,g_ws_saved_ws,g_ws_saved_ring;
+static uint32_t ws_live_alloc(uint8_t *memory,const gw_recomp_context *parked,uint32_t size) {
+    const uint32_t esp=(parked->esp-0x4000u)&~0xFu;
+    if(esp<0x2000u || esp+16u>GUEST_LIMIT) return 0u;
+    gw_recomp_context sc=*parked;
+    *(uint32_t *)(memory+esp)=RECOMP_RETADDR;
+    sc.esp=esp; sc.eax=size; sc.eip=0x00091E00u; sc.cur_func=0x00091E00u;
+    const gw_recomp_status st=gw_recomp_invoke(gw_partial_0x00091E00,&sc);
+    if(st!=GW_RECOMP_OK || sc.memory_fault.pending || sc.segment_fault_pending ||
+       sc.interrupt_trap_pending || sc.port_io_trap.pending) return 0u;
+    return (sc.eax && sc.eax<=GUEST_LIMIT-size)?sc.eax:0u;
+}
+static void ws_live_request_redraw(uint8_t *memory,uint32_t width) {
+    const uint32_t map=0x00346D70u;
+    const uint16_t left=*(const uint16_t *)(memory+map+0x1Du);
+    *(int16_t *)(memory+map+0x08u)=(int16_t)left;          /* ring offsets reset: the whole ring is redrawn */
+    *(int16_t *)(memory+map+0x0Au)=0;
+    *(uint16_t *)(memory+map+0x33u)=(uint16_t)(width-left); /* as 0x7A099: width - ring_x */
+    *(uint16_t *)(memory+map+0x35u)=480u;
+    memory[map+0x1Cu]|=0x02u;
+    memset(memory+map+0x11BDu,2u,20u);
+    if(g_gw_ws_strip_ext) memset(memory+g_gw_ws_strip_ext,2u,7u);
+}
+static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
+    if(!g_ws_requested || !memory || !parked) return;
+    const uint32_t ifc=*(const uint32_t *)(memory+0x002EF7E8u),pending=*(const uint32_t *)(memory+0x002EF7ECu);
+    const uint32_t map=0x00346D70u;
+    const int want=ifc==0x0035FE9Au && !pending && *(const uint16_t *)(memory+map+0x1Du)==128u;
+    if(want==g_ws_live_active) return;
+    const uint32_t W=864u,H=480u,bytes=W*H;
+    if(want) {
+        if(*(const uint32_t *)(memory+0x00376A78u)!=640u || *(const uint32_t *)(memory+0x00376A7Cu)!=480u) return;
+        const uint32_t old_ws=*(const uint32_t *)(memory+0x00376A5Cu),old_ring=*(const uint32_t *)(memory+0x002EECA0u);
+        if(!old_ws || !old_ring || old_ws>GUEST_LIMIT-640u*480u || old_ring>GUEST_LIMIT-640u*480u) return;
+        if(!g_ws_live_ws) {
+            g_ws_live_ws=ws_live_alloc(memory,parked,bytes);
+            g_ws_live_ring=g_ws_live_ws?ws_live_alloc(memory,parked,bytes):0u;
+            g_ws_live_flags=g_ws_live_ring?ws_live_alloc(memory,parked,64u):0u;
+            gw_flag_trace("TRACE widescreen alloc wscreen=%08X ring=%08X flags=%08X\n",g_ws_live_ws,g_ws_live_ring,g_ws_live_flags);
+            if(!g_ws_live_flags) { g_ws_requested=0; return; }   /* fail closed: stay at 640 */
+        }
+        const uint16_t left=*(const uint16_t *)(memory+map+0x1Du);
+        for(uint32_t y=0;y<H;y++) {
+            memcpy(memory+g_ws_live_ws+y*W,memory+old_ws+y*640u,640u);
+            memset(memory+g_ws_live_ws+y*W+640u,0,W-640u);
+            memset(memory+g_ws_live_ring+y*W,0,W);
+            memcpy(memory+g_ws_live_ring+y*W,memory+old_ring+y*640u,left);
+        }
+        memset(memory+g_ws_live_flags,0,64u);
+        g_ws_saved_ws=old_ws; g_ws_saved_ring=old_ring;
+        *(uint32_t *)(memory+0x00376A5Cu)=g_ws_live_ws;
+        *(uint32_t *)(memory+0x00376A78u)=W;
+        *(uint32_t *)(memory+0x002EECA0u)=g_ws_live_ring;
+        g_gw_ws_strip_ext=g_ws_live_flags; g_gw_ws_band_copy=ws_band_copy_impl;
+        ws_live_request_redraw(memory,W);
+        g_ws_live_active=1;
+        gw_flag_trace("TRACE widescreen on turn=%u surface=864x480 shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u));
+    } else {
+        *(uint32_t *)(memory+0x00376A5Cu)=g_ws_saved_ws;
+        *(uint32_t *)(memory+0x00376A78u)=640u;
+        *(uint32_t *)(memory+0x002EECA0u)=g_ws_saved_ring;
+        g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL;
+        ws_live_request_redraw(memory,640u);
+        g_ws_live_active=0;
+        gw_flag_trace("TRACE widescreen off turn=%u ifc=%08X pending=%08X\n",*(const uint32_t *)(memory+0x002F1472u),ifc,pending);
+    }
+}
+
 static int SDLCALL interactive_simulation_worker(void *opaque) {
     gw_interactive_sim_args *args=(gw_interactive_sim_args *)opaque;
     if(!args || !args->memory || !args->context) {
@@ -16199,6 +16297,7 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
             accumulator-=1.0;
         }
         (void)interactive_mailbox_apply(memory);
+        ws_live_update(memory,c);
         const uint64_t sync0=SDL_GetPerformanceCounter();
         if(!g_interactive_guest_suspended &&
            !gw_recomp_pit_realtime_sync(c,sync0)) {
@@ -17111,6 +17210,7 @@ static void play_mode_sanitize_environment(void) {
 int main(int argc,char **argv) {
     gw_recomp_dispatch_hits_reset();
     for(int ai=4;ai<argc;ai++) if(!strcmp(argv[ai],"--play")) g_cli_play_mode=1;
+    { const char *ws_env=getenv("GW_WIDESCREEN"); if(ws_env && ws_env[0]=='1') g_ws_requested=1; }
     /* The startup replay writes its evidence files under ./evidence and aborts (exit 112) when
        that directory is missing; a player launch from any working directory must not depend on it. */
     if(g_cli_play_mode) (void)CreateDirectoryA("evidence",NULL);
@@ -17122,6 +17222,7 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[ai],"--probe-live-projection-mesh")) g_cli_live_projection_mesh_capture=1;
         else if(!strcmp(argv[ai],"--skip-intro")) g_cli_skip_intro=1;
         else if(!strcmp(argv[ai],"--order-log")) g_cli_order_log=1;
+        else if(!strcmp(argv[ai],"--widescreen")) g_ws_requested=1;
         else if(!strcmp(argv[ai],"--level") && ai+1<argc) {
             char *end=NULL; unsigned long n=strtoul(argv[++ai],&end,10);
             if(!end || *end || n<1ul || n>24ul) return 2;
