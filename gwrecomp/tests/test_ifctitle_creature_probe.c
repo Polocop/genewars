@@ -8197,16 +8197,14 @@ static int interp_score_textured(const uint8_t *prev,const uint8_t *cur,int w,in
     return *valid?score*1000/(*valid):0;
 }
 static int interp_register(const uint8_t *prev,const uint8_t *cur,int w,int rdx,int rdy,int ldx,int ldy,int *odx,int *ody) {
-    const int cand[4][2]={{-rdx,-rdy},{rdx,rdy},{-ldx,-ldy},{ldx,ldy}};
-    int best=-1,bdx=0,bdy=0,bvalid=0;
-    for(int c=0;c<4;c++) {
-        if(!cand[c][0] && !cand[c][1]) continue;
-        if(cand[c][0]<-300||cand[c][0]>300||cand[c][1]<-200||cand[c][1]>200) continue;
-        int valid=0; const int s=interp_score_textured(prev,cur,w,cand[c][0],cand[c][1],&valid);
-        if(valid>=48 && s>best) { best=s; bdx=cand[c][0]; bdy=cand[c][1]; bvalid=valid; }
-    }
-    if(best<700 || bvalid<48) { g_interp_registration_fallbacks++; return 0; }
-    *odx=bdx; *ody=bdy; return 1;
+    /* Measured on live edge scrolls: the content moves by exactly minus the ring offset change of the same frame
+       (no lag). The pixels only veto a translation they clearly contradict (>=48 textured samples, <50% agree). */
+    (void)ldx; (void)ldy;
+    if(!rdx && !rdy) return 0;
+    if(rdx<-300||rdx>300||rdy<-200||rdy>200) return 0;
+    int valid=0; const int s=interp_score_textured(prev,cur,w,-rdx,-rdy,&valid);
+    if(valid>=48 && s<500) { g_interp_registration_fallbacks++; return 0; }
+    *odx=-rdx; *ody=-rdy; return 1;
 }
 /* Called when a new guest frame is presented: keeps the previous indexed frame, measures the map translation. */
 static void interp_new_frame(const gw_interactive_visual_snapshot *visual,const gw_video_surface *source) {
