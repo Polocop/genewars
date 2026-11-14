@@ -16008,7 +16008,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
     SDL_LockMutex(g_interactive_snapshot_mutex);
     memcpy(g_interactive_published_snapshot.wscreen,memory+wscreen_guest,frame_bytes);
     g_interactive_published_snapshot.wscreen_pitch=pitch;
-    if(g_ws_requested && (generation%200u)==1u) {
+    if(g_ws_requested && (generation%2000u)==1u) {
         unsigned nz=0; for(uint32_t y=0;y<480u;y+=4) for(uint32_t x=176u;x<640u;x+=4) nz+=g_interactive_published_snapshot.wscreen[y*pitch+x]!=0u;
         gw_flag_trace("TRACE widescreen publish gen=%llu turn=%u ws=%08X pitch=%u lb_ws=%08X lb_w=%u map_nonzero=%u/%u\n",
             (unsigned long long)generation,*(uint32_t *)(memory+0x002F1472u),wscreen_guest,pitch,
@@ -16272,7 +16272,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A78u)=W;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_live_ring;
         g_gw_ws_strip_ext=g_ws_live_flags; g_gw_ws_band_copy=ws_band_copy_impl;
-        if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback%c",10); }
+        if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback%c",10); } memory[0x00346D70u+0x11D5u]=2u; /* as the game's scroll path (0x7A0EC): 0x79DD0 decrements +0x11D5 before the next Draw, so 1 could reach the Draw as 0 and skip the static-Thing stamping */
         g_ws_live_active=1;
         gw_flag_trace("TRACE widescreen on turn=%u surface=864x480 shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u));
     } else {
@@ -16280,7 +16280,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A78u)=640u;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_saved_ring;
         g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL;
-        if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
+        if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; } memory[0x00346D70u+0x11D5u]=2u;
         g_ws_live_active=0;
         gw_flag_trace("TRACE widescreen off turn=%u ifc=%08X pending=%08X\n",*(const uint32_t *)(memory+0x002F1472u),ifc,pending);
     }
