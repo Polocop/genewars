@@ -1,0 +1,4 @@
+[
+  {"argv":["python","-m","unittest","tests.test_dos_ah48_work2"],"suite":"original-byte-ah48"},
+  {"argv":["python","-m","unittest","tests.test_dos_services","tests.test_unicorn_services","tests.test_guest_boot"],"suite":"runtime"}
+]

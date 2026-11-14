@@ -1,0 +1,16 @@
+[
+  {
+    "argv": [
+      "python",
+      "tests/test_native_guest_trap_propagation_work1.py"
+    ],
+    "suite": "native trap propagation"
+  },
+  {
+    "argv": [
+      "coordination/gw.cmd",
+      "build"
+    ],
+    "suite": "infrastructure"
+  }
+]

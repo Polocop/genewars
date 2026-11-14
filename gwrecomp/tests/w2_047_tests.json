@@ -1,0 +1,14 @@
+[
+  {
+    "argv": ["python", "tests\\probe_real_mode_2f_work2.py"],
+    "suite": "original-byte-runtime"
+  },
+  {
+    "argv": ["python", "tests\\test_dpmi_int2f_work2.py"],
+    "suite": "original-byte-assertions"
+  },
+  {
+    "argv": ["python", "-m", "unittest", "tests.test_unicorn_services"],
+    "suite": "runtime"
+  }
+]

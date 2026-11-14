@@ -1,0 +1,29 @@
+{
+  "schema": "gwrecomp-toolchain-lock/2",
+  "note": "Versions the reference build (v0.7 line) was produced with. rebuild.ps1 reports differences as warnings; with -Strict they are errors. Hashes under reference_hashes are informational (they identify the author's exact binaries) and are only compared with -Strict.",
+  "tools": {
+    "python": "Python 3.13.0",
+    "clang": "clang version 19.1.5",
+    "gcc": "gcc.exe (Rev4, Built by MSYS2 project) 16.2.0",
+    "ld": "GNU ld (GNU Binutils) 2.47.20260726",
+    "msys_packages": "mingw-w64-i686-SDL2 2.32.10-1; mingw-w64-i686-gcc 16.2.0-4; mingw-w64-i686-crt 14.0.0.r426.g4564ee4b5-1; mingw-w64-i686-binutils 2.47-3"
+  },
+  "python_packages": [
+    "capstone==5.0.9",
+    "unicorn==2.1.4"
+  ],
+  "pcrecomp": {
+    "repository": "https://github.com/sp00nznet/pcrecomp",
+    "commit": "35548b8d0fd8aa853da67edcf7cd6134f6b9cdc7",
+    "patch": "patches/P01_pcrecomp_local_mods.patch",
+    "patch_manifest": "patches/P01_pcrecomp_local_mods.json"
+  },
+  "reference_hashes": {
+    "clang_x64_sha": "c5d3d309c036d1666d50500e87be514dc9916adc427e7aec267c95178bec14ff",
+    "clang_x86_sha": "2e0eef7cb0b202b786d07746003c83ee6251d97fd2896c00d7aea6a58c1a5162",
+    "sdl2_dll_sha": "e9ea103d1981945670425c1603d7a069d807b85b07866b0a7b2857d7a4753b6f",
+    "libSDL2_sha": "14d60b7b6feb88df0ed27fc22eb569c6c653aef73db8fc408e6d69724af3b883",
+    "python_exe_sha256": "6f8c9878450765686ace476d2170b970761d68ace63f16092489c4c8bd5d7018"
+  },
+  "user_supplied_inputs": "see tools/rebuild/inputs.json (names and SHA-256 only; the files are never distributed)"
+}

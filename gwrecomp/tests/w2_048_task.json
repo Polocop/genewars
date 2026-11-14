@@ -1,0 +1,22 @@
+{
+  "id": "W2-048",
+  "title": "Characterize and route the measured DPMI AX=0501 memory allocation frontier",
+  "description": "W2-047 original-byte replay now resumes after INT 2Fh AX=1500 and continues through a successful extra AX=0100 DOS block allocation. The guest then enters DPMI AX=0501 linear memory allocation repeatedly; the current host returns dpmi31.allocate_memory.unavailable and the bounded replay reaches one million instructions without a later explicit unsupported trap. Capture the exact first AX=0501 call (size, guest EIP, allocator state, failure reason), distinguish a valid unavailable response from a host mapping limit, and implement only the observed bounded allocation contract. Preserve backing coherence between DosHost GuestMemory and Unicorn, and do not make an unbounded 32-bit arena.",
+  "priority": 104,
+  "roles": ["WORK2"],
+  "deps": ["W2-047"],
+  "acceptance": [
+    "Evidence identifies original-byte AX=0501 request size, EIP, return registers, and whether failure is due to modeled limit or allocation failure",
+    "Unit tests cover AX=0501 allocation success, boundary/failure, handle return, bounds, and no guest-memory corruption",
+    "Unicorn maps and coherently backs any successful AX=0501 allocation without overlapping guest/image/PSP/MCB or existing allocations",
+    "Original-byte -k trace continues past the first AX=0501 call and records the next exact service/exception/stop; no MENU claim without direct evidence",
+    "Existing DPMI AX=0100, AX=0102, AX=0300/INT 2F, and runtime suites remain passing"
+  ],
+  "tests": [
+    {"argv": ["python", "tests\\probe_real_mode_2f_work2.py"], "suite": "original-byte-runtime"},
+    {"argv": ["python", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"], "suite": "runtime"}
+  ],
+  "files": ["runtime/dos_services.py", "runtime/guest_boot.py", "tools/probes/unicorn_int21.py", "tests/", "evidence/", "reports/"],
+  "evidence": ["evidence/dpmi_0300_frame_work2.json"],
+  "derive": []
+}

@@ -1,0 +1,19 @@
+{
+  "id": "W2-042",
+  "title": "Implement DPMI INT 31h AX=0101 free DOS memory blocks",
+  "description": "Complete the DOS-memory allocation lifecycle created by W2-041. Implement AX=0101 with DX selector validation, reclaim the associated DOS paragraphs and MCB, coalesce adjacent free blocks without corrupting the chain, release the protected selector, and test invalid/repeated frees and allocate-free-reallocate behavior. Keep the service bounded to allocations owned by this DosHost and rerun runtime regressions.",
+  "priority": 95,
+  "roles": ["WORK2"],
+  "deps": ["W2-041"],
+  "acceptance": [
+    "AX=0101 frees only a currently allocated DOS block selector",
+    "Unknown/repeated selector returns DPMI invalid-selector error and CF=1",
+    "MCB chain coalesces contiguous free paragraphs and preserves PSP ownership",
+    "Reallocation can reuse freed memory without overlapping live allocations",
+    "Unit and Unicorn runtime regressions pass"
+  ],
+  "tests": [],
+  "files": ["runtime/dos_services.py", "tests/test_dos_services.py", "tests/test_unicorn_services.py", "evidence/", "reports/"],
+  "evidence": [],
+  "derive": []
+}

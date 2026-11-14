@@ -1,0 +1,3 @@
+[
+  {"argv":["python","tests\\test_startup_runtime_current_work2.py"],"suite":"fresh current-runtime original-byte startup replay"}
+]
