@@ -8147,7 +8147,7 @@ static SDL_Texture *g_interp_prev_texture;
 static uint8_t *g_interp_idx[2];      /* indexed map copies: [0] previous, [1] current, pitch 864 */
 static int g_interp_have_prev,g_interp_dx,g_interp_dy,g_interp_last_dx,g_interp_last_dy;
 static int g_interp_w_prev,g_interp_w_cur;
-static int16_t g_interp_cam_prev_x,g_interp_cam_prev_y,g_interp_cam_cur_x,g_interp_cam_cur_y;
+static int16_t g_interp_cam_prev_x,g_interp_cam_prev_y,g_interp_cam_cur_x,g_interp_cam_cur_y,g_interp_cam_pp_x,g_interp_cam_pp_y;
 static uint64_t g_interp_t_prev,g_interp_t_cur;
 static unsigned g_interp_registrations,g_interp_registration_fallbacks,g_interp_frames_shifted;
 static int g_interp_enabled=-1;
@@ -8174,14 +8174,16 @@ static int interp_score(const uint8_t *prev,const uint8_t *cur,int w,int dx,int 
    a camera move (dcx,dcy) in world units (256 per cell, wrapping at 32768) translates the image by
    (-(dcx-dcy)/8, -(dcx+dcy)/16) pixels; that prediction (and its sign variants) is refined by a +-4 px search.
    Returns 0 when no candidate matches at least 70% of the samples (the frame is then shown unshifted). */
-static int interp_register(const uint8_t *prev,const uint8_t *cur,int w,int dcx,int dcy,int *odx,int *ody) {
+static int interp_register(const uint8_t *prev,const uint8_t *cur,int w,int dcx,int dcy,int lcx,int lcy,int *odx,int *ody) {
+    /* (dcx,dcy): camera change between the two snapshots; (lcx,lcy): the change one snapshot earlier. The camera
+       field is published after the tick's camera update, so a frame can lag its camera by one tick. */
     dcx=((dcx+16384)&32767)-16384; dcy=((dcy+16384)&32767)-16384;
-    const int px=-(dcx-dcy)/8,py=-(dcx+dcy)/16;
-    const int cand[4][2]={{px,py},{-px,-py},{px,-py},{-px,py}};
+    lcx=((lcx+16384)&32767)-16384; lcy=((lcy+16384)&32767)-16384;
+    const int cand[2][2]={{-(dcx-dcy)/8,-(dcx+dcy)/16},{-(lcx-lcy)/8,-(lcx+lcy)/16}};
     int best=-1,bdx=0,bdy=0;
-    for(int c=0;c<4;c++) {
+    for(int c=0;c<2;c++) {
         if(cand[c][0]<-200||cand[c][0]>200||cand[c][1]<-150||cand[c][1]>150) continue;
-        for(int dy=cand[c][1]-4;dy<=cand[c][1]+4;dy++) for(int dx=cand[c][0]-4;dx<=cand[c][0]+4;dx++) {
+        for(int dy=cand[c][1]-8;dy<=cand[c][1]+8;dy++) for(int dx=cand[c][0]-8;dx<=cand[c][0]+8;dx++) {
             const int s=interp_score(prev,cur,w,dx,dy);
             if(s>best) { best=s; bdx=dx; bdy=dy; }
         }
@@ -8199,15 +8201,18 @@ static void interp_new_frame(const gw_interactive_visual_snapshot *visual,const 
     uint8_t *t=g_interp_idx[0]; g_interp_idx[0]=g_interp_idx[1]; g_interp_idx[1]=t;
     for(int y=0;y<480;y++) memcpy(g_interp_idx[1]+(size_t)y*864u,gw_video_surface_row(source,y),(size_t)g_present_w);
     g_interp_w_prev=g_interp_w_cur; g_interp_w_cur=g_present_w;
+    g_interp_cam_pp_x=g_interp_cam_prev_x; g_interp_cam_pp_y=g_interp_cam_prev_y;
     g_interp_cam_prev_x=g_interp_cam_cur_x; g_interp_cam_prev_y=g_interp_cam_cur_y;
     g_interp_cam_cur_x=visual->camera_x; g_interp_cam_cur_y=visual->camera_y;
     g_interp_t_prev=g_interp_t_cur; g_interp_t_cur=visual->captured_at;
     g_interp_dx=g_interp_dy=0;
     if(g_interp_have_prev && g_interp_w_prev==g_interp_w_cur &&
-       (g_interp_cam_prev_x!=g_interp_cam_cur_x || g_interp_cam_prev_y!=g_interp_cam_cur_y)) {
+       (g_interp_cam_prev_x!=g_interp_cam_cur_x || g_interp_cam_prev_y!=g_interp_cam_cur_y ||
+        g_interp_cam_pp_x!=g_interp_cam_prev_x || g_interp_cam_pp_y!=g_interp_cam_prev_y)) {
         int dx=0,dy=0;
         const int found=interp_register(g_interp_idx[0],g_interp_idx[1],g_present_w,
-            g_interp_cam_cur_x-g_interp_cam_prev_x,g_interp_cam_cur_y-g_interp_cam_prev_y,&dx,&dy);
+            g_interp_cam_cur_x-g_interp_cam_prev_x,g_interp_cam_cur_y-g_interp_cam_prev_y,
+            g_interp_cam_prev_x-g_interp_cam_pp_x,g_interp_cam_prev_y-g_interp_cam_pp_y,&dx,&dy);
         if(found) { g_interp_dx=dx; g_interp_dy=dy; g_interp_last_dx=dx; g_interp_last_dy=dy; }
         if(g_interp_registrations<40u)
             gw_flag_trace("TRACE interp registration n=%u camera_delta=%d,%d found=%d d=%d,%d%c",g_interp_registrations,
