@@ -14510,6 +14510,9 @@ static int run_original_draw_with_widened_surface(const uint8_t *base,
    left = MapDisplay+0x1D, ring_x = +0x08, ring_y = +0x0A. */
 extern uint32_t g_gw_ws_strip_ext;
 extern void (*g_gw_ws_band_copy)(void);
+/* widescreen draw-list pool (lifter rules at 0x78B55/0x78BFC/0x78C64/0x78CD0/0x791A6/0x79375): 0 = MapDisplay own pool */
+extern uint32_t g_gw_ws_drawpool,g_gw_drawlist_full;
+#define GW_WS_DRAWPOOL_BYTES (1024u*10u)
 static uint32_t g_ws_band_copies;
 static int ws_ring_source(const uint8_t *m,uint32_t width,uint32_t height,uint32_t x,uint32_t y,uint32_t *at) {
     const uint32_t map=0x00346D70u;
@@ -16520,7 +16523,7 @@ static int gw_vsb16_run_mixer_service(void *user) {
    live in a third block. Leaving the game IFC restores the canonical 640x480 buffers. Every switch requests a
    whole-strip redraw with the ring offsets reset. The lifted renderer follows lbDisplay.GraphicsScreenWidth. */
 static int g_ws_live_active;
-static uint32_t g_ws_live_ws,g_ws_live_ring,g_ws_live_flags,g_ws_saved_ws,g_ws_saved_ring;
+static uint32_t g_ws_live_ws,g_ws_live_ring,g_ws_live_flags,g_ws_live_pool,g_ws_saved_ws,g_ws_saved_ring;
 static uint32_t ws_live_alloc(uint8_t *memory,const gw_recomp_context *parked,uint32_t size) {
     const uint32_t esp=(parked->esp-0x4000u)&~0xFu;
     if(esp<0x2000u || esp+16u>GUEST_LIMIT) return 0u;
@@ -16563,6 +16566,9 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
     const uint32_t map=0x00346D70u;
     const int want=ifc==0x0035FE9Au && !pending && *(const uint16_t *)(memory+map+0x1Du)==128u;
     if(want==g_ws_live_active) return;
+    /* the draw list is filled by the simulation and emptied by draw_game in the same tick; switch its pool only
+       while it is empty (count MapDisplay+0x11BB), otherwise on a later tick */
+    if(*(const int16_t *)(memory+map+0x11BBu)!=0) return;
     const uint32_t W=864u,H=480u,bytes=W*H;
     if(want) {
         if(*(const uint32_t *)(memory+0x00376A78u)!=640u || *(const uint32_t *)(memory+0x00376A7Cu)!=480u) return;
@@ -16572,8 +16578,10 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
             g_ws_live_ws=ws_live_alloc(memory,parked,bytes);
             g_ws_live_ring=g_ws_live_ws?ws_live_alloc(memory,parked,bytes):0u;
             g_ws_live_flags=g_ws_live_ring?ws_live_alloc(memory,parked,64u):0u;
-            gw_flag_trace("TRACE widescreen alloc wscreen=%08X ring=%08X flags=%08X\n",g_ws_live_ws,g_ws_live_ring,g_ws_live_flags);
-            if(!g_ws_live_flags) { g_ws_requested=0; return; }   /* fail closed: stay at 640 */
+            g_ws_live_pool=g_ws_live_flags?ws_live_alloc(memory,parked,GW_WS_DRAWPOOL_BYTES):0u;
+            gw_flag_trace("TRACE widescreen alloc wscreen=%08X ring=%08X flags=%08X drawpool=%08X\n",g_ws_live_ws,g_ws_live_ring,
+                g_ws_live_flags,g_ws_live_pool);
+            if(!g_ws_live_pool) { g_ws_requested=0; return; }   /* fail closed: stay at 640 */
         }
         const uint16_t left=*(const uint16_t *)(memory+map+0x1Du);
         for(uint32_t y=0;y<H;y++) {
@@ -16588,6 +16596,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A78u)=W;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_live_ring;
         g_gw_ws_strip_ext=g_ws_live_flags; g_gw_ws_band_copy=ws_band_copy_impl;
+        memset(memory+g_ws_live_pool,0,GW_WS_DRAWPOOL_BYTES); g_gw_ws_drawpool=g_ws_live_pool;
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback%c",10); }
         g_ws_live_active=1;
         gw_flag_trace("TRACE widescreen on turn=%u surface=864x480 shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u));
@@ -16595,7 +16604,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A5Cu)=g_ws_saved_ws;
         *(uint32_t *)(memory+0x00376A78u)=640u;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_saved_ring;
-        g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL;
+        g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u;
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
         g_ws_live_active=0;
         gw_flag_trace("TRACE widescreen off turn=%u ifc=%08X pending=%08X\n",*(const uint32_t *)(memory+0x002F1472u),ifc,pending);
@@ -17291,6 +17300,10 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
                     gw_flag_trace("TRACE perf render_fps=%.1f sim_tps=%.1f target_tps=%u present_target_fps=%u surface=%dx480 interp_shifted_frames=%u registrations=%u fallbacks=%u turn=%u\n",
                         fps,(double)(g_interactive_visual_updates-perf_updates_last)/psecs,(unsigned)memory[0x002F14A3u],
                         requested_fps,g_present_w,g_interp_frames_shifted,g_interp_registrations,g_interp_registration_fallbacks,visual->turn);
+                    {   extern int g_recomp_fastmem_ok,g_gw_instr_fast,g_gw_trace_enabled,g_recomp_memory_diag_on;
+                        gw_flag_trace("TRACE fast_hooks fastmem_ok=%d blockers=%u instr_fast=%d trace=%d mem_diag=%d drawlist_full=%u%c",
+                            g_recomp_fastmem_ok,recomp_fastmem_blockers(),g_gw_instr_fast,g_gw_trace_enabled,
+                            g_recomp_memory_diag_on,g_gw_drawlist_full,10); }
                     perf_last=frame_end; perf_updates_last=g_interactive_visual_updates;
                 }
             }

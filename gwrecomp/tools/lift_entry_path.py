@@ -3283,6 +3283,24 @@ if partial:
     ws_rule("    recomp_begin_memory_access_ex(RECOMP_SEG_SS, 1u, 0x0007C489u, RECOMP_MEM_ACCESS_READ, 105u, \"cmp\");",
             "    if (MEM8(SS_BASE + (esp + 8)) >= 20u) goto L_0007C57C; /* widescreen strip: no 20-column grid cell */\n"
             "    recomp_begin_memory_access_ex(RECOMP_SEG_SS, 1u, 0x0007C489u, RECOMP_MEM_ACCESS_READ, 105u, \"cmp\");")
+    # Per-frame draw list (0x78B30 inserts, 0x79100/0x79320 walk it): a 256-entry pool of 10-byte entries at
+    # MapDisplay+0x3B, linked by index, count at +0x11BB. At 854 px more Things are on screen than fit, and
+    # 0x78B30 silently drops the rest (plants and buildings vanish). In widescreen the pool base moves to a
+    # bigger guest buffer (g_gw_ws_drawpool, GW_WS_DRAWPOOL_ENTRIES entries); at 640 every site is unchanged.
+    ws_rule("    /* cmp eax, 0x100u */ /* 0x00078B55: cmp eax, 0x100 */\n    _flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(0x100u);",
+            "    /* 0x00078B55: draw-list capacity (0x100 at 640) */\n"
+            "    _flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(GW_WS_POOL_CAP(MEM32(SS_BASE + (esp + 0x8))));\n"
+            "    if ((int32_t)_flag_a >= (int32_t)_flag_b) g_gw_drawlist_full++;")
+    ws_rule("esi = (edx + 0x3B); /* 0x00078BFC: lea esi, [edx + 0x3b] */",
+            "esi = GW_WS_POOL(edx); /* 0x00078BFC: draw-list pool base (MapDisplay+0x3B at 640) */")
+    ws_rule("ecx = ecx + 0x3Bu; /* 0x00078C64: add ecx, 0x3b */",
+            "ecx = GW_WS_POOL(ecx); /* 0x00078C64: draw-list pool base (flags dead: cmp at 0x78C67) */")
+    ws_rule("eax = eax + 0x3Bu; /* 0x00078CD0: add eax, 0x3b */",
+            "eax = GW_WS_POOL(eax); /* 0x00078CD0: draw-list pool base (flags dead: sub at 0x78CD3) */")
+    ws_rule("eax = (ebp + 0x3B); /* 0x000791A6: lea eax, [ebp + 0x3b] */",
+            "eax = GW_WS_POOL(ebp); /* 0x000791A6: draw-list pool base */")
+    ws_rule("eax = eax + 0x3Bu; /* 0x00079375: add eax, 0x3b */",
+            "eax = GW_WS_POOL(eax); /* 0x00079375: draw-list pool base (flags dead: add at 0x7937D) */")
     # camera centre stays at the 640 centre
     ws_rule("eax = MEM32(DS_BASE + (0x376A78)); /* 0x0007C6B0: mov eax, dword ptr [0x376a78] */",
             "eax = 0x280u; /* 0x0007C6B0: camera centre keeps the 640-pixel frame (x=384) */")
@@ -3361,6 +3379,11 @@ if partial:
         ws_support = (
             "\n/* True widescreen support (tools/lift_entry_path.py widescreen_rules). */\n"
             "uint32_t g_gw_ws_strip_ext = 0u;\n"
+            "uint32_t g_gw_ws_drawpool = 0u;   /* guest address of the widescreen draw-list pool, 0 at 640 */\n"
+            "uint32_t g_gw_drawlist_full = 0u; /* inserts 0x78B30 dropped because the draw list was full */\n"
+            "#define GW_WS_DRAWPOOL_ENTRIES 1024u\n"
+            "#define GW_WS_POOL(md) ((g_gw_ws_drawpool && (uint32_t)(md) == 0x00346D70u) ? g_gw_ws_drawpool : (uint32_t)((md) + 0x3Bu))\n"
+            "#define GW_WS_POOL_CAP(md) ((g_gw_ws_drawpool && (uint32_t)(md) == 0x00346D70u) ? GW_WS_DRAWPOOL_ENTRIES : 0x100u)\n"
             "void (*g_gw_ws_band_copy)(void) = 0;\n"
             "#define GW_WS_STRIP_FLAG(base_reg, index) (((uint32_t)(index) < 20u || !g_gw_ws_strip_ext) ? \\\n"
             "    (uint32_t)(DS_BASE + ((base_reg) + 0x11BDu)) : (uint32_t)(g_gw_ws_strip_ext + ((uint32_t)(index) - 20u)))\n"

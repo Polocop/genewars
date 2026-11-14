@@ -32,6 +32,7 @@ typedef int (*recomp_segment_limit_fn)(uint16_t selector, uint64_t *end_offset, 
 void recomp_set_segment_limit_query(recomp_segment_limit_fn query, void *user);
 /* Called whenever state a validator or its limit query reads changes (descriptor tables, DOS blocks). */
 void recomp_segment_windows_invalidate(void);
+unsigned recomp_fastmem_blockers(void);
 
 /* Optional guest-physical aperture translation (for banked VGA/VBE windows).
  * Return the host backing for this one guest access, or 0 to reject it. */

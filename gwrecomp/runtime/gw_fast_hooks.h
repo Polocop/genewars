@@ -31,7 +31,7 @@ extern int g_gw_trace_enabled;
 extern uint16_t g_seg_fs, g_seg_gs;
 extern uint32_t g_fs_base, g_gs_base;
 
-static inline int gw_recomp_guest_instruction_fast(unsigned int guest_va) {
+static inline __attribute__((always_inline)) int gw_recomp_guest_instruction_fast(unsigned int guest_va) {
     if (GW_LIKELY(g_gw_instr_fast && !g_recomp_memory_diag_on && guest_va != g_gw_instr_watch_va)) {
         g_gw_last_guest_va = guest_va;
         return 1;
@@ -44,7 +44,7 @@ static inline int gw_recomp_guest_instruction_fast(unsigned int guest_va) {
     ((void)(GW_UNLIKELY(g_gw_trace_enabled) ? \
         ((gw_recomp_trace_branch)((callsite), (caller), (target), (eflags), (taken)), 0) : 0))
 
-static inline void gw_recomp_begin_memory_access_fast(recomp_segment_id segment, uint32_t width,
+static inline __attribute__((always_inline)) void gw_recomp_begin_memory_access_fast(recomp_segment_id segment, uint32_t width,
         uint32_t instruction_va, uint8_t access, uint32_t instruction_id, const char *mnemonic) {
     if (GW_LIKELY(!g_recomp_memory_diag_on)) {
         g_recomp_access.segment = segment; g_recomp_access.width = width;
@@ -60,7 +60,7 @@ static inline void gw_recomp_begin_memory_access_fast(recomp_segment_id segment,
 #define recomp_end_memory_access() ((void)(g_recomp_access.active = 0, g_recomp_access.width = 0u))
 #define recomp_memory_fault_pending() (g_recomp_memory_fault.pending != 0)
 
-static inline uint16_t gw_fast_seg_selector(recomp_segment_id segment) {
+static inline __attribute__((always_inline)) uint16_t gw_fast_seg_selector(recomp_segment_id segment) {
     switch (segment) {
     case RECOMP_SEG_CS: return g_seg_cs;
     case RECOMP_SEG_DS: return g_seg_ds;
@@ -71,7 +71,7 @@ static inline uint16_t gw_fast_seg_selector(recomp_segment_id segment) {
     default: return 0u;
     }
 }
-static inline uint32_t gw_fast_seg_base(recomp_segment_id segment) {
+static inline __attribute__((always_inline)) uint32_t gw_fast_seg_base(recomp_segment_id segment) {
     switch (segment) {
     case RECOMP_SEG_CS: return g_cs_base;
     case RECOMP_SEG_DS: return g_ds_base;
@@ -83,7 +83,7 @@ static inline uint32_t gw_fast_seg_base(recomp_segment_id segment) {
     }
 }
 
-static inline uintptr_t gw_fast_mem_addr(uint32_t linear, uint32_t width) {
+static inline __attribute__((always_inline)) uintptr_t gw_fast_mem_addr(uint32_t linear, uint32_t width) {
     const recomp_segment_id segment = g_recomp_access.segment;
     if (GW_LIKELY(g_recomp_fastmem_ok && g_recomp_access.active && (unsigned)segment < 8u)) {
         const gw_recomp_seg_window *w = &g_recomp_seg_windows[(unsigned)segment];

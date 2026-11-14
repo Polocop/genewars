@@ -48,6 +48,12 @@ static void fastmem_refresh(void) {
     g_recomp_fastmem_ok=!memory_diag_enabled && !memory_translator && !guest_write_observer &&
                         !null_ds_read_diag_enabled && census_state==1;
 }
+/* Bit mask of what keeps g_recomp_fastmem_ok at 0: 1 memory diagnostic, 2 translator, 4 write observer,
+   8 null-DS diagnostic, 16 write census on, 32 census not read yet. */
+unsigned recomp_fastmem_blockers(void) {
+    return (memory_diag_enabled?1u:0u)|(memory_translator?2u:0u)|(guest_write_observer?4u:0u)|
+           (null_ds_read_diag_enabled?8u:0u)|(census_state==2?16u:0u)|(census_state==0?32u:0u);
+}
 void recomp_segment_windows_invalidate(void) {
     if (++g_recomp_seg_window_gen==0u) g_recomp_seg_window_gen=1u;
 }
