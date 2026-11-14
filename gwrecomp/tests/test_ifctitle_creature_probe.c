@@ -8197,9 +8197,11 @@ static void interp_new_frame(const gw_interactive_visual_snapshot *visual,const 
     if(g_interp_have_prev && g_interp_w_prev==g_interp_w_cur &&
        (g_interp_cam_prev_x!=g_interp_cam_cur_x || g_interp_cam_prev_y!=g_interp_cam_cur_y)) {
         int dx=0,dy=0;
-        if(interp_register(g_interp_idx[0],g_interp_idx[1],g_present_w,&dx,&dy)) {
-            g_interp_dx=dx; g_interp_dy=dy; g_interp_last_dx=dx; g_interp_last_dy=dy;
-        }
+        const int found=interp_register(g_interp_idx[0],g_interp_idx[1],g_present_w,&dx,&dy);
+        if(found) { g_interp_dx=dx; g_interp_dy=dy; g_interp_last_dx=dx; g_interp_last_dy=dy; }
+        if(g_interp_registrations<40u)
+            gw_flag_trace("TRACE interp registration n=%u camera_delta=%d,%d found=%d d=%d,%d%c",g_interp_registrations,
+                g_interp_cam_cur_x-g_interp_cam_prev_x,g_interp_cam_cur_y-g_interp_cam_prev_y,found,dx,dy,10);
         g_interp_registrations++;
     }
     g_interp_have_prev=1;
@@ -8720,15 +8722,13 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 interp_new_frame(visual,source);
             }
             const uint64_t hp_convert0=SDL_GetPerformanceCounter();
+            uint32_t lut[256];   /* 6-bit VGA DAC -> ARGB, once per frame (same values as the per-pixel formula) */
+            for(unsigned k=0;k<256u;k++)
+                lut[k]=0xFF000000u|((uint32_t)palette[k*3u+0u]*255u/63u<<16)|((uint32_t)palette[k*3u+1u]*255u/63u<<8)|((uint32_t)palette[k*3u+2u]*255u/63u);
             for(int y=0;y<480;y++) {
                 const uint8_t *row=gw_video_surface_row(source,y);
-                for(int x=0;x<g_present_w;x++) {
-                    const uint32_t k=row[x];
-                    const uint32_t r=(uint32_t)palette[k*3u+0u]*255u/63u;
-                    const uint32_t g=(uint32_t)palette[k*3u+1u]*255u/63u;
-                    const uint32_t b=(uint32_t)palette[k*3u+2u]*255u/63u;
-                    g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+x]=0xFF000000u|(r<<16)|(g<<8)|b;
-                }
+                uint32_t *out=g_ifclevel_demo_rgba+(size_t)y*(size_t)texture_w;
+                for(int x=0;x<g_present_w;x++) out[x]=lut[row[x]];
             }
             if(SDL_UpdateTexture(g_ifclevel_demo_texture,NULL,g_ifclevel_demo_rgba,
                                  texture_w*(int)sizeof(uint32_t))!=0) {
