@@ -8148,7 +8148,8 @@ static uint64_t g_hostprof_window_start;
    Nothing here reads or writes guest state; the mouse pointer is drawn at its real position every frame. */
 static SDL_Texture *g_interp_prev_texture,*g_interp_panel_texture;
 static uint8_t g_interp_panel_map[480*48];   /* x=128..175: 1 = seen changing while scrolling (map), 0 = panel */
-static uint32_t g_interp_panel_rgba[480*48];
+static uint32_t g_interp_panel_rgba[480*48],g_interp_panel_saved[480*48];
+static int g_interp_panel_active;
 static char g_present_dump_path[900];
 static uint8_t *g_interp_idx[2];      /* indexed map copies: [0] previous, [1] current, pitch 864 */
 static int g_interp_have_prev,g_interp_dx,g_interp_dy,g_interp_last_dx,g_interp_last_dy;
@@ -8778,28 +8779,36 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 uint32_t *out=g_ifclevel_demo_rgba+(size_t)y*(size_t)texture_w;
                 for(int x=0;x<g_present_w;x++) out[x]=lut[row[x]];
             }
-            if(SDL_UpdateTexture(g_ifclevel_demo_texture,NULL,g_ifclevel_demo_rgba,
-                                 texture_w*(int)sizeof(uint32_t))!=0) {
-                fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
-            }
-            if(visual && g_interp_prev_texture && interp_enabled()) {
-                /* panel overlay x=128..175 of the current frame: opaque where the pixel is panel, clear where map */
+            /* Panel split for x=128..175 (interpolating presentation only): the uploaded frame carries the map
+               background there (from the ring), the panel art goes to its own overlay texture drawn unshifted on
+               top, so shifting the map never moves panel art. The RGBA frame kept for QA dumps stays complete. */
+            int panel_split=0;
+            if(visual && g_interp_prev_texture && interp_enabled() && visual->panel_bg_valid) {
                 if(!g_interp_panel_texture) {
                     g_interp_panel_texture=SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,
                         SDL_TEXTUREACCESS_STREAMING,48,480);
                     if(g_interp_panel_texture) SDL_SetTextureBlendMode(g_interp_panel_texture,SDL_BLENDMODE_BLEND);
                 }
                 if(g_interp_panel_texture) {
-                    /* panel art = pixels that differ from the map background the ring holds at that spot */
                     for(int y=0;y<480;y++) for(int x=0;x<48;x++) {
-                        const int panel=visual->panel_bg_valid?
-                            visual->wscreen[(size_t)y*visual->wscreen_pitch+128u+(unsigned)x]!=visual->panel_bg[y*48+x]:
-                            !g_interp_panel_map[y*48+x];
-                        g_interp_panel_rgba[y*48+x]=panel?g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+128u+(unsigned)x]:0u;
+                        uint32_t *px=&g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+128u+(unsigned)x];
+                        const uint8_t bg=visual->panel_bg[y*48+x];
+                        const int panel=visual->wscreen[(size_t)y*visual->wscreen_pitch+128u+(unsigned)x]!=bg;
+                        g_interp_panel_rgba[y*48+x]=panel?*px:0u;
+                        g_interp_panel_saved[y*48+x]=*px;
+                        *px=lut[bg];
                     }
                     SDL_UpdateTexture(g_interp_panel_texture,NULL,g_interp_panel_rgba,48*(int)sizeof(uint32_t));
+                    panel_split=1;
                 }
             }
+            g_interp_panel_active=panel_split;
+            if(SDL_UpdateTexture(g_ifclevel_demo_texture,NULL,g_ifclevel_demo_rgba,
+                                 texture_w*(int)sizeof(uint32_t))!=0) {
+                fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
+            }
+            if(panel_split) for(int y=0;y<480;y++) for(int x=0;x<48;x++)
+                g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+128u+(unsigned)x]=g_interp_panel_saved[y*48+x];
             if(g_interactive_perf_frequency) {
                 g_hostprof_convert_ms+=(double)(SDL_GetPerformanceCounter()-hp_convert0)*1000.0/(double)g_interactive_perf_frequency;
                 g_hostprof_uploads++;
@@ -8938,7 +8947,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                SDL_RenderCopyF(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&map_src,&cur_dst)==0;
         SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
         ok=ok && SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&hud_src,&hud_dst)==0;
-        if(ok && g_interp_panel_texture) {
+        if(ok && g_interp_panel_texture && g_interp_panel_active) {
             const SDL_Rect panel_dst={dst.x+(int)(left*s+0.5),dst.y,(int)(176.0*s+0.5)-(int)(left*s+0.5),dst.h};
             ok=SDL_RenderCopy(g_ifclevel_demo_renderer,g_interp_panel_texture,NULL,&panel_dst)==0;
         }
@@ -8947,6 +8956,13 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
     } else if(SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,
                   g_terrain_modern_backend?NULL:&(SDL_Rect){0,0,g_present_w,480},&dst)!=0) {
         fprintf(stderr,"SDL demo present: %s\n",SDL_GetError()); return 0;
+    } else if(!g_terrain_modern_backend && g_interp_panel_active && g_interp_panel_texture) {
+        /* unshifted frame: the uploaded texture has map background under the panel; restore the panel art */
+        const double s=(double)dst.w/(double)g_present_w;
+        const SDL_Rect panel_dst={dst.x+(int)(128.0*s+0.5),dst.y,(int)(176.0*s+0.5)-(int)(128.0*s+0.5),dst.h};
+        if(SDL_RenderCopy(g_ifclevel_demo_renderer,g_interp_panel_texture,NULL,&panel_dst)!=0) {
+            fprintf(stderr,"SDL panel overlay: %s\n",SDL_GetError()); return 0;
+        }
     }
     if(g_terrain_modern_backend && g_terrain_cache_texture_initialized && visual &&
        g_interactive_visual_camera_valid) {
