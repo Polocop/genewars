@@ -8803,10 +8803,14 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                     for(int y=0;y<480;y++) for(int x=0;x<48;x++) {
                         uint32_t *px=&g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+128u+(unsigned)x];
                         const uint8_t bg=visual->panel_bg[y*48+x];
-                        const int panel=visual->wscreen[(size_t)y*visual->wscreen_pitch+128u+(unsigned)x]!=bg;
+                        /* panel art differs from the map background and never changes while the view scrolls; a
+                           building or plant drawn here also differs from the background, but its pixels have been
+                           seen changing (g_interp_panel_map), so it stays with the shifted map instead of tearing */
+                        const int panel=visual->wscreen[(size_t)y*visual->wscreen_pitch+128u+(unsigned)x]!=bg &&
+                            !g_interp_panel_map[y*48+x];
                         g_interp_panel_rgba[y*48+x]=panel?*px:0u;
                         g_interp_panel_saved[y*48+x]=*px;
-                        *px=lut[bg];
+                        if(panel) *px=lut[bg];   /* map pixels (background or sprite) stay in the shifted frame */
                     }
                     SDL_UpdateTexture(g_interp_panel_texture,NULL,g_interp_panel_rgba,48*(int)sizeof(uint32_t));
                     panel_split=1;
