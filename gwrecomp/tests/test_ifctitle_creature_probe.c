@@ -16979,7 +16979,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
                 }
                 const uint8_t rv=bg_ok?memory[ring+at]:0u;
                 int panel=bg_ok && row[x]!=rv;
-                if(bg_ok && rv!=ring_last[pi]) {
+                if(bg_ok && rv!=ring_last[pi] && rv!=0u) {   /* the void (colour 0) under black panel art tells nothing */
                     ring_last[pi]=rv; samples[pi]++; diffs[pi]+=(uint16_t)panel;
                     if(samples[pi]>=1000u) { samples[pi]/=2u; diffs[pi]/=2u; }
                 }
