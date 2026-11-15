@@ -3266,6 +3266,7 @@ if partial:
     #  * 0x7C6B0 derives the camera centre from the surface width; it must stay at the 640 centre (x=384).
     widescreen_rules = []
     ws_site_rules = []   # (site, old, new): replace inside every lifted copy of that instruction
+    ws_every_copy = {0x22F58}   # rules applied to every lifted copy of their instruction (IFCMain draw is lifted twice)
     def ws_rule(original: str, replacement: str, optional: bool = False) -> None:
         widescreen_rules.append((original, replacement, optional))
     ws_width = "MEM32(DS_BASE + (0x376A78))"
@@ -3401,6 +3402,10 @@ if partial:
             continue
         if optional and count == 0:
             ws_optional_missing.append(site)  # owner lifted without this instruction (not reached by the lift)
+            continue
+        if site in ws_every_copy and count >= 1:
+            text = text.replace(original, replacement)   # the function is lifted more than once: every copy
+            ws_applied += count
             continue
         if count != 1:
             raise SystemExit(f"widescreen rule at 0x{site:08X} expected one lifted instruction, got {count}")
