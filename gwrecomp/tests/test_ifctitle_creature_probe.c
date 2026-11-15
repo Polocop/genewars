@@ -9319,7 +9319,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                     /* widescreen diagnostics: the live WScreen and map ring at their own pitch (racy read) */
                     const uint32_t dw=*(const uint32_t *)(guest_memory+0x00376A78u),dh=*(const uint32_t *)(guest_memory+0x00376A7Cu);
                     const uint32_t dws=*(const uint32_t *)(guest_memory+0x00376A5Cu),dring=*(const uint32_t *)(guest_memory+0x002EECA0u);
-                    if((dw==640u||dw==864u) && dh==480u && dws && dring && dws<=GUEST_LIMIT-dw*dh && dring<=GUEST_LIMIT-dw*dh) {
+                    if(((dw==640u||dw==864u) && dh==480u || dw==GW_CANVAS_W && dh==GW_CANVAS_H) && dws && dring && dws<=GUEST_LIMIT-dw*dh && dring<=GUEST_LIMIT-dw*dh) {
                         snprintf(out,sizeof out,"%s/%s.wscreen%u.raw",dump_dir,stem,dw);
                         mf=fopen(out,"wb"); if(mf) { fwrite(guest_memory+dws,1,(size_t)dw*dh,mf); fclose(mf); }
                         snprintf(out,sizeof out,"%s/%s.ring%u.raw",dump_dir,stem,dw);
