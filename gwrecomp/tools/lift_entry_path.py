@@ -3310,6 +3310,11 @@ if partial:
             f"ebx = {ws_width}; /* 0x000792FB: parameterized sprite clip width */")
     ws_rule("ecx = 0x280u; /* 0x0007A099: mov ecx, 0x280 */",
             f"ecx = {ws_width}; /* 0x0007A099: parameterized ring split width (MapDisplay+0x33) */")
+    # "projected point is on the map view" tests after 0x65630 (x < 640 - MapDisplay.x): order flags and markers
+    # (0x7C060, 0x7BF1D), the blinking target icon (0x6C643) and the other on-screen checks use the shown width
+    for site in (0x1E801, 0x1E87F, 0x22E6C, 0x56EE4, 0x6BA39, 0x6C643, 0x7A1F5, 0x7BF1D, 0x7C156):
+        ws_rule(f"ebx = 0x280u; /* 0x{site:08X}: mov ebx, 0x280 */",
+                f"ebx = GW_WS_VIEW_W; /* 0x{site:08X}: on-screen test uses the shown width (640 at 640) */", optional=True)
     # the sprite drawers' grid-column clamp keeps the 20-column grid
     for site in (0x64EA8, 0x64FA8, 0x8A982, 0x8AC4A, 0x991C4, 0x99C39, 0x9A7CA, 0x9B00C, 0x9B816,
                  0x9C148, 0x9CF76, 0x9D927, 0x9EB16, 0x9FB32):
