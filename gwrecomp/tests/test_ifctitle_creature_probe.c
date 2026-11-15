@@ -8153,6 +8153,7 @@ static int g_ws_requested;
    window is the 726x480 area of the 854x480 widescreen view, at (GW_CANVAS_VX0, GW_CANVAS_VY0); zoom down to 0.75
    shows 968x640. Canvas columns 128..175 carry the panel art, so the visible map starts at x=176. */
 static int g_ws_canvas;
+static SDL_atomic_t g_canvas_panel_reset;   /* the widescreen switch: forget the kept panel colours */
 #define GW_CANVAS_W 1152u
 #define GW_CANVAS_H 640u
 #define GW_CANVAS_VX0 301
@@ -8517,7 +8518,7 @@ static void host_zoom_tick(void) {
     double dt=g_zoom_t&&g_interactive_perf_frequency?(double)(now-g_zoom_t)/(double)g_interactive_perf_frequency:0.0;
     g_zoom_t=now; if(dt>0.1) dt=0.1;
     if(g_zoom_anim) {
-        const double k=dt*14.0>1.0?1.0:dt*14.0;
+        const double k=dt*6.0>1.0?1.0:dt*6.0;
         g_zoom+=(g_zoom_target-g_zoom)*k;
         const double d=g_zoom_target-g_zoom;
         if(d<0.002 && d>-0.002) { g_zoom=g_zoom_target; g_zoom_anim=0; }
@@ -8624,7 +8625,7 @@ static int host_controls_event(const SDL_Event *ev) {
         double lx=0,ly=0;
         if(!host_window_logical(mx,my,&lx,&ly,NULL) || lx<128.0) return 1;
         double t=g_zoom_target;
-        for(int i=0;i<(notches>0?notches:-notches);i++) t=notches>0?t*1.25:t/1.25;
+        for(int i=0;i<(notches>0?notches:-notches);i++) t=notches>0?t*1.12:t/1.12;
         if(t>0.97 && t<1.03) t=1.0;
         host_zoom_set_target(t,lx,ly);
         return 1;
@@ -9207,8 +9208,8 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                            seen changing (g_interp_panel_map), so it stays with the shifted map instead of tearing */
                         /* canvas: the panel mask comes from the canvas itself (its own map under x=128..175), so
                            sprites of the 1x window there are never taken for panel art */
-                        const int panel=(visual->canvas_valid?visual->canvas_panel[y*48+x]!=0:
-                            visual->wscreen[(size_t)y*visual->wscreen_pitch+128u+(unsigned)x]!=bg) &&
+                        const int panel=visual->canvas_valid?visual->canvas_panel[y*48+x]!=0:
+                            visual->wscreen[(size_t)y*visual->wscreen_pitch+128u+(unsigned)x]!=bg &&
                             !g_interp_panel_map[y*48+x];
                         g_interp_panel_rgba[y*48+x]=panel?*px:0u;
                         g_interp_panel_saved[y*48+x]=*px;
@@ -16965,8 +16966,13 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
             memcpy(orow,row,128u);
             for(uint32_t x=128u;x<176u;x++) {
                 uint32_t at=0; const int bg_ok=ring_ok && ws_ring_source(memory,GW_CANVAS_W,GW_CANVAS_H,x,y,&at);
-                const int panel=bg_ok && row[x]!=memory[ring+at];
-                g_interactive_published_snapshot.canvas_panel[y*48u+(x-128u)]=(uint8_t)panel;
+                static uint8_t panel_val[480u*48u],panel_have[480u*48u];
+                const uint32_t pi=y*48u+(x-128u);
+                if(SDL_AtomicGet(&g_canvas_panel_reset)) { memset(panel_have,0,sizeof panel_have); SDL_AtomicSet(&g_canvas_panel_reset,0); }
+                int panel=bg_ok && row[x]!=memory[ring+at];
+                if(panel) { panel_val[pi]=row[x]; panel_have[pi]=1u; }
+                else if(panel_have[pi] && row[x]==panel_val[pi]) panel=1;
+                g_interactive_published_snapshot.canvas_panel[pi]=(uint8_t)panel;
                 orow[x]=panel?row[x]:win[x];
             }
             memcpy(orow+176u,win+176u,854u-176u);
@@ -17288,7 +17294,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         if(g_ws_canvas) { memset(memory+g_ws_live_buckets,0,4u*GW_CANVAS_H); g_gw_ws_buckets=g_ws_live_buckets; }
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback%c",10); }
         ws_live_viewport_gadget(memory,left,g_ws_canvas?(uint16_t)W:854u);
-        if(g_ws_canvas) ws_live_viewport_gadget_h(memory,left,(uint16_t)H);
+        if(g_ws_canvas) { ws_live_viewport_gadget_h(memory,left,(uint16_t)H); SDL_AtomicSet(&g_canvas_panel_reset,1); }
         SDL_AtomicSet(&g_interp_panel_reset,1);
         g_ws_live_active=1;
         gw_flag_trace("TRACE widescreen on turn=%u surface=%ux%u shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u),W,H);
@@ -17366,7 +17372,10 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
             static int pan_was;
             InterlockedExchange(&g_live_ifc_map,map);
             if(map) {
-                LONG dirs=InterlockedCompareExchange(&g_pan_hold,0,0);
+                /* held keys: the original scroller moves one 32-px step per tick (1280 px/s at 40 ticks/s, made for
+                   the frame rate of its time); the host presses them on every other tick only */
+                static unsigned pan_tick;
+                LONG dirs=(pan_tick++&1u)?0:InterlockedCompareExchange(&g_pan_hold,0,0);
                 /* middle drag: one 32-px step of the original scroller per tick, opposite to the drag (the map
                    follows the hand); at most 4 steps stay pending */
                 const LONG step=32*16;
