@@ -17281,7 +17281,13 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
     if(!g_ws_requested || !memory || !parked) return;
     const uint32_t ifc=*(const uint32_t *)(memory+0x002EF7E8u),pending=*(const uint32_t *)(memory+0x002EF7ECu);
     const uint32_t map=0x00346D70u;
-    const int want=ifc==0x0035FE9Au && !pending && *(const uint16_t *)(memory+map+0x1Du)==128u;
+    int want=ifc==0x0035FE9Au && !pending && *(const uint16_t *)(memory+map+0x1Du)==128u;
+    /* the canvas switches on only after the game IFC has been current for 8 ticks: a save load reads the saved
+       640x480 map ring (0x5BB90..) into [0x2EECA0] in its first ticks, which on the 1152-pitch ring left striped
+       640-pitch rows in the HUD-side columns */
+    {   static unsigned stable;
+        stable=want?stable+1u:0u;
+        if(g_ws_canvas && want && !g_ws_live_active && stable<8u) want=0; }
     if(want==g_ws_live_active) return;
     /* the draw list is filled by the simulation and emptied by draw_game in the same tick; switch its pool only
        while it is empty (count MapDisplay+0x11BB), otherwise on a later tick */
