@@ -8160,6 +8160,7 @@ static uint8_t g_interp_panel_map[480*48];   /* x=128..175: 1 = seen changing wh
 static uint32_t g_interp_panel_rgba[480*48],g_interp_panel_saved[480*48];
 static int g_interp_panel_active;
 static char g_present_dump_path[900];
+static char g_present_burst_dir[700]; static unsigned g_present_burst_left,g_present_burst_index;   /* QA: stem burst_N */
 static uint8_t *g_interp_idx[2];      /* indexed map copies: [0] previous, [1] current, pitch 864 */
 static int g_interp_have_prev,g_interp_dx,g_interp_dy,g_interp_last_dx,g_interp_last_dy;
 static int g_interp_w_prev,g_interp_w_cur;
@@ -8859,6 +8860,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 if(!stem[0]) snprintf(stem,sizeof stem,"frame");
                 char out[900]; snprintf(out,sizeof out,"%s/%s.bmp",dump_dir,stem);
                 /* stems starting with pres_ capture the composed window output (after interpolation and pointer) */
+                /* stem burst_<N>: the next N composed window frames go to <dir>/burst_000.bmp.. (QA, scroll artefacts) */
+                if(!strncmp(stem,"burst_",6)) { const int nb=atoi(stem+6); snprintf(g_present_burst_dir,sizeof g_present_burst_dir,"%s",dump_dir);
+                    g_present_burst_left=(unsigned)(nb>0&&nb<=400?nb:60); g_present_burst_index=0u; } else
                 if(!strncmp(stem,"pres_",5)) snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s",out); else {
                 SDL_Surface *ds=SDL_CreateRGBSurfaceWithFormatFrom((void *)g_ifclevel_demo_rgba,g_present_w,480,32,texture_w*(int)sizeof(uint32_t),SDL_PIXELFORMAT_ARGB8888);
                 if(ds) { SDL_SaveBMP(ds,out); SDL_FreeSurface(ds); }
@@ -9103,6 +9107,10 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 (int)(64*sx+0.5),(int)(64*sy+0.5)};
             SDL_RenderCopy(g_ifclevel_demo_renderer,pointer_texture,NULL,&pointer_dst);
         }
+    }
+    if(!g_present_dump_path[0] && g_present_burst_left) {
+        snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s/burst_%03u.bmp",g_present_burst_dir,g_present_burst_index++);
+        g_present_burst_left--;
     }
     if(g_present_dump_path[0]) {   /* QA: the composed output the window shows (GW_FRAME_DUMP_DIR, stem pres_*) */
         int ow=0,oh=0;
