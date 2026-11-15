@@ -8697,8 +8697,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             /* a requested size that fills (or exceeds) the monitor becomes borderless fullscreen */
             if(g_cli_res_w && desk.w>0 && (g_cli_res_w>=desk.w || g_cli_res_h>=desk.h)) g_cli_fullscreen=1;
             if(g_cli_fullscreen) window_flags|=SDL_WINDOW_FULLSCREEN_DESKTOP;
-            fprintf(stderr,"TRACE play_window request=%dx%d fullscreen=%d desktop=%dx%d dpi_scale=%.2f
-",
+            fprintf(stderr,"TRACE play_window request=%dx%d fullscreen=%d desktop=%dx%d dpi_scale=%.2f\n",
                 initial_w,initial_h,g_cli_fullscreen,desk.w,desk.h,play_window_dpi_scale());
         }
         g_ifclevel_demo_window=SDL_CreateWindow(g_terrain_modern_backend?
@@ -9014,8 +9013,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 if(scale_target) SDL_DestroyTexture(scale_target);
                 scale_target=SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_TARGET,geo.tw,geo.th);
                 scale_target_w=geo.tw; scale_target_h=geo.th;
-                if(!scale_target) { scale_target_failed=1; fprintf(stderr,"TRACE present_scale target %dx%d failed: %s
-",geo.tw,geo.th,SDL_GetError()); }
+                if(!scale_target) { scale_target_failed=1; fprintf(stderr,"TRACE present_scale target %dx%d failed: %s\n",geo.tw,geo.th,SDL_GetError()); }
                 else gw_flag_trace("TRACE present_scale output=%dx%d logical=%dx480 k=%d target=%dx%d src=%d,%d,%d,%d dst=%d,%d,%d,%d filter=%s%c",
                     ow,oh,g_present_w,geo.k,geo.tw,geo.th,geo.src.x,geo.src.y,geo.src.w,geo.src.h,geo.dst.x,geo.dst.y,geo.dst.w,geo.dst.h,
                     geo.nearest?"nearest(1:1)":"sharp-bilinear",10);
@@ -9132,8 +9130,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         if(SDL_RenderClear(g_ifclevel_demo_renderer)!=0 ||
            SDL_SetTextureScaleMode(scale_target,geo.nearest?SDL_ScaleModeNearest:SDL_ScaleModeLinear)!=0 ||
            SDL_RenderCopy(g_ifclevel_demo_renderer,scale_target,&geo.src,&geo.dst)!=0) {
-            fprintf(stderr,"SDL scaled present: %s
-",SDL_GetError()); return 0;
+            fprintf(stderr,"SDL scaled present: %s\n",SDL_GetError()); return 0;
         }
         dst=geo.dst;
     }
