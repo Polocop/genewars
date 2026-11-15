@@ -8518,7 +8518,7 @@ static void host_zoom_tick(void) {
     double dt=g_zoom_t&&g_interactive_perf_frequency?(double)(now-g_zoom_t)/(double)g_interactive_perf_frequency:0.0;
     g_zoom_t=now; if(dt>0.1) dt=0.1;
     if(g_zoom_anim) {
-        const double k=dt*6.0>1.0?1.0:dt*6.0;
+        const double k=dt*14.0>1.0?1.0:dt*14.0;
         g_zoom+=(g_zoom_target-g_zoom)*k;
         const double d=g_zoom_target-g_zoom;
         if(d<0.002 && d>-0.002) { g_zoom=g_zoom_target; g_zoom_anim=0; }
@@ -8625,7 +8625,7 @@ static int host_controls_event(const SDL_Event *ev) {
         double lx=0,ly=0;
         if(!host_window_logical(mx,my,&lx,&ly,NULL) || lx<128.0) return 1;
         double t=g_zoom_target;
-        for(int i=0;i<(notches>0?notches:-notches);i++) t=notches>0?t*1.12:t/1.12;
+        for(int i=0;i<(notches>0?notches:-notches);i++) t=notches>0?t*1.25:t/1.25;
         if(t>0.97 && t<1.03) t=1.0;
         host_zoom_set_target(t,lx,ly);
         return 1;
