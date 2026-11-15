@@ -3017,6 +3017,15 @@ static void gw_v26_boundary(void) {
     }
 }
 /* V26_END boundary */
+/* Environment lookups of the per-instruction probe below, read once: the probes are opt-in through the
+   environment of the process, which does not change while it runs (getenv per call cost ~20% of a tick). */
+static const char *gw_cached_getenv(const char *name) {
+    static struct { const char *name; const char *value; } cache[16]; static unsigned used;
+    for(unsigned i=0;i<used;i++) if(cache[i].name==name || !strcmp(cache[i].name,name)) return cache[i].value;
+    const char *value=getenv(name);
+    if(used<16u) { cache[used].name=name; cache[used].value=value; used++; }
+    return value;
+}
 void gw_test_instruction_budget_step(uint32_t guest_va) {
     startup_budget_last_va=guest_va; startup_budget_last_func=g_cur_func;
     if(g_v31_auto_win && guest_va==0x00072460u) g_v31_win_upd++;
@@ -3529,7 +3538,7 @@ void gw_test_instruction_budget_step(uint32_t guest_va) {
         if(g_action14_panel_probe && *(uint32_t *)(guest_memory+0x002F1472u)==1293u)
             gw_test_census_live_gadgets();
         static uint8_t phase1_player_snapshot_done;
-        const char *phase1_env=getenv("GWRECOMP_OVERNIGHT_PHASE1_PLAYER_SNAPSHOT");
+        const char *phase1_env=gw_cached_getenv("GWRECOMP_OVERNIGHT_PHASE1_PLAYER_SNAPSHOT");
         if(!phase1_player_snapshot_done && phase1_env && phase1_env[0]=='1' &&
            *(uint32_t *)(guest_memory+0x002F1472u)==425u) {
             const uint8_t local=guest_memory[0x002F1431u];
@@ -4383,7 +4392,7 @@ void gw_test_instruction_budget_step(uint32_t guest_va) {
                 guest_memory[0x0035F8F4u+0x52Fu],g_eax,g_edx,g_esi,g_edi);
         }
     }
-    const char *abort_probe_env=getenv("GWRECOMP_IFCLEVEL_ABORT_MOVE_PROBE");
+    const char *abort_probe_env=gw_cached_getenv("GWRECOMP_IFCLEVEL_ABORT_MOVE_PROBE");
     if(abort_probe_env && abort_probe_env[0]=='1' && guest_memory &&
        (guest_va==0x0006B0DEu || guest_va==0x0006B0F1u)) {
         const uint32_t displacement=guest_va==0x0006B0DEu?0x0Cu:0x14u;
@@ -4415,8 +4424,8 @@ void gw_test_instruction_budget_step(uint32_t guest_va) {
     /* Short, opt-in live record for the authentic PrepMyGadgets path.  This
        records its arguments and the exact row fields before the original
        function dereferences them; it does not alter guest state. */
-    if((getenv("GWRECOMP_IFCLEVEL_FULL_GAME_ENTRY") ||
-        getenv("GWRECOMP_IFCLEVEL_FRESH_GAME_ENTRY")) && guest_memory &&
+    if((gw_cached_getenv("GWRECOMP_IFCLEVEL_FULL_GAME_ENTRY") ||
+        gw_cached_getenv("GWRECOMP_IFCLEVEL_FRESH_GAME_ENTRY")) && guest_memory &&
        (guest_va==0x000A8A20u || guest_va==0x000A8AABu)) {
         static unsigned prep_rows;
         if(guest_va==0x000A8A20u && prep_rows<16u) {
@@ -5842,7 +5851,7 @@ void gw_test_instruction_budget_step(uint32_t guest_va) {
                             else { kind="select_second_specialist_live_projection_up"; pushed=push_sdl_button(SDL_MOUSEBUTTONUP,x,y); }
                         }
                     } else if(g_next_creature_spec2_only_probe) {
-                        const char *right_env=getenv("GWRECOMP_NEXT_CREATURE_RIGHT_CLICK");
+                        const char *right_env=gw_cached_getenv("GWRECOMP_NEXT_CREATURE_RIGHT_CLICK");
                         const int right_click=right_env && right_env[0]=='1';
                         const int sx=g_phase5_creature_screen_x,sy=g_phase5_creature_screen_y;
                         const int fresh=g_phase5_creature_projection_valid &&
@@ -6118,11 +6127,11 @@ void gw_test_instruction_budget_step(uint32_t guest_va) {
                     }
                     if(stage>=3u && g_next_creature_route_state==5u &&
                        g_next_creature_stage<3u &&
-                       (getenv("GWRECOMP_NEXT_CREATURE_RIGHT_CLICK")==NULL ||
-                        getenv("GWRECOMP_NEXT_CREATURE_RIGHT_CLICK")[0]!='1' ||
+                       (gw_cached_getenv("GWRECOMP_NEXT_CREATURE_RIGHT_CLICK")==NULL ||
+                        gw_cached_getenv("GWRECOMP_NEXT_CREATURE_RIGHT_CLICK")[0]!='1' ||
                         guest_memory[creature+0x17u]!=0u)) {
                         x=(sx+128)*2; y=sy*2;
-                        const char *research_click_env=getenv("GWRECOMP_NEXT_CREATURE_RIGHT_CLICK");
+                        const char *research_click_env=gw_cached_getenv("GWRECOMP_NEXT_CREATURE_RIGHT_CLICK");
                         const int research_right_click=research_click_env&&research_click_env[0]=='1';
                         if(g_next_creature_stage==0u) {
                             kind="hover_live_creature_projection"; pushed=push_sdl_motion(x,y);
@@ -7313,8 +7322,8 @@ hud_sweep_input_done:;
     /* PA_ABORT_MOVE is dispatched through the original packet table entry
        0x04 at 0x93429 -> FUN_000769F0. Capture its live entry and return
        around the only state byte this handler changes (PlSpec+0x58 bit 1). */
-    if(guest_memory && getenv("GWRECOMP_IFCLEVEL_ABORT_MOVE_PROBE") &&
-       getenv("GWRECOMP_IFCLEVEL_ABORT_MOVE_PROBE")[0]=='1' &&
+    if(guest_memory && gw_cached_getenv("GWRECOMP_IFCLEVEL_ABORT_MOVE_PROBE") &&
+       gw_cached_getenv("GWRECOMP_IFCLEVEL_ABORT_MOVE_PROBE")[0]=='1' &&
        guest_va==0x000769F0u && g_pa_abort_move_handler_calls<16u) {
         const uint32_t packet=g_edx;
         const uint32_t sp=(uint32_t)((uint64_t)g_ss_base+g_esp);
@@ -7332,8 +7341,8 @@ hud_sweep_input_done:;
             sp<0x03002000u-4u?read_guest_u32(sp+12u):0xFFFFFFFFu);
     }
     if(guest_memory && guest_va==0x00076A2Cu &&
-       getenv("GWRECOMP_IFCLEVEL_ABORT_MOVE_PROBE") &&
-       getenv("GWRECOMP_IFCLEVEL_ABORT_MOVE_PROBE")[0]=='1' &&
+       gw_cached_getenv("GWRECOMP_IFCLEVEL_ABORT_MOVE_PROBE") &&
+       gw_cached_getenv("GWRECOMP_IFCLEVEL_ABORT_MOVE_PROBE")[0]=='1' &&
        g_pa_abort_move_target==0u) {
         uint64_t at=(uint64_t)g_ds_base+g_ecx+(uint64_t)g_eax*8u+0x58u;
         if(at<0x03002000u) {
