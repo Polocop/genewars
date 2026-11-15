@@ -8581,8 +8581,8 @@ static int host_controls_event(const SDL_Event *ev) {
     return 0;
 }
 /* Scale2x/EPX on 8-bit palette indices (exact index compares), w x 480 -> 2w x 960 ARGB */
-static void host_epx2x(const uint8_t *idx,int w,const uint32_t *lut,uint32_t *out,int out_pitch_px) {
-    for(int y=0;y<480;y++) {
+static void host_epx2x_rows(const uint8_t *idx,int w,const uint32_t *lut,uint32_t *out,int out_pitch_px,int y0,int y1) {
+    for(int y=y0;y<y1;y++) {
         const uint8_t *r=idx+(size_t)y*w,*ru=y>0?r-w:r,*rd=y<479?r+w:r;
         uint32_t *o0=out+(size_t)(2*y)*out_pitch_px,*o1=o0+out_pitch_px;
         /* Scale2x form of EPX (same output): only when up != down and left != right can a corner change, so flat
@@ -8598,6 +8598,23 @@ static void host_epx2x(const uint8_t *idx,int w,const uint32_t *lut,uint32_t *ou
                 o0[2*x]=p; o0[2*x+1]=p; o1[2*x]=p; o1[2*x+1]=p;
             }
         }
+    }
+}
+/* the frame in four bands of 120 rows: three helper threads and the calling thread */
+typedef struct { const uint8_t *idx; int w; const uint32_t *lut; uint32_t *out; int pitch,y0,y1; } host_epx_job;
+static int SDLCALL host_epx_thread(void *p) {
+    const host_epx_job *j=(const host_epx_job *)p;
+    host_epx2x_rows(j->idx,j->w,j->lut,j->out,j->pitch,j->y0,j->y1);
+    return 0;
+}
+static void host_epx2x(const uint8_t *idx,int w,const uint32_t *lut,uint32_t *out,int out_pitch_px) {
+    host_epx_job jobs[4]; SDL_Thread *th[3]={NULL,NULL,NULL};
+    for(int i=0;i<4;i++) { jobs[i]=(host_epx_job){idx,w,lut,out,out_pitch_px,i*120,(i+1)*120}; }
+    for(int i=0;i<3;i++) th[i]=SDL_CreateThread(host_epx_thread,"gw_epx",&jobs[i+1]);
+    host_epx2x_rows(idx,w,lut,out,out_pitch_px,0,120);
+    for(int i=0;i<3;i++) {
+        if(th[i]) SDL_WaitThread(th[i],NULL);
+        else host_epx2x_rows(idx,w,lut,out,out_pitch_px,jobs[i+1].y0,jobs[i+1].y1);
     }
 }
 /* CRT look: scanlines on each logical row and an RGB phosphor stripe, multiplied over the scaled frame */
