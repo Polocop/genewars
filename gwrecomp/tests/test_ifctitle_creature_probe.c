@@ -8149,6 +8149,39 @@ static double g_hostprof_convert_ms,g_hostprof_copy_ms,g_hostprof_present_ms,g_h
 /* GW_GPU_TIMING=1 (diagnostics): GPU-synchronised time of composition + scaled copy (1-pixel readbacks bracket it,
    so it is an upper bound that includes one readback); reported per frame in the host_window line */
 static double g_hostprof_gpu_ms; static unsigned g_hostprof_gpu_frames; static int g_gpu_timing=-1; static uint64_t g_gpu_t0;
+/* ---- Modern host controls (play mode; presentation and input devices only, never game rules) ----
+   g_live_ifc_map: set by the simulation worker each tick while the mission map has the input (IFCMain 0x35FE9A, no
+   pending IFC, and the scroll gate [0x35FE1D] bit 0 clear, the same gate the original scroller 0x79DD0 tests).
+   Camera movement goes through the original scroller: WASD/arrows and middle-button drag become the extended
+   arrow keys it already polls (_lbKeyOn 0xC8/0xD0/0xCB/0xCD), held for a tick, so the game moves its own camera. */
+static volatile LONG g_live_ifc_map;
+static volatile LONG g_pan_hold;              /* held directions on the map: 1 up, 2 down, 4 left, 8 right */
+static volatile LONG g_pan_acc_x,g_pan_acc_y; /* middle-drag distance not scrolled yet, 1/16 logical pixel */
+static volatile LONG g_turbo_level=1,g_turbo_tab;
+static int g_mid_drag,g_mid_last_x,g_mid_last_y;
+static int g_grab_user_off,g_grab_state;
+/* GPU zoom of the map viewport (x >= 128): visible map sub-rectangle starts at (g_zoom_x,g_zoom_y) map-relative
+   logical pixels and is g_zoom times larger on screen; the HUD stays at 1x */
+static double g_zoom=1.0,g_zoom_target=1.0,g_zoom_x,g_zoom_y,g_zoom_ax,g_zoom_ay,g_zoom_px,g_zoom_py;
+static int g_zoom_anim; static uint64_t g_zoom_t;
+/* F7 display filter: 0 sharp pixels, 1 EPX (Scale2x on palette indices), 2 CRT mask; saved in gw_display.cfg */
+static int g_filter_mode=-1,g_tex_scale=1;
+static int host_turbo_factor(void) {
+    if(!InterlockedCompareExchange(&g_live_ifc_map,0,0)) return 1;
+    if(InterlockedCompareExchange(&g_turbo_tab,0,0)) return 4;
+    const LONG l=InterlockedCompareExchange(&g_turbo_level,0,0);
+    return l==2||l==4?(int)l:1;
+}
+static void display_filter_load(void) {
+    if(g_filter_mode>=0) return;
+    g_filter_mode=0;
+    FILE *f=fopen("gw_display.cfg","rb");
+    if(f) { int v=0; if(fscanf(f,"filter=%d",&v)==1 && v>=0 && v<=2) g_filter_mode=v; fclose(f); }
+}
+static void display_filter_save(void) {
+    FILE *f=fopen("gw_display.cfg","wb");
+    if(f) { fprintf(f,"filter=%d\n",g_filter_mode); fclose(f); }
+}
 static void gpu_timing_sync(void) { uint32_t px; SDL_Rect r={0,0,1,1}; (void)SDL_RenderReadPixels(g_ifclevel_demo_renderer,&r,SDL_PIXELFORMAT_ARGB8888,&px,4); }
 static unsigned g_hostprof_frames,g_hostprof_uploads;
 static uint64_t g_hostprof_window_start;
@@ -8391,6 +8424,17 @@ static int map_interactive_window_to_game(int wx,int wy,int *gx,int *gy) {
        rounding of a fitted rectangle) still count, clamped to the edge, so edge scrolling reaches x=W-1, y=0, 479 */
     if(ox<g.dst.x-4 || oy<g.dst.y-4 || ox>=g.dst.x+g.dst.w+4 || oy>=g.dst.y+g.dst.h+4) return 0;
     present_output_to_logical(&g,ox,oy,&lx,&ly);
+    /* GPU zoom: points on the map viewport map through the visible sub-rectangle. Panel art at x=128..175 and the
+       outermost pixels of the frame (right, top, bottom: the original edge-scroll columns/rows) stay unzoomed. */
+    if(g_zoom>1.0001 && lx>=128.0) {
+        const int lxi=(int)lx,lyi=ly<0.0?0:(ly>479.0?479:(int)ly);
+        const int panel=lxi<176 && g_interp_panel_active && (g_interp_panel_rgba[lyi*48+(lxi-128)]>>24)!=0u;
+        const int edge_r=ox>=g.dst.x+g.dst.w-3,edge_t=oy<=g.dst.y+2,edge_b=oy>=g.dst.y+g.dst.h-3;
+        if(!panel) {
+            if(!edge_r) lx=128.0+g_zoom_x+(lx-128.0)/g_zoom;
+            if(!edge_t && !edge_b) ly=g_zoom_y+ly/g_zoom;
+        }
+    }
     int x=lx<0.0?-1:(int)lx,y=ly<0.0?-1:(int)ly;   /* clamped below */
     const int lw=g_ifclevel_guest_surface.width;
     if(x<0) x=0;
@@ -8410,6 +8454,172 @@ static int map_interactive_game_to_window(int gx,int gy,int *wx,int *wy) {
     int ww=ow,wh=oh; SDL_GetWindowSize(g_ifclevel_demo_window,&ww,&wh);
     *wx=(int)(ox*ww/ow); *wy=(int)(oy*wh/oh);
     return 1;
+}
+
+/* logical (unzoomed) screen position of a window point, through the presentation geometry */
+static int host_window_logical(int wx,int wy,double *lx,double *ly,gw_present_geo *pg) {
+    int ow=0,oh=0; gw_present_geo g;
+    if(!present_output_size(&ow,&oh) || !present_geo_compute(ow,oh,g_present_w,&g)) return 0;
+    double ox=0,oy=0; present_window_to_output(wx,wy,ow,oh,&ox,&oy);
+    present_output_to_logical(&g,ox,oy,lx,ly);
+    if(pg) *pg=g;
+    return 1;
+}
+static void host_zoom_set_target(double target,double lx,double ly) {
+    if(target<1.0) target=1.0;
+    if(target>2.0) target=2.0;
+    g_zoom_ax=lx; g_zoom_ay=ly;
+    g_zoom_px=g_zoom_x+(lx-128.0)/g_zoom; g_zoom_py=g_zoom_y+ly/g_zoom;
+    g_zoom_target=target; g_zoom_anim=1;
+}
+/* per presented frame: eases the zoom towards its target keeping the anchored map point under the cursor */
+static void host_zoom_tick(void) {
+    if(!InterlockedCompareExchange(&g_live_ifc_map,0,0)) {
+        g_zoom=g_zoom_target=1.0; g_zoom_x=g_zoom_y=0.0; g_zoom_anim=0; g_zoom_t=0; return;
+    }
+    const uint64_t now=SDL_GetPerformanceCounter();
+    double dt=g_zoom_t&&g_interactive_perf_frequency?(double)(now-g_zoom_t)/(double)g_interactive_perf_frequency:0.0;
+    g_zoom_t=now; if(dt>0.1) dt=0.1;
+    if(g_zoom_anim) {
+        const double k=dt*14.0>1.0?1.0:dt*14.0;
+        g_zoom+=(g_zoom_target-g_zoom)*k;
+        const double d=g_zoom_target-g_zoom;
+        if(d<0.002 && d>-0.002) { g_zoom=g_zoom_target; g_zoom_anim=0; }
+        g_zoom_x=g_zoom_px-(g_zoom_ax-128.0)/g_zoom; g_zoom_y=g_zoom_py-g_zoom_ay/g_zoom;
+    }
+    const double mw=(double)g_present_w-128.0,maxx=mw-mw/g_zoom,maxy=480.0-480.0/g_zoom;
+    if(g_zoom_x>maxx) g_zoom_x=maxx;
+    if(g_zoom_x<0.0) g_zoom_x=0.0;
+    if(g_zoom_y>maxy) g_zoom_y=maxy;
+    if(g_zoom_y<0.0) g_zoom_y=0.0;
+}
+/* window mouse grab while the mission map has the input and the window the focus (F10 turns it off/on) */
+static void host_grab_tick(void) {
+    if(!g_cli_play_mode || !g_ifclevel_demo_window) return;
+    const int want=InterlockedCompareExchange(&g_live_ifc_map,0,0) && !g_grab_user_off &&
+        (SDL_GetWindowFlags(g_ifclevel_demo_window)&SDL_WINDOW_INPUT_FOCUS)!=0u;
+    if(want==g_grab_state) return;
+    SDL_SetWindowMouseGrab(g_ifclevel_demo_window,want?SDL_TRUE:SDL_FALSE);
+    g_grab_state=want;
+    gw_flag_trace("TRACE host_controls mouse_grab=%d%c",want,10);
+}
+static LONG host_pan_bit(SDL_Keycode k) {
+    switch(k) {
+    case SDLK_w: case SDLK_UP: return 1; case SDLK_s: case SDLK_DOWN: return 2;
+    case SDLK_a: case SDLK_LEFT: return 4; case SDLK_d: case SDLK_RIGHT: return 8;
+    default: return 0;
+    }
+}
+/* Host controls in play mode. Returns 1 when the event is consumed (never reaches the game). */
+static int host_controls_event(const SDL_Event *ev) {
+    const int map=(int)InterlockedCompareExchange(&g_live_ifc_map,0,0);
+    if(ev->type==SDL_WINDOWEVENT && ev->window.event==SDL_WINDOWEVENT_FOCUS_LOST) {
+        InterlockedExchange(&g_pan_hold,0); InterlockedExchange(&g_turbo_tab,0); g_mid_drag=0; return 0;
+    }
+    if(ev->type==SDL_KEYDOWN || ev->type==SDL_KEYUP) {
+        const SDL_Keycode k=ev->key.keysym.sym; const int down=ev->type==SDL_KEYDOWN;
+        const LONG bit=host_pan_bit(k);
+        if(ev->key.repeat) return k==SDLK_F7 || k==SDLK_F8 || k==SDLK_F10 || (map && (k==SDLK_TAB || bit));
+        if(k==SDLK_F7) {
+            if(down) { display_filter_load(); g_filter_mode=(g_filter_mode+1)%3; display_filter_save();
+                gw_flag_trace("TRACE host_controls display_filter=%d (%s)%c",g_filter_mode,
+                    g_filter_mode==1?"epx":g_filter_mode==2?"crt":"sharp",10); }
+            return 1;
+        }
+        if(k==SDLK_F8) {
+            if(down) { LONG l=InterlockedCompareExchange(&g_turbo_level,0,0); l=l==1?2:l==2?4:1;
+                InterlockedExchange(&g_turbo_level,l); gw_flag_trace("TRACE host_controls turbo=%ldx%c",(long)l,10); }
+            return 1;
+        }
+        if(k==SDLK_F10) {
+            if(down) { g_grab_user_off=!g_grab_user_off; gw_flag_trace("TRACE host_controls grab_user_off=%d%c",g_grab_user_off,10); }
+            return 1;
+        }
+        if(k==SDLK_TAB) {
+            if(map) { InterlockedExchange(&g_turbo_tab,down); return 1; }
+            InterlockedExchange(&g_turbo_tab,0); return 0;
+        }
+        if(bit) {
+            if(map) {
+                if(down) InterlockedOr(&g_pan_hold,bit); else InterlockedAnd(&g_pan_hold,~bit);
+                return 1;
+            }
+            if(!down) InterlockedAnd(&g_pan_hold,~bit);
+            return 0;
+        }
+        return 0;
+    }
+    if((ev->type==SDL_MOUSEBUTTONDOWN || ev->type==SDL_MOUSEBUTTONUP) && ev->button.button==SDL_BUTTON_MIDDLE) {
+        g_mid_drag=ev->type==SDL_MOUSEBUTTONDOWN && map;
+        g_mid_last_x=ev->button.x; g_mid_last_y=ev->button.y;
+        return 1;
+    }
+    if(ev->type==SDL_MOUSEMOTION && g_mid_drag) {
+        if(!map) { g_mid_drag=0; return 0; }
+        double x0=0,y0=0,x1=0,y1=0;
+        if(host_window_logical(g_mid_last_x,g_mid_last_y,&x0,&y0,NULL) && host_window_logical(ev->motion.x,ev->motion.y,&x1,&y1,NULL)) {
+            InterlockedExchangeAdd(&g_pan_acc_x,(LONG)((x1-x0)/g_zoom*16.0));
+            InterlockedExchangeAdd(&g_pan_acc_y,(LONG)((y1-y0)/g_zoom*16.0));
+        }
+        g_mid_last_x=ev->motion.x; g_mid_last_y=ev->motion.y;
+        return 0;   /* the pointer itself still moves in the game */
+    }
+    if(ev->type==SDL_MOUSEWHEEL) {
+        if(!map) return 1;
+        int notches=ev->wheel.y; if(ev->wheel.direction==SDL_MOUSEWHEEL_FLIPPED) notches=-notches;
+        if(!notches) return 1;
+        int mx=0,my=0; (void)SDL_GetMouseState(&mx,&my);
+        double lx=0,ly=0;
+        if(!host_window_logical(mx,my,&lx,&ly,NULL) || lx<128.0) return 1;
+        double t=g_zoom_target;
+        for(int i=0;i<(notches>0?notches:-notches);i++) t=notches>0?t*1.25:t/1.25;
+        if(t<1.03) t=1.0;
+        host_zoom_set_target(t,lx,ly);
+        return 1;
+    }
+    return 0;
+}
+/* Scale2x/EPX on 8-bit palette indices (exact index compares), w x 480 -> 2w x 960 ARGB */
+static void host_epx2x(const uint8_t *idx,int w,const uint32_t *lut,uint32_t *out,int out_pitch_px) {
+    for(int y=0;y<480;y++) {
+        const uint8_t *r=idx+(size_t)y*w,*ru=y>0?r-w:r,*rd=y<479?r+w:r;
+        uint32_t *o0=out+(size_t)(2*y)*out_pitch_px,*o1=o0+out_pitch_px;
+        for(int x=0;x<w;x++) {
+            const uint8_t P=r[x],A=ru[x],D=rd[x],C=x>0?r[x-1]:P,B=x<w-1?r[x+1]:P;
+            uint8_t e1=P,e2=P,e3=P,e4=P;
+            if(C==A && C!=D && A!=B) e1=A;
+            if(A==B && A!=C && B!=D) e2=B;
+            if(D==C && D!=B && C!=A) e3=C;
+            if(B==D && B!=A && D!=C) e4=D;
+            o0[2*x]=lut[e1]; o0[2*x+1]=lut[e2]; o1[2*x]=lut[e3]; o1[2*x+1]=lut[e4];
+        }
+    }
+}
+/* CRT look: scanlines on each logical row and an RGB phosphor stripe, multiplied over the scaled frame */
+static void host_crt_overlay(const gw_present_geo *g) {
+    static SDL_Texture *tex; static int tw,th,ty,tdh;
+    if(!tex || tw!=g->ow || th!=g->oh || ty!=g->dst.y || tdh!=g->dst.h) {
+        if(tex) SDL_DestroyTexture(tex);
+        tex=SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STATIC,g->ow,g->oh);
+        tw=g->ow; th=g->oh; ty=g->dst.y; tdh=g->dst.h;
+        if(!tex) return;
+        uint32_t *px=(uint32_t *)malloc((size_t)tw*th*4u);
+        if(!px) { SDL_DestroyTexture(tex); tex=NULL; return; }
+        for(int y=0;y<th;y++) {
+            double r=((double)(y-ty)+0.5)*480.0/(double)(tdh>0?tdh:1); if(r<0.0) r=-r;
+            const double f=r-(double)(int)r;
+            const double scan=f<0.58?1.0:0.74;
+            for(int x=0;x<tw;x++) {
+                const int m=x%3;
+                const unsigned R=(unsigned)(255.0*scan*(m==0?1.0:0.88)),G=(unsigned)(255.0*scan*(m==1?1.0:0.88)),
+                               B=(unsigned)(255.0*scan*(m==2?1.0:0.88));
+                px[(size_t)y*tw+x]=0xFF000000u|(R<<16)|(G<<8)|B;
+            }
+        }
+        SDL_UpdateTexture(tex,NULL,px,tw*4); free(px);
+        SDL_SetTextureBlendMode(tex,SDL_BLENDMODE_MOD);
+    }
+    if(tex) SDL_RenderCopy(g_ifclevel_demo_renderer,tex,NULL,NULL);
 }
 
 static void log_interactive_unresolved_call(const gw_recomp_context *context) {
@@ -8878,6 +9088,19 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             g_terrain_upload_ms+=(double)(upload_end-upload_start)*1000.0/freq;
             g_terrain_render_frames++;
         } else {
+            if(g_cli_play_mode) {   /* F7 filter 1 (EPX) uploads 2x frames: both frame textures follow the scale */
+                display_filter_load();
+                const int want_ts=g_filter_mode==1?2:1;
+                if(want_ts!=g_tex_scale) {
+                    SDL_Texture *nt=SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,texture_w*want_ts,texture_h*want_ts);
+                    SDL_Texture *np=g_interp_prev_texture?SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,texture_w*want_ts,texture_h*want_ts):NULL;
+                    if(nt && (np || !g_interp_prev_texture)) {
+                        SDL_DestroyTexture(g_ifclevel_demo_texture); g_ifclevel_demo_texture=nt;
+                        if(np) { SDL_DestroyTexture(g_interp_prev_texture); g_interp_prev_texture=np; }
+                        g_tex_scale=want_ts; g_interp_have_prev=0;
+                    } else { if(nt) SDL_DestroyTexture(nt); if(np) SDL_DestroyTexture(np); g_filter_mode=0; }
+                }
+            }
             if(visual && g_interp_prev_texture && interp_enabled()) {
                 /* the texture with the frame shown so far becomes the previous one; the new frame goes to the other */
                 SDL_Texture *swap=g_interp_prev_texture; g_interp_prev_texture=g_ifclevel_demo_texture; g_ifclevel_demo_texture=swap;
@@ -8920,6 +9143,21 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 }
             }
             g_interp_panel_active=panel_split;
+            if(g_tex_scale==2) {
+                /* EPX from the palette indices; panel-art pixels at x=128..175 are replaced by the map background
+                   as in the RGBA frame (the art itself is in the overlay) */
+                static uint8_t epx_idx[864u*480u]; static uint32_t epx_rgba[1728u*960u];
+                const int w=g_present_w;
+                for(int y=0;y<480;y++) {
+                    memcpy(epx_idx+(size_t)y*w,gw_video_surface_row(source,y),(size_t)w);
+                    if(panel_split) for(int x=0;x<48;x++)
+                        if(g_interp_panel_rgba[y*48+x]>>24) epx_idx[(size_t)y*w+128+x]=visual->panel_bg[y*48+x];
+                }
+                host_epx2x(epx_idx,w,lut,epx_rgba,texture_w*2);
+                if(SDL_UpdateTexture(g_ifclevel_demo_texture,NULL,epx_rgba,texture_w*2*(int)sizeof(uint32_t))!=0) {
+                    fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
+                }
+            } else
             if(SDL_UpdateTexture(g_ifclevel_demo_texture,NULL,g_ifclevel_demo_rgba,
                                  texture_w*(int)sizeof(uint32_t))!=0) {
                 fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
@@ -9005,6 +9243,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             g_interactive_capture_done=1;
         }
     }
+    if(g_cli_play_mode && g_interactive_demo_mode) { host_zoom_tick(); host_grab_tick(); }
     SDL_Rect dst=g_interactive_demo_mode?ifclevel_presentation_rect():(SDL_Rect){0,0,640,480};
     const uint64_t hp_copy0=SDL_GetPerformanceCounter();
     /* GPU scaling (see present_geo_compute): compose into the k-times render target, copy it to the window below */
@@ -9076,14 +9315,16 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         /* map from its real left edge x=128 (MapDisplay+0x1D); panel x<128 from the current frame, and its art
            in x=128..175 drawn over the shifted map through the learned panel mask */
         const double s=(double)dst.w/(double)g_present_w,left=128.0;
-        const SDL_Rect hud_src={0,0,128,480};
+        const int ts=g_tex_scale; const double zz=g_zoom,zx=g_zoom_x,zy=g_zoom_y;
+        const SDL_Rect hud_src={0,0,128*ts,480*ts};
         const SDL_Rect hud_dst={dst.x,dst.y,(int)(left*s+0.5),dst.h};
         const SDL_Rect map_clip={dst.x+(int)(left*s+0.5),dst.y,dst.w-(int)(left*s+0.5),dst.h};
-        const SDL_Rect map_src={128,0,g_present_w-128,480};
-        const SDL_FRect prev_dst={(float)(dst.x+(left+a*g_interp_dx)*s),(float)(dst.y+a*g_interp_dy*s),
-                                  (float)((g_present_w-128)*s),(float)dst.h};
-        const SDL_FRect cur_dst={(float)(dst.x+(left-(1.0-a)*g_interp_dx)*s),(float)(dst.y-(1.0-a)*g_interp_dy*s),
-                                 (float)((g_present_w-128)*s),(float)dst.h};
+        const SDL_Rect map_src={128*ts,0,(g_present_w-128)*ts,480*ts};
+        /* zoom: map logical x -> 128 + (x - 128 - zx) * zz, y -> (y - zy) * zz (identical expressions at zz=1, zx=zy=0) */
+        const SDL_FRect prev_dst={(float)(dst.x+(left+(a*g_interp_dx-zx)*zz)*s),(float)(dst.y+(a*g_interp_dy-zy)*zz*s),
+                                  (float)((g_present_w-128)*s*zz),(float)(dst.h*zz)};
+        const SDL_FRect cur_dst={(float)(dst.x+(left+(-(1.0-a)*g_interp_dx-zx)*zz)*s),(float)(dst.y+(-(1.0-a)*g_interp_dy-zy)*zz*s),
+                                 (float)((g_present_w-128)*s*zz),(float)(dst.h*zz)};
         SDL_RenderSetClipRect(g_ifclevel_demo_renderer,&map_clip);
         int ok=SDL_RenderCopyF(g_ifclevel_demo_renderer,g_interp_prev_texture,&map_src,&prev_dst)==0 &&
                SDL_RenderCopyF(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&map_src,&cur_dst)==0;
@@ -9095,8 +9336,26 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         }
         if(!ok) { fprintf(stderr,"SDL interpolated present: %s\n",SDL_GetError()); return 0; }
         if(a<1.0) g_interp_frames_shifted++;
+    } else if(!g_terrain_modern_backend && g_interactive_demo_mode && g_zoom>1.0001) {
+        /* zoomed, camera not moving: HUD at 1x, map sub-rectangle enlarged, panel art on top */
+        const double s=(double)dst.w/(double)g_present_w,left=128.0; const int ts=g_tex_scale;
+        const SDL_Rect hud_src={0,0,128*ts,480*ts};
+        const SDL_Rect hud_dst={dst.x,dst.y,(int)(left*s+0.5),dst.h};
+        const SDL_Rect map_clip={dst.x+(int)(left*s+0.5),dst.y,dst.w-(int)(left*s+0.5),dst.h};
+        const SDL_Rect map_src={128*ts,0,(g_present_w-128)*ts,480*ts};
+        const SDL_FRect map_dst={(float)(dst.x+(left-g_zoom_x*g_zoom)*s),(float)(dst.y-g_zoom_y*g_zoom*s),
+                                 (float)((g_present_w-128)*s*g_zoom),(float)(dst.h*g_zoom)};
+        SDL_RenderSetClipRect(g_ifclevel_demo_renderer,&map_clip);
+        int ok=SDL_RenderCopyF(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&map_src,&map_dst)==0;
+        SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
+        ok=ok && SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&hud_src,&hud_dst)==0;
+        if(ok && g_interp_panel_texture && g_interp_panel_active) {
+            const SDL_Rect panel_dst={dst.x+(int)(left*s+0.5),dst.y,(int)(176.0*s+0.5)-(int)(left*s+0.5),dst.h};
+            ok=SDL_RenderCopy(g_ifclevel_demo_renderer,g_interp_panel_texture,NULL,&panel_dst)==0;
+        }
+        if(!ok) { fprintf(stderr,"SDL zoomed present: %s\n",SDL_GetError()); return 0; }
     } else if(SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,
-                  g_terrain_modern_backend?NULL:&(SDL_Rect){0,0,g_present_w,480},&dst)!=0) {
+                  g_terrain_modern_backend?NULL:&(SDL_Rect){0,0,g_present_w*g_tex_scale,480*g_tex_scale},&dst)!=0) {
         fprintf(stderr,"SDL demo present: %s\n",SDL_GetError()); return 0;
     } else if(!g_terrain_modern_backend && g_interp_panel_active && g_interp_panel_texture) {
         /* unshifted frame: the uploaded texture has map background under the panel; restore the panel art */
@@ -9139,6 +9398,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             fprintf(stderr,"SDL scaled present: %s\n",SDL_GetError()); return 0;
         }
         dst=geo.dst;
+        if(g_filter_mode==2) host_crt_overlay(&geo);
         if(g_gpu_timing==1) {
             gpu_timing_sync();
             g_hostprof_gpu_ms+=(double)(SDL_GetPerformanceCounter()-g_gpu_t0)*1000.0/(double)(g_interactive_perf_frequency?g_interactive_perf_frequency:1u);
@@ -9250,7 +9510,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 const double sc=geo.k*(double)geo.dst.w/(double)geo.src.w;
                 double ox=0,oy=0; present_logical_to_output(&geo,(double)ptr_x,(double)ptr_y,&ox,&oy);
                 int mx=0,my=0;
-                if(SDL_GetMouseFocus()==g_ifclevel_demo_window) {
+                if(SDL_GetMouseFocus()==g_ifclevel_demo_window && g_zoom>1.0001) {
+                    (void)SDL_GetMouseState(&mx,&my); present_window_to_output(mx,my,geo.ow,geo.oh,&ox,&oy);
+                } else if(SDL_GetMouseFocus()==g_ifclevel_demo_window) {
                     (void)SDL_GetMouseState(&mx,&my);
                     double mox=0,moy=0,lx=0,ly=0; present_window_to_output(mx,my,geo.ow,geo.oh,&mox,&moy);
                     present_output_to_logical(&geo,mox,moy,&lx,&ly);
@@ -15766,6 +16028,7 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
     const int trace_mouse=g_exceland_build_probe && memory && trace_turn>=1292u && trace_turn<=1316u;
     static unsigned trace_mouse_seq=0u;
     while(SDL_PollEvent(&ev)) {
+        if(g_cli_play_mode && g_interactive_demo_mode && host_controls_event(&ev)) { n++; continue; }
         if(g_ifclevel_demo_mode && ev.type==SDL_QUIT) {
             g_ifclevel_demo_closed=1;
             continue;
@@ -15855,7 +16118,7 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
         } else if((ev.type==SDL_KEYDOWN || ev.type==SDL_KEYUP) && !ev.key.repeat) {
             if(g_interactive_demo_mode && ev.type==SDL_KEYDOWN &&
                (ev.key.keysym.sym==SDLK_F5 || ev.key.keysym.sym==SDLK_F6 ||
-                ev.key.keysym.sym==SDLK_F7)) {
+                (ev.key.keysym.sym==SDLK_F7 && !g_cli_play_mode))) {
                 /* Host-only diagnostic speed controls. They are deliberately
                    consumed here and never mutate original game globals. */
                 if(ev.key.keysym.sym==SDLK_F6) {
@@ -16871,10 +17134,10 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
             continue;
         }
         if(pacing!=2 && target_tps) {
-            accumulator+=dt*(double)target_tps;
+            accumulator+=dt*(double)target_tps*(double)host_turbo_factor();   /* turbo F8/Tab: 2x/4x ticks per second on the map */
             /* Keep up to three turns of backlog: a slow tick (construction, pathing) is repaid by the
                following ticks instead of being dropped, so game time keeps following wall time. */
-            if(accumulator>3.0) accumulator=3.0;
+            if(accumulator>3.0*host_turbo_factor()) accumulator=3.0*host_turbo_factor();
             if(accumulator<1.0) {
                 const uint64_t idle_start=SDL_GetPerformanceCounter();
                 SDL_Delay(1);
@@ -16886,6 +17149,35 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
             accumulator-=1.0;
         }
         (void)interactive_mailbox_apply(memory);
+        {   /* host camera controls through the original scroller's arrow keys (see g_live_ifc_map) */
+            const uint32_t ifc=*(uint32_t *)(memory+0x002EF7E8u),pend=*(uint32_t *)(memory+0x002EF7ECu);
+            const int map=g_cli_play_mode && ifc==0x0035FE9Au && !pend && !(memory[0x0035FE1Du]&1u);
+            static int pan_was;
+            InterlockedExchange(&g_live_ifc_map,map);
+            if(map) {
+                LONG dirs=InterlockedCompareExchange(&g_pan_hold,0,0);
+                /* middle drag: one 32-px step of the original scroller per tick, opposite to the drag (the map
+                   follows the hand); at most 4 steps stay pending */
+                const LONG step=32*16;
+                LONG ax=InterlockedCompareExchange(&g_pan_acc_x,0,0),ay=InterlockedCompareExchange(&g_pan_acc_y,0,0);
+                if(ax>4*step) { InterlockedExchange(&g_pan_acc_x,4*step); ax=4*step; }
+                if(ax<-4*step) { InterlockedExchange(&g_pan_acc_x,-4*step); ax=-4*step; }
+                if(ay>4*step) { InterlockedExchange(&g_pan_acc_y,4*step); ay=4*step; }
+                if(ay<-4*step) { InterlockedExchange(&g_pan_acc_y,-4*step); ay=-4*step; }
+                if(ax>=step) { dirs|=4; InterlockedExchangeAdd(&g_pan_acc_x,-step); }
+                else if(ax<=-step) { dirs|=8; InterlockedExchangeAdd(&g_pan_acc_x,step); }
+                if(ay>=step) { dirs|=1; InterlockedExchangeAdd(&g_pan_acc_y,-step); }
+                else if(ay<=-step) { dirs|=2; InterlockedExchangeAdd(&g_pan_acc_y,step); }
+                memory[0x00376AF0u+0xC8u]=(uint8_t)((dirs&1)!=0); memory[0x00376AF0u+0xD0u]=(uint8_t)((dirs&2)!=0);
+                memory[0x00376AF0u+0xCBu]=(uint8_t)((dirs&4)!=0); memory[0x00376AF0u+0xCDu]=(uint8_t)((dirs&8)!=0);
+                pan_was=1;
+            } else if(pan_was) {
+                memory[0x00376AF0u+0xC8u]=0u; memory[0x00376AF0u+0xD0u]=0u;
+                memory[0x00376AF0u+0xCBu]=0u; memory[0x00376AF0u+0xCDu]=0u;
+                InterlockedExchange(&g_pan_acc_x,0); InterlockedExchange(&g_pan_acc_y,0);
+                pan_was=0;
+            }
+        }
         ws_live_update(memory,c);
         const uint64_t sync0=SDL_GetPerformanceCounter();
         if(!g_interactive_guest_suspended &&
