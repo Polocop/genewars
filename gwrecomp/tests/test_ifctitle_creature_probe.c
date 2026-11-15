@@ -14575,7 +14575,9 @@ static void ws_band_copy_impl(void) {
        byte [0x362A42] is set and decremented otherwise */
     if(g_gw_ws_grid_ext && g_gw_ws_grid_ext<=GUEST_LIMIT-105u) {
         uint8_t *g=m+g_gw_ws_grid_ext; const int clear=m[0x00362A42u]!=0;
-        for(uint32_t k=0;k<105u;k++) if(g[k]) g[k]=clear?0u:(uint8_t)(g[k]-1u);
+        /* floor 1: the band behaves as always dirty, so every sprite touching x=640..853 is redrawn each frame
+           over the restored cells (the band has no dirty-rectangle history of its own before this frame) */
+        for(uint32_t k=0;k<105u;k++) g[k]=(clear || g[k]<=2u)?1u:(uint8_t)(g[k]-1u);
     }
 }
 
