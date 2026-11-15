@@ -16591,6 +16591,17 @@ static void ws_live_request_redraw(uint8_t *memory,uint32_t width) {
     memset(memory+map+0x11BDu,2u,20u);
     if(g_gw_ws_strip_ext) memset(memory+g_gw_ws_strip_ext,2u,7u);
 }
+/* The map viewport gadget (id 5, the click target of the map) gets its rect from MapDisplay init (0x785C0:
+   x = MapDisplay+0x1D, w = GraphicsScreenWidth - x, at [0x35F8F8]+0x2C/+0x30). That runs at 640, before the
+   switch to the widened surface, so clicks stop at x=640. Follow the shown width while widescreen is on and
+   put the original width back when it goes off; any other value is left alone. */
+static void ws_live_viewport_gadget(uint8_t *memory,uint16_t left,uint16_t shown) {
+    const uint32_t g=*(const uint32_t *)(memory+0x0035F8F8u);
+    if(!g || g>GUEST_LIMIT-0x34u || *(const uint16_t *)(memory+g+0x2Cu)!=left) return;
+    uint16_t *w=(uint16_t *)(memory+g+0x30u);
+    if(*w==(uint16_t)(640u-left) || *w==(uint16_t)(854u-left) || *w==(uint16_t)(864u-left)) *w=(uint16_t)(shown-left);
+    gw_flag_trace("TRACE widescreen viewport_gadget x=%u w=%u%c",left,*w,10);
+}
 static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
     if(!g_ws_requested || !memory || !parked) return;
     const uint32_t ifc=*(const uint32_t *)(memory+0x002EF7E8u),pending=*(const uint32_t *)(memory+0x002EF7ECu);
@@ -16631,6 +16642,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         memset(memory+g_ws_live_pool,0,GW_WS_DRAWPOOL_BYTES); g_gw_ws_drawpool=g_ws_live_pool;
         memset(memory+g_ws_live_grid,2u,128u); g_gw_ws_grid_ext=g_ws_live_grid;   /* all cells redrawn */
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback%c",10); }
+        ws_live_viewport_gadget(memory,left,854u);
         g_ws_live_active=1;
         gw_flag_trace("TRACE widescreen on turn=%u surface=864x480 shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u));
     } else {
@@ -16639,6 +16651,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_saved_ring;
         g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u; g_gw_ws_grid_ext=0u;
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
+        ws_live_viewport_gadget(memory,*(const uint16_t *)(memory+map+0x1Du),640u);
         g_ws_live_active=0;
         gw_flag_trace("TRACE widescreen off turn=%u ifc=%08X pending=%08X\n",*(const uint32_t *)(memory+0x002F1472u),ifc,pending);
     }
