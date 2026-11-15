@@ -8584,14 +8584,18 @@ static void host_epx2x(const uint8_t *idx,int w,const uint32_t *lut,uint32_t *ou
     for(int y=0;y<480;y++) {
         const uint8_t *r=idx+(size_t)y*w,*ru=y>0?r-w:r,*rd=y<479?r+w:r;
         uint32_t *o0=out+(size_t)(2*y)*out_pitch_px,*o1=o0+out_pitch_px;
+        /* Scale2x form of EPX (same output): only when up != down and left != right can a corner change, so flat
+           areas and straight edges take the one-lookup path */
         for(int x=0;x<w;x++) {
             const uint8_t P=r[x],A=ru[x],D=rd[x],C=x>0?r[x-1]:P,B=x<w-1?r[x+1]:P;
-            uint8_t e1=P,e2=P,e3=P,e4=P;
-            if(C==A && C!=D && A!=B) e1=A;
-            if(A==B && A!=C && B!=D) e2=B;
-            if(D==C && D!=B && C!=A) e3=C;
-            if(B==D && B!=A && D!=C) e4=D;
-            o0[2*x]=lut[e1]; o0[2*x+1]=lut[e2]; o1[2*x]=lut[e3]; o1[2*x+1]=lut[e4];
+            if(A!=D && C!=B) {
+                const uint32_t p=lut[P];
+                o0[2*x]=C==A?lut[C]:p; o0[2*x+1]=A==B?lut[B]:p;
+                o1[2*x]=C==D?lut[C]:p; o1[2*x+1]=D==B?lut[B]:p;
+            } else {
+                const uint32_t p=lut[P];
+                o0[2*x]=p; o0[2*x+1]=p; o1[2*x]=p; o1[2*x+1]=p;
+            }
         }
     }
 }
