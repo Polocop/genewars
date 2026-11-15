@@ -3312,10 +3312,8 @@ if partial:
         ws_rule(f"eax = MEM32(DS_BASE + (0x376A78)); /* 0x{site:08X}: mov eax, dword ptr [0x376a78] */",
                 f"eax = GW_WS_GRID_W; /* 0x{site:08X}: cell-grid column clamp (20 columns at 640, 27 in widescreen) */", optional=True)
     # grid clears: memset(0x376BF8, dl, 0x12C) also clears the widescreen columns 20..26 with the same byte
-    for site in (0x15961, 0x20EC6, 0x20F58, 0x7C752, 0x9373C):
-        ws_rule(f"eax = 0x00376BF8u; /* 0x{site:08X}: mov eax, 0x376bf8 */",
-                f"/* 0x{site:08X}: grid clear */ eax = 0x00376BF8u; /* mov eax, 0x376bf8 */\n"
-                "    if (g_gw_ws_grid_ext && ebx == 0x12Cu) { for (uint32_t _k = 0u; _k < 105u; _k++) MEM8(g_gw_ws_grid_ext + _k) = (uint8_t)LO8(edx); }")
+    #   (applied to every lifted copy below, with the grid-site substitutions)
+    ws_grid_clears = (0x15961, 0x20EC6, 0x20F58, 0x7C752, 0x9373C)
     # after the dirty-cell copy (0x1CAE0) the widescreen band x=640.. is copied whole from the ring
     for site in (0x7C765, 0x7C76E):
         ws_rule(f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;",
@@ -3388,19 +3386,33 @@ if partial:
         (0x7C54B, "MEM8(DS_BASE + (edx + eax + 0x376BE4))", "MEM8(GW_WS_GRID_EA(eax - 20u, edx))"),
     )
     if ws_applied:
+        for site in ws_grid_clears:
+            original = f"eax = 0x00376BF8u; /* 0x{site:08X}: mov eax, 0x376bf8 */"
+            if lifted_function_containing(site) is None or original not in text:
+                continue
+            text = text.replace(original, original + "\n    if (g_gw_ws_grid_ext && ebx == 0x12Cu) { for (uint32_t _k = 0u; "
+                                "_k < 105u; _k++) MEM8(g_gw_ws_grid_ext + _k) = (uint8_t)LO8(edx); } /* grid clear: columns 20..26 too */")
+            ws_applied += 1
         for site, old_ea, new_ea in ws_grid_sites:
             marker = f"if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;"
-            if text.count(marker) != 1:
+            if marker not in text:
                 if lifted_function_containing(site) is None:
                     continue
-                raise SystemExit(f"widescreen grid site 0x{site:08X}: expected one instruction marker, got {text.count(marker)}")
-            start = text.index(marker) + len(marker)
-            end = text.find("if (!gw_recomp_guest_instruction(", start)
-            block = text[start:end]
-            if old_ea not in block:
-                raise SystemExit(f"widescreen grid site 0x{site:08X}: address {old_ea} not in its instruction")
-            text = text[:start] + block.replace(old_ea, new_ea) + text[end:]
-            ws_applied += 1
+                raise SystemExit(f"widescreen grid site 0x{site:08X}: instruction not in the lifted closure")
+            pos = 0
+            while True:   # every lifted copy of the instruction
+                at = text.find(marker, pos)
+                if at < 0:
+                    break
+                start = at + len(marker)
+                end = text.find("if (!gw_recomp_guest_instruction(", start)
+                block = text[start:end]
+                if old_ea not in block:
+                    raise SystemExit(f"widescreen grid site 0x{site:08X}: address {old_ea} not in its instruction")
+                block = block.replace(old_ea, new_ea)
+                text = text[:start] + block + text[end:]
+                pos = start + len(block)
+                ws_applied += 1
     # Phase 4: the ring scroll routines take every 640 literal as the surface width (ring wrap, y*640 rows,
     # window widths); exact at 640.
     if ws_applied:
