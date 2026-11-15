@@ -17262,12 +17262,13 @@ static void ws_live_viewport_gadget_h(uint8_t *memory,uint16_t left,uint16_t h) 
    that is the HUD pass drawing its art over the map. */
 extern void (*g_gw_ws_after_map)(void);
 static uint32_t g_hud_pitch=GW_CANVAS_W;
+static int g_hud_in_map;
+extern void (*g_gw_ws_map_draw)(int);
+static void hud_map_draw(int inside) { g_hud_in_map=inside; }
 static void hud_watch_write(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
     (void)va; (void)seg; (void)sel; (void)base; (void)user;
     if(lin<g_hud_ws || lin>=g_hud_ws+g_hud_pitch*480u) return;
-    /* the map and its overlays are drawn through the map window (LbSetWindow 0x96338: x at [0x376A80] = 128);
-       the HUD through a window that starts left of the map */
-    if(guest_memory && *(const uint32_t *)(guest_memory+0x00376A80u)>=128u) return;
+    if(g_hud_in_map) return;   /* inside MapDisplay::Draw: terrain, buildings and creatures, not the HUD */
     const uint32_t off=lin-g_hud_ws;
     for(uint32_t k=0;k<width;k++) {
         const uint32_t x=(off+k)%g_hud_pitch,y=(off+k)/g_hud_pitch;
@@ -17315,6 +17316,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
                 g_hud_ws=*(const uint32_t *)(memory+0x00376A5Cu); g_hud_pitch=640u;
                 g_hud_diag_was=recomp_memory_diag_enabled();
                 recomp_set_guest_write_observer(hud_watch_write,NULL); recomp_memory_diag_enable(1); g_hud_watching=1;
+                g_hud_in_map=0; g_gw_ws_map_draw=hud_map_draw;
             } else if(ifc!=0x0035FE9Au && g_hud_watching) hud_watch_stop();
         }
         if(g_ws_canvas && want && !g_ws_live_active && stable<8u) want=0; }
@@ -17374,6 +17376,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
             const char *rw=getenv("GW_RING_WATCH");
             if(rw && rw[0]=='1') recomp_set_guest_write_observer(ring_watch_write,NULL);
             else g_gw_ws_after_map=hud_watch_after_map;
+            g_gw_ws_map_draw=hud_map_draw;
         }
         SDL_AtomicSet(&g_interp_panel_reset,1);
         g_ws_live_active=1;
@@ -17384,7 +17387,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A7Cu)=480u;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_saved_ring;
         g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u; g_gw_ws_grid_ext=0u; g_gw_ws_buckets=0u;
-        g_gw_ws_after_map=NULL; hud_watch_stop();
+        g_gw_ws_after_map=NULL; g_gw_ws_map_draw=NULL; g_hud_in_map=0; hud_watch_stop();
         if(g_ws_canvas) ws_live_viewport_gadget_h(memory,*(const uint16_t *)(memory+map+0x1Du),480u);
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
         ws_live_viewport_gadget(memory,*(const uint16_t *)(memory+map+0x1Du),640u);

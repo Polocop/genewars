@@ -3351,7 +3351,19 @@ if partial:
     # over the map (the HUD pass); the zoom-out canvas records the HUD's pixels on the map's left edge from there
     ws_rule("    if (!gw_recomp_guest_instruction(0x00022F58u)) return;",
             "    if (!gw_recomp_guest_instruction(0x00022F58u)) return;\n"
+            "    if (g_gw_ws_map_draw) g_gw_ws_map_draw(0); /* 0x00022F58: after MapDisplay::Draw */\n"
             "    if (g_gw_ws_after_map) g_gw_ws_after_map(); /* 0x00022F58: after MapDisplay::Draw (HUD pass follows) */")
+    # the other MapDisplay::Draw calls (0x20F53, 0x937B5) and the IFCMain one: the host knows when the map is drawn
+    for call_site, after_site in ((0x20F53, 0x20F58), (0x22F53, None), (0x937B5, 0x937BA)):
+        ws_rule(f"    if (!gw_recomp_guest_instruction(0x{call_site:08X}u)) return;",
+                f"    if (!gw_recomp_guest_instruction(0x{call_site:08X}u)) return;\n"
+                f"    if (g_gw_ws_map_draw) g_gw_ws_map_draw(1); /* 0x{call_site:08X}: MapDisplay::Draw starts */")
+        ws_every_copy.add(call_site)
+        if after_site:
+            ws_rule(f"    if (!gw_recomp_guest_instruction(0x{after_site:08X}u)) return;",
+                    f"    if (!gw_recomp_guest_instruction(0x{after_site:08X}u)) return;\n"
+                    f"    if (g_gw_ws_map_draw) g_gw_ws_map_draw(0); /* 0x{after_site:08X}: MapDisplay::Draw done */")
+            ws_every_copy.add(after_site)
     # 0x79D00 (request a whole redraw) fills the 20 MapDisplay strip levels with 2; fill the extension too
     ws_rule("    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;",
             "    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;\n"
@@ -3527,6 +3539,7 @@ if partial:
             "#define GW_WS_POOL_CAP(md) ((g_gw_ws_drawpool && (uint32_t)(md) == 0x00346D70u) ? GW_WS_DRAWPOOL_ENTRIES : 0x100u)\n"
             "void (*g_gw_ws_band_copy)(void) = 0;\n"
             "void (*g_gw_ws_after_map)(void) = 0;\n"
+            "void (*g_gw_ws_map_draw)(int) = 0;\n"
             "#define GW_WS_STRIP_FLAG(base_reg, index) (((uint32_t)(index) < 20u || !g_gw_ws_strip_ext) ? \\\n"
             "    (uint32_t)(DS_BASE + ((base_reg) + 0x11BDu)) : (uint32_t)(g_gw_ws_strip_ext + ((uint32_t)(index) - 20u)))\n"
             "#define GW_WS_STRIPS ((MEM32(DS_BASE + (0x376A78)) + 31u) >> 5)\n"
