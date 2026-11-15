@@ -7906,6 +7906,7 @@ typedef struct gw_interactive_visual_snapshot {
     /* zoom-out canvas (--zoomout): the whole 1152x640 WScreen; wscreen above is then the 854x480 view built from it
        (HUD x<128 and the panel art at x=128..175 from the canvas, the map from the 1x window) */
     uint8_t canvas[1152u*640u];
+    uint8_t canvas_panel[480u*48u];  /* x=128..175 of the canvas: 1 = panel art (differs from the map ring there) */
     int canvas_valid;
     uint64_t generation;
     uint64_t captured_at;
@@ -9204,7 +9205,10 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                         /* panel art differs from the map background and never changes while the view scrolls; a
                            building or plant drawn here also differs from the background, but its pixels have been
                            seen changing (g_interp_panel_map), so it stays with the shifted map instead of tearing */
-                        const int panel=visual->wscreen[(size_t)y*visual->wscreen_pitch+128u+(unsigned)x]!=bg &&
+                        /* canvas: the panel mask comes from the canvas itself (its own map under x=128..175), so
+                           sprites of the 1x window there are never taken for panel art */
+                        const int panel=(visual->canvas_valid?visual->canvas_panel[y*48+x]!=0:
+                            visual->wscreen[(size_t)y*visual->wscreen_pitch+128u+(unsigned)x]!=bg) &&
                             !g_interp_panel_map[y*48+x];
                         g_interp_panel_rgba[y*48+x]=panel?*px:0u;
                         g_interp_panel_saved[y*48+x]=*px;
@@ -9644,7 +9648,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 const double sc=geo.k*(double)geo.dst.w/(double)geo.src.w;
                 double ox=0,oy=0; present_logical_to_output(&geo,(double)ptr_x,(double)ptr_y,&ox,&oy);
                 int mx=0,my=0;
-                if(SDL_GetMouseFocus()==g_ifclevel_demo_window && g_zoom>1.0001) {
+                if(SDL_GetMouseFocus()==g_ifclevel_demo_window && (g_zoom>1.0001 || g_canvas_live)) {   /* guest x,y are canvas coordinates */
                     (void)SDL_GetMouseState(&mx,&my); present_window_to_output(mx,my,geo.ow,geo.oh,&ox,&oy);
                 } else if(SDL_GetMouseFocus()==g_ifclevel_demo_window) {
                     (void)SDL_GetMouseState(&mx,&my);
@@ -9656,8 +9660,16 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 SDL_RenderCopyF(g_ifclevel_demo_renderer,pointer_texture,NULL,&pointer_dst);
             } else {
             const double sx=(double)dst.w/(double)g_present_w,sy=(double)dst.h/480.0;
-            const int px=ptr_x+ptr_hot_x;
-            const int py=ptr_y+ptr_hot_y;
+            int px=ptr_x+ptr_hot_x;
+            int py=ptr_y+ptr_hot_y;
+            if(g_canvas_live && SDL_GetMouseFocus()==g_ifclevel_demo_window) {
+                /* zoom-out canvas: the guest pointer position is a canvas coordinate; draw at the real mouse */
+                int mx=0,my=0,ow=0,oh=0; (void)SDL_GetMouseState(&mx,&my);
+                if(present_output_size(&ow,&oh)) {
+                    double mox=0,moy=0; present_window_to_output(mx,my,ow,oh,&mox,&moy);
+                    px=(int)((mox-dst.x)/sx)+ptr_hot_x; py=(int)((moy-dst.y)/sy)+ptr_hot_y;
+                }
+            }
             SDL_Rect pointer_dst={dst.x+(int)(px*sx),dst.y+(int)(py*sy),
                 (int)(64*sx+0.5),(int)(64*sy+0.5)};
             SDL_RenderCopy(g_ifclevel_demo_renderer,pointer_texture,NULL,&pointer_dst);
@@ -16247,9 +16259,11 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
                     x=hx; y=hy;
                 }
             }
+            /* zoom-out canvas: mapped points are canvas coordinates (up to 1151 x 639) */
+            const int lim_w=g_canvas_live?(int)GW_CANVAS_W:g_present_w,lim_h=g_canvas_live?(int)GW_CANVAS_H:480;
             if(g_ifclevel_demo_mode && g_interactive_demo_mode &&
-               (x<0 || x>=g_present_w || y<0 || y>=480)) continue;
-            if(x<0)x=0; if(x>g_present_w-1)x=g_present_w-1; if(y<0)y=0; if(y>479)y=479;
+               (x<0 || x>=lim_w || y<0 || y>=lim_h)) continue;
+            if(x<0)x=0; if(x>lim_w-1)x=lim_w-1; if(y<0)y=0; if(y>lim_h-1)y=lim_h-1;
             if(memory) {
                 *(int32_t *)(memory+0x00376AA8u)=x; /* lbDisplay.MMouseX */
                 *(int32_t *)(memory+0x00376AACu)=y; /* lbDisplay.MMouseY */
@@ -16951,7 +16965,9 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
             memcpy(orow,row,128u);
             for(uint32_t x=128u;x<176u;x++) {
                 uint32_t at=0; const int bg_ok=ring_ok && ws_ring_source(memory,GW_CANVAS_W,GW_CANVAS_H,x,y,&at);
-                orow[x]=(bg_ok && row[x]!=memory[ring+at])?row[x]:win[x];
+                const int panel=bg_ok && row[x]!=memory[ring+at];
+                g_interactive_published_snapshot.canvas_panel[y*48u+(x-128u)]=(uint8_t)panel;
+                orow[x]=panel?row[x]:win[x];
             }
             memcpy(orow+176u,win+176u,854u-176u);
             memset(orow+854u,0,10u);
