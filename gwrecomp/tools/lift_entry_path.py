@@ -3349,6 +3349,13 @@ if partial:
     ws_rule("    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;",
             "    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;\n"
             "    if (g_gw_ws_strip_ext) { for (uint32_t _k = 0u; _k < 7u; _k++) MEM8(g_gw_ws_strip_ext + _k) = 2u; } /* 0x00079D1C: widescreen strips */")
+    # the camera jumps (minimap click, centre on a Thing, MapDisplay init: 0x784C0/0x786C0/0x78880) reset the ring
+    # offsets and memset(MapDisplay+0x11BD, 2, 0x14) through 0x96C10; without the extension the band x=640.. keeps
+    # the ring content of the old position
+    for site in (0x78528, 0x78726, 0x788D8):
+        ws_rule(f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;",
+                f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;\n"
+                f"    if (g_gw_ws_strip_ext) {{ for (uint32_t _k = 0u; _k < 7u; _k++) MEM8(g_gw_ws_strip_ext + _k) = 2u; }} /* 0x{site:08X}: widescreen strips after memset(+0x11BD, 2, 20) */")
     # 0x1C9C0 (cell copy ring -> WScreen on the 20x15 grid) steps 32 rows as 0x5000 and stops at 480 rows as 0x4B000.
     ws_rule("ebp = ebp + 0x5000u; /* 0x0001CA2C: add ebp, 0x5000 */",
             f"ebp = ebp + ({ws_width} << 5); /* 0x0001CA2C: 32 surface rows (0x5000 at 640) */")

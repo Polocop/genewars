@@ -8520,7 +8520,7 @@ static int host_controls_event(const SDL_Event *ev) {
     if(ev->type==SDL_KEYDOWN || ev->type==SDL_KEYUP) {
         const SDL_Keycode k=ev->key.keysym.sym; const int down=ev->type==SDL_KEYDOWN;
         const LONG bit=host_pan_bit(k);
-        if(ev->key.repeat) return k==SDLK_F7 || k==SDLK_F8 || k==SDLK_F10 || (map && (k==SDLK_TAB || bit));
+        if(ev->key.repeat) return k==SDLK_F7 || k==SDLK_F8 || k==SDLK_F10 || (map && (k==SDLK_TAB || k==SDLK_HOME || bit));
         if(k==SDLK_F7) {
             if(down) { display_filter_load(); g_filter_mode=(g_filter_mode+1)%3; display_filter_save();
                 gw_flag_trace("TRACE host_controls display_filter=%d (%s)%c",g_filter_mode,
@@ -8534,6 +8534,10 @@ static int host_controls_event(const SDL_Event *ev) {
         }
         if(k==SDLK_F10) {
             if(down) { g_grab_user_off=!g_grab_user_off; gw_flag_trace("TRACE host_controls grab_user_off=%d%c",g_grab_user_off,10); }
+            return 1;
+        }
+        if(k==SDLK_HOME && map) {   /* Home: back to the default 1x view (eased like the wheel) */
+            if(down && g_zoom_target!=1.0) { host_zoom_set_target(1.0,128.0,0.0); gw_flag_trace("TRACE host_controls zoom_reset%c",10); }
             return 1;
         }
         if(k==SDLK_TAB) {
