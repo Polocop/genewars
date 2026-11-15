@@ -8153,7 +8153,10 @@ static int g_ws_requested;
    window is the 726x480 area of the 854x480 widescreen view, at (GW_CANVAS_VX0, GW_CANVAS_VY0); zoom down to 0.75
    shows 968x640. Canvas columns 128..175 carry the panel art, so the visible map starts at x=176. */
 static int g_ws_canvas;
-static SDL_atomic_t g_canvas_panel_reset;   /* the widescreen switch: forget the kept panel colours */
+static SDL_atomic_t g_canvas_panel_reset;
+static uint8_t g_hud_written[480u*48u],g_hud_val[480u*48u],g_hud_have[480u*48u];   /* panel art on x=128..175 */
+static uint32_t g_hud_ws; static int g_hud_watching;
+static void hud_watch_stop(void);   /* the widescreen switch: forget the kept panel colours */
 #define GW_CANVAS_W 1152u
 #define GW_CANVAS_H 640u
 #define GW_CANVAS_VX0 301
@@ -8174,6 +8177,8 @@ static double g_hostprof_gpu_ms; static unsigned g_hostprof_gpu_frames; static i
    Camera movement goes through the original scroller: WASD/arrows and middle-button drag become the extended
    arrow keys it already polls (_lbKeyOn 0xC8/0xD0/0xCB/0xCD), held for a tick, so the game moves its own camera. */
 static volatile LONG g_live_ifc_map;
+static volatile LONG g_live_ifc_game;   /* IFCMain current, nothing pending (the zoom and grab follow this one: the scroll
+                                           gate bit of 0x35FE1D is also set while the player drags a selection box) */
 static volatile LONG g_pan_hold;              /* held directions on the map: 1 up, 2 down, 4 left, 8 right */
 static volatile LONG g_pan_acc_x,g_pan_acc_y; /* middle-drag distance not scrolled yet, 1/16 logical pixel */
 static volatile LONG g_turbo_level=1,g_turbo_tab;
@@ -8511,7 +8516,7 @@ static void host_zoom_set_target(double target,double lx,double ly) {
 }
 /* per presented frame: eases the zoom towards its target keeping the anchored map point under the cursor */
 static void host_zoom_tick(void) {
-    if(!InterlockedCompareExchange(&g_live_ifc_map,0,0)) {
+    if(!InterlockedCompareExchange(&g_live_ifc_game,0,0)) {
         g_zoom=g_zoom_target=1.0; g_zoom_x=g_zoom_y=0.0; g_zoom_anim=0; g_zoom_t=0; return;
     }
     const uint64_t now=SDL_GetPerformanceCounter();
@@ -8545,7 +8550,7 @@ static void host_zoom_tick(void) {
 /* window mouse grab while the mission map has the input and the window the focus (F10 turns it off/on) */
 static void host_grab_tick(void) {
     if(!g_cli_play_mode || !g_ifclevel_demo_window) return;
-    const int want=InterlockedCompareExchange(&g_live_ifc_map,0,0) && !g_grab_user_off &&
+    const int want=InterlockedCompareExchange(&g_live_ifc_game,0,0) && !g_grab_user_off &&
         (SDL_GetWindowFlags(g_ifclevel_demo_window)&SDL_WINDOW_INPUT_FOCUS)!=0u;
     if(want==g_grab_state) return;
     SDL_SetWindowMouseGrab(g_ifclevel_demo_window,want?SDL_TRUE:SDL_FALSE);
@@ -16958,6 +16963,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         const uint8_t *cv=memory+wscreen_guest; uint8_t *o=g_interactive_published_snapshot.wscreen;
         const uint32_t ring=*(const uint32_t *)(memory+0x002EECA0u);
         const int ring_ok=ring && ring<=GUEST_LIMIT-GW_CANVAS_W*GW_CANVAS_H;
+        hud_watch_stop();
         memcpy(g_interactive_published_snapshot.canvas,cv,GW_CANVAS_W*GW_CANVAS_H);
         g_interactive_published_snapshot.canvas_valid=1;
         for(uint32_t y=0;y<480u;y++) {
@@ -16966,28 +16972,13 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
             memcpy(orow,row,128u);
             for(uint32_t x=128u;x<176u;x++) {
                 uint32_t at=0; const int bg_ok=ring_ok && ws_ring_source(memory,GW_CANVAS_W,GW_CANVAS_H,x,y,&at);
-                /* Panel art never follows the map: counted over the frames where the map colour under the pixel
-                   changed, a panel pixel differs from it (nearly) every time, a map pixel (terrain, a plant, a
-                   building) only while a sprite covers it. Until 8 such samples exist: differs now, or still has
-                   the colour it had when it last differed. */
-                static uint8_t panel_val[480u*48u],panel_have[480u*48u],ring_last[480u*48u];
-                static uint16_t samples[480u*48u],diffs[480u*48u];
+                /* panel art = the pixels the HUD pass (IFCMain draw after MapDisplay::Draw, 0x22F58) wrote, with the
+                   colour they had at the end of that frame; a pixel stays panel while it keeps that colour (an
+                   overlay drawn there drops out as soon as the map is restored under it) */
                 const uint32_t pi=y*48u+(x-128u);
-                if(SDL_AtomicGet(&g_canvas_panel_reset)) {
-                    memset(panel_have,0,sizeof panel_have); memset(samples,0,sizeof samples); memset(diffs,0,sizeof diffs);
-                    SDL_AtomicSet(&g_canvas_panel_reset,0);
-                }
-                const uint8_t rv=bg_ok?memory[ring+at]:0u;
-                int panel=bg_ok && row[x]!=rv;
-                if(bg_ok && rv!=ring_last[pi] && rv!=0u) {   /* the void (colour 0) under black panel art tells nothing */
-                    ring_last[pi]=rv; samples[pi]++; diffs[pi]+=(uint16_t)panel;
-                    if(samples[pi]>=1000u) { samples[pi]/=2u; diffs[pi]/=2u; }
-                }
-                if(samples[pi]>=8u) panel=diffs[pi]*10u>=samples[pi]*9u;
-                else {
-                    if(panel) { panel_val[pi]=row[x]; panel_have[pi]=1u; }
-                    else if(panel_have[pi] && row[x]==panel_val[pi]) panel=1;
-                }
+                if(g_hud_written[pi]) { g_hud_val[pi]=row[x]; g_hud_have[pi]=1u; g_hud_written[pi]=0u; }
+                const int panel=g_hud_have[pi] && row[x]==g_hud_val[pi];
+                (void)bg_ok;
                 g_interactive_published_snapshot.canvas_panel[pi]=(uint8_t)panel;
                 orow[x]=panel?row[x]:win[x];
             }
@@ -17264,6 +17255,27 @@ static void ws_live_viewport_gadget_h(uint8_t *memory,uint16_t left,uint16_t h) 
     if(*(const uint16_t *)(memory+g+0x2Eu)==0u && (*gh==480u || *gh==GW_CANVAS_H)) *gh=h;
     gw_flag_trace("TRACE widescreen viewport_gadget y=%u h=%u%c",*(const uint16_t *)(memory+g+0x2Eu),*gh,10);
 }
+/* Zoom-out canvas: exact panel-art mask on the map's left edge (x=128..175, y<480). From the end of MapDisplay::Draw
+   (lifter hook at 0x22F58) to the frame's publication, the guest write observer records every WScreen write there:
+   that is the HUD pass drawing its art over the map. */
+extern void (*g_gw_ws_after_map)(void);
+static void hud_watch_write(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
+    (void)va; (void)seg; (void)sel; (void)base; (void)user;
+    if(lin<g_hud_ws || lin>=g_hud_ws+GW_CANVAS_W*480u) return;
+    const uint32_t off=lin-g_hud_ws,y=off/GW_CANVAS_W;
+    for(uint32_t k=0;k<width;k++) {
+        const uint32_t x=(off+k)%GW_CANVAS_W;
+        if(x>=128u && x<176u) g_hud_written[y*48u+(x-128u)]=1u;
+    }
+}
+static void hud_watch_after_map(void) {
+    if(!guest_memory || *(const uint32_t *)(guest_memory+0x00376A78u)!=GW_CANVAS_W) return;
+    g_hud_ws=*(const uint32_t *)(guest_memory+0x00376A5Cu);
+    recomp_set_guest_write_observer(hud_watch_write,NULL); g_hud_watching=1;
+}
+static void hud_watch_stop(void) {
+    if(g_hud_watching) { recomp_set_guest_write_observer(NULL,NULL); g_hud_watching=0; }
+}
 /* QA (GW_RING_WATCH=1, zoom-out canvas): which guest instructions write the ring's column x=96..127 (the HUD
    columns just left of the map); the first 32 distinct instruction addresses go to the flags log */
 static uint32_t g_ring_watch_va[32]; static unsigned g_ring_watch_n;
@@ -17330,7 +17342,12 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback%c",10); }
         ws_live_viewport_gadget(memory,left,g_ws_canvas?(uint16_t)W:854u);
         if(g_ws_canvas) { ws_live_viewport_gadget_h(memory,left,(uint16_t)H); SDL_AtomicSet(&g_canvas_panel_reset,1); }
-        if(g_ws_canvas) { const char *rw=getenv("GW_RING_WATCH"); if(rw && rw[0]=='1') recomp_set_guest_write_observer(ring_watch_write,NULL); }
+        if(g_ws_canvas) {
+            memset(g_hud_have,0,sizeof g_hud_have); memset(g_hud_written,0,sizeof g_hud_written);
+            const char *rw=getenv("GW_RING_WATCH");
+            if(rw && rw[0]=='1') recomp_set_guest_write_observer(ring_watch_write,NULL);
+            else g_gw_ws_after_map=hud_watch_after_map;
+        }
         SDL_AtomicSet(&g_interp_panel_reset,1);
         g_ws_live_active=1;
         gw_flag_trace("TRACE widescreen on turn=%u surface=%ux%u shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u),W,H);
@@ -17340,6 +17357,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A7Cu)=480u;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_saved_ring;
         g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u; g_gw_ws_grid_ext=0u; g_gw_ws_buckets=0u;
+        g_gw_ws_after_map=NULL; hud_watch_stop();
         if(g_ws_canvas) ws_live_viewport_gadget_h(memory,*(const uint16_t *)(memory+map+0x1Du),480u);
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
         ws_live_viewport_gadget(memory,*(const uint16_t *)(memory+map+0x1Du),640u);
@@ -17407,6 +17425,7 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
             const int map=g_cli_play_mode && ifc==0x0035FE9Au && !pend && !(memory[0x0035FE1Du]&1u);
             static int pan_was;
             InterlockedExchange(&g_live_ifc_map,map);
+            InterlockedExchange(&g_live_ifc_game,g_cli_play_mode && ifc==0x0035FE9Au && !pend);
             if(map) {
                 LONG dirs=InterlockedCompareExchange(&g_pan_hold,0,0);
                 /* middle drag: one 32-px step of the original scroller per tick, opposite to the drag (the map

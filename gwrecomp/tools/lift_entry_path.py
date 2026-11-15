@@ -3346,6 +3346,11 @@ if partial:
     # right-edge scroll: mouse x == 639 -> last visible column (853 on the widescreen surface)
     ws_rule("/* cmp eax, 0x27Fu */ /* 0x00079E9B: cmp eax, 0x27f */\n    _flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(0x27Fu);",
             "/* 0x00079E9B: right-edge scroll column (639 at 640) */\n    _flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(GW_WS_VIEW_W - 1u);")
+    # IFCMain draw (0x22F40): MapDisplay::Draw returns at 0x22F58, everything after it in the same frame is drawn
+    # over the map (the HUD pass); the zoom-out canvas records the HUD's pixels on the map's left edge from there
+    ws_rule("    if (!gw_recomp_guest_instruction(0x00022F58u)) return;",
+            "    if (!gw_recomp_guest_instruction(0x00022F58u)) return;\n"
+            "    if (g_gw_ws_after_map) g_gw_ws_after_map(); /* 0x00022F58: after MapDisplay::Draw (HUD pass follows) */")
     # 0x79D00 (request a whole redraw) fills the 20 MapDisplay strip levels with 2; fill the extension too
     ws_rule("    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;",
             "    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;\n"
@@ -3516,6 +3521,7 @@ if partial:
             "#define GW_WS_POOL(md) ((g_gw_ws_drawpool && (uint32_t)(md) == 0x00346D70u) ? g_gw_ws_drawpool : (uint32_t)((md) + 0x3Bu))\n"
             "#define GW_WS_POOL_CAP(md) ((g_gw_ws_drawpool && (uint32_t)(md) == 0x00346D70u) ? GW_WS_DRAWPOOL_ENTRIES : 0x100u)\n"
             "void (*g_gw_ws_band_copy)(void) = 0;\n"
+            "void (*g_gw_ws_after_map)(void) = 0;\n"
             "#define GW_WS_STRIP_FLAG(base_reg, index) (((uint32_t)(index) < 20u || !g_gw_ws_strip_ext) ? \\\n"
             "    (uint32_t)(DS_BASE + ((base_reg) + 0x11BDu)) : (uint32_t)(g_gw_ws_strip_ext + ((uint32_t)(index) - 20u)))\n"
             "#define GW_WS_STRIPS ((MEM32(DS_BASE + (0x376A78)) + 31u) >> 5)\n"
