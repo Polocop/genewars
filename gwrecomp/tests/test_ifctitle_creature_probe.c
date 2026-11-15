@@ -17264,6 +17264,19 @@ static void ws_live_viewport_gadget_h(uint8_t *memory,uint16_t left,uint16_t h) 
     if(*(const uint16_t *)(memory+g+0x2Eu)==0u && (*gh==480u || *gh==GW_CANVAS_H)) *gh=h;
     gw_flag_trace("TRACE widescreen viewport_gadget y=%u h=%u%c",*(const uint16_t *)(memory+g+0x2Eu),*gh,10);
 }
+/* QA (GW_RING_WATCH=1, zoom-out canvas): which guest instructions write the ring's column x=96..127 (the HUD
+   columns just left of the map); the first 32 distinct instruction addresses go to the flags log */
+static uint32_t g_ring_watch_va[32]; static unsigned g_ring_watch_n;
+static void ring_watch_write(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
+    (void)seg; (void)sel; (void)base; (void)width; (void)user;
+    if(!g_ws_live_ring || lin<g_ws_live_ring || lin>=g_ws_live_ring+GW_CANVAS_W*480u) return;
+    const uint32_t x=(lin-g_ws_live_ring)%GW_CANVAS_W;
+    if(x<96u || x>=128u || g_ring_watch_n>=32u) return;
+    for(unsigned i=0;i<g_ring_watch_n;i++) if(g_ring_watch_va[i]==va) return;
+    g_ring_watch_va[g_ring_watch_n++]=va;
+    gw_flag_trace("TRACE ring_watch va=%08X row=%u x=%u turn=%u%c",va,(lin-g_ws_live_ring)/GW_CANVAS_W,x,
+        *(const uint32_t *)(guest_memory+0x002F1472u),10);
+}
 static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
     if(!g_ws_requested || !memory || !parked) return;
     const uint32_t ifc=*(const uint32_t *)(memory+0x002EF7E8u),pending=*(const uint32_t *)(memory+0x002EF7ECu);
@@ -17311,6 +17324,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback%c",10); }
         ws_live_viewport_gadget(memory,left,g_ws_canvas?(uint16_t)W:854u);
         if(g_ws_canvas) { ws_live_viewport_gadget_h(memory,left,(uint16_t)H); SDL_AtomicSet(&g_canvas_panel_reset,1); }
+        if(g_ws_canvas) { const char *rw=getenv("GW_RING_WATCH"); if(rw && rw[0]=='1') recomp_set_guest_write_observer(ring_watch_write,NULL); }
         SDL_AtomicSet(&g_interp_panel_reset,1);
         g_ws_live_active=1;
         gw_flag_trace("TRACE widescreen on turn=%u surface=%ux%u shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u),W,H);
