@@ -17268,13 +17268,19 @@ static void hud_watch_write(uint32_t va,recomp_segment_id seg,uint16_t sel,uint3
         if(x>=128u && x<176u) g_hud_written[y*48u+(x-128u)]=1u;
     }
 }
+/* the memory diagnostic is on during the HUD pass only: block copies (rep movs, the panel blitters) then go through
+   the checked access path and reach the observer as well */
+void recomp_memory_diag_enable(int enabled);
+int recomp_memory_diag_enabled(void);
+static int g_hud_diag_was;
 static void hud_watch_after_map(void) {
-    if(!guest_memory || *(const uint32_t *)(guest_memory+0x00376A78u)!=GW_CANVAS_W) return;
+    if(!guest_memory || *(const uint32_t *)(guest_memory+0x00376A78u)!=GW_CANVAS_W || g_hud_watching) return;
     g_hud_ws=*(const uint32_t *)(guest_memory+0x00376A5Cu);
-    recomp_set_guest_write_observer(hud_watch_write,NULL); g_hud_watching=1;
+    g_hud_diag_was=recomp_memory_diag_enabled();
+    recomp_set_guest_write_observer(hud_watch_write,NULL); recomp_memory_diag_enable(1); g_hud_watching=1;
 }
 static void hud_watch_stop(void) {
-    if(g_hud_watching) { recomp_set_guest_write_observer(NULL,NULL); g_hud_watching=0; }
+    if(g_hud_watching) { recomp_set_guest_write_observer(NULL,NULL); recomp_memory_diag_enable(g_hud_diag_was); g_hud_watching=0; }
 }
 /* QA (GW_RING_WATCH=1, zoom-out canvas): which guest instructions write the ring's column x=96..127 (the HUD
    columns just left of the map); the first 32 distinct instruction addresses go to the flags log */
