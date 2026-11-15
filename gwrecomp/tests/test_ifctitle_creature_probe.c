@@ -15801,7 +15801,11 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
                    exists. Those synthetic test events are sent at 2x logical
                    coordinates; use the same mapping as the 1280x960 test
                    surface until a real interactive window is present. */
-                if(g_ifclevel_demo_window) {
+                /* harness-only events (windowID UINT32_MAX, push_sdl_*) already carry logical coordinates;
+                   mapping them as window coordinates makes them depend on the window size (at 1440p the
+                   pillarbox swallowed the scripted planet-screen click) */
+                const uint32_t ev_window=ev.type==SDL_MOUSEMOTION?ev.motion.windowID:ev.button.windowID;
+                if(g_ifclevel_demo_window && ev_window!=UINT32_MAX) {
                     const int mapped=map_interactive_window_to_game(hx,hy,&x,&y);
                     if(mapped==2) {
                         if(ev.type==SDL_MOUSEBUTTONDOWN || ev.type==SDL_MOUSEBUTTONUP) {
