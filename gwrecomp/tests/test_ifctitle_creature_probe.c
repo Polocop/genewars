@@ -14521,6 +14521,7 @@ extern uint32_t g_gw_ws_strip_ext;
 extern void (*g_gw_ws_band_copy)(void);
 /* widescreen draw-list pool (lifter rules at 0x78B55/0x78BFC/0x78C64/0x78CD0/0x791A6/0x79375): 0 = MapDisplay own pool */
 extern uint32_t g_gw_ws_drawpool,g_gw_drawlist_full;
+extern uint32_t g_gw_ws_grid_ext;   /* cell-grid columns 20..26 (7 x 15), lifter GW_WS_GRID_EA; 0 at 640 */
 #define GW_WS_DRAWPOOL_BYTES (1024u*10u)
 static uint32_t g_ws_band_copies;
 static int ws_ring_source(const uint8_t *m,uint32_t width,uint32_t height,uint32_t x,uint32_t y,uint32_t *at) {
@@ -14558,6 +14559,12 @@ static void ws_band_copy_impl(void) {
         if(first<band) memcpy(dst+first,src,band-first);
     }
     g_ws_band_copies++;
+    /* grid columns 20..26 age like the 20 columns 0x1CAE0 has just consumed: a marked cell is cleared when
+       byte [0x362A42] is set and decremented otherwise */
+    if(g_gw_ws_grid_ext && g_gw_ws_grid_ext<=GUEST_LIMIT-105u) {
+        uint8_t *g=m+g_gw_ws_grid_ext; const int clear=m[0x00362A42u]!=0;
+        for(uint32_t k=0;k<105u;k++) if(g[k]) g[k]=clear?0u:(uint8_t)(g[k]-1u);
+    }
 }
 
 typedef struct {
@@ -16532,6 +16539,7 @@ static int gw_vsb16_run_mixer_service(void *user) {
    live in a third block. Leaving the game IFC restores the canonical 640x480 buffers. Every switch requests a
    whole-strip redraw with the ring offsets reset. The lifted renderer follows lbDisplay.GraphicsScreenWidth. */
 static int g_ws_live_active;
+static uint32_t g_ws_live_grid;
 static uint32_t g_ws_live_ws,g_ws_live_ring,g_ws_live_flags,g_ws_live_pool,g_ws_saved_ws,g_ws_saved_ring;
 static uint32_t ws_live_alloc(uint8_t *memory,const gw_recomp_context *parked,uint32_t size) {
     const uint32_t esp=(parked->esp-0x4000u)&~0xFu;
@@ -16588,9 +16596,10 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
             g_ws_live_ring=g_ws_live_ws?ws_live_alloc(memory,parked,bytes):0u;
             g_ws_live_flags=g_ws_live_ring?ws_live_alloc(memory,parked,64u):0u;
             g_ws_live_pool=g_ws_live_flags?ws_live_alloc(memory,parked,GW_WS_DRAWPOOL_BYTES):0u;
+            g_ws_live_grid=g_ws_live_pool?ws_live_alloc(memory,parked,128u):0u;
             gw_flag_trace("TRACE widescreen alloc wscreen=%08X ring=%08X flags=%08X drawpool=%08X\n",g_ws_live_ws,g_ws_live_ring,
                 g_ws_live_flags,g_ws_live_pool);
-            if(!g_ws_live_pool) { g_ws_requested=0; return; }   /* fail closed: stay at 640 */
+            if(!g_ws_live_grid) { g_ws_requested=0; return; }   /* fail closed: stay at 640 */
         }
         const uint16_t left=*(const uint16_t *)(memory+map+0x1Du);
         for(uint32_t y=0;y<H;y++) {
@@ -16606,6 +16615,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_live_ring;
         g_gw_ws_strip_ext=g_ws_live_flags; g_gw_ws_band_copy=ws_band_copy_impl;
         memset(memory+g_ws_live_pool,0,GW_WS_DRAWPOOL_BYTES); g_gw_ws_drawpool=g_ws_live_pool;
+        memset(memory+g_ws_live_grid,2u,128u); g_gw_ws_grid_ext=g_ws_live_grid;   /* all cells redrawn */
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback%c",10); }
         g_ws_live_active=1;
         gw_flag_trace("TRACE widescreen on turn=%u surface=864x480 shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u));
@@ -16613,7 +16623,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A5Cu)=g_ws_saved_ws;
         *(uint32_t *)(memory+0x00376A78u)=640u;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_saved_ring;
-        g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u;
+        g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u; g_gw_ws_grid_ext=0u;
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
         g_ws_live_active=0;
         gw_flag_trace("TRACE widescreen off turn=%u ifc=%08X pending=%08X\n",*(const uint32_t *)(memory+0x002F1472u),ifc,pending);

@@ -3279,10 +3279,7 @@ if partial:
                       (0x1C927, "ecx"), (0x1C92A, "edx")):
         ws_rule(f"{reg} = {reg} << 7u; /* 0x{site:08X}: shl {reg}, 7 */",
                 f"{reg} = GW_WS_ROWS_TIMES_WIDTH({reg}); /* 0x{site:08X}: (5*y) << 7 = y*640 -> y*width */")
-    # strips >= 20 do not propagate into the 20-column cell grid (their band is re-copied whole, see 0x7C765)
-    ws_rule("    recomp_begin_memory_access_ex(RECOMP_SEG_SS, 1u, 0x0007C489u, RECOMP_MEM_ACCESS_READ, 105u, \"cmp\");",
-            "    if (MEM8(SS_BASE + (esp + 8)) >= 20u) goto L_0007C57C; /* widescreen strip: no 20-column grid cell */\n"
-            "    recomp_begin_memory_access_ex(RECOMP_SEG_SS, 1u, 0x0007C489u, RECOMP_MEM_ACCESS_READ, 105u, \"cmp\");")
+    # strips 20..26 propagate into grid columns 20..26 (GW_WS_GRID_EA, below) like strips 0..19
     # Per-frame draw list (0x78B30 inserts, 0x79100/0x79320 walk it): a 256-entry pool of 10-byte entries at
     # MapDisplay+0x3B, linked by index, count at +0x11BB. At 854 px more Things are on screen than fit, and
     # 0x78B30 silently drops the rest (plants and buildings vanish). In widescreen the pool base moves to a
@@ -3313,7 +3310,12 @@ if partial:
     for site in (0x64EA8, 0x64FA8, 0x8A982, 0x8AC4A, 0x991C4, 0x99C39, 0x9A7CA, 0x9B00C, 0x9B816,
                  0x9C148, 0x9CF76, 0x9D927, 0x9EB16, 0x9FB32):
         ws_rule(f"eax = MEM32(DS_BASE + (0x376A78)); /* 0x{site:08X}: mov eax, dword ptr [0x376a78] */",
-                f"eax = 0x280u; /* 0x{site:08X}: cell-grid column clamp keeps 20 columns */", optional=True)
+                f"eax = GW_WS_GRID_W; /* 0x{site:08X}: cell-grid column clamp (20 columns at 640, 27 in widescreen) */", optional=True)
+    # grid clears: memset(0x376BF8, dl, 0x12C) also clears the widescreen columns 20..26 with the same byte
+    for site in (0x15961, 0x20EC6, 0x20F58, 0x7C752, 0x9373C):
+        ws_rule(f"eax = 0x00376BF8u; /* 0x{site:08X}: mov eax, 0x376bf8 */",
+                f"eax = 0x00376BF8u; /* 0x{site:08X}: mov eax, 0x376bf8 */\n"
+                "    if (g_gw_ws_grid_ext && ebx == 0x12Cu) { for (uint32_t _k = 0u; _k < 105u; _k++) MEM8(g_gw_ws_grid_ext + _k) = (uint8_t)LO8(edx); }")
     # after the dirty-cell copy (0x1CAE0) the widescreen band x=640.. is copied whole from the ring
     for site in (0x7C765, 0x7C76E):
         ws_rule(f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;",
@@ -3362,6 +3364,43 @@ if partial:
             raise SystemExit(f"widescreen rule at 0x{site:08X} expected one lifted instruction, got {count}")
         text = text.replace(original, replacement, 1)
         ws_applied += 1
+    # Cell grid columns 20..26 (widescreen) live in g_gw_ws_grid_ext (7 x 15): every access that forms
+    # 0x376BF8 + row*20 + col from a separate column goes through GW_WS_GRID_EA(row*20, col), which is the
+    # original address for col < 20 and always at 640.
+    ws_grid_sites = (
+        (0x64F1E, "MEM8(DS_BASE + (edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(ebx, edx - ebx))"),
+        (0x64F26, "MEM8(DS_BASE + (edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(ebx, edx - ebx))"),
+        (0x6501A, "MEM8(DS_BASE + (edx + ebx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(ebx, edx))"),
+        (0x8A9F0, "MEM8(DS_BASE + (ecx + esi + 0x376BF8))", "MEM8(GW_WS_GRID_EA(esi, ecx))"),
+        (0x8AA08, "MEM8(DS_BASE + (edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(edx - ecx, ecx))"),
+        (0x8ACAE, "MEM8(DS_BASE + (ecx + edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(ecx, edx))"),
+        (0x8ACCE, "MEM8(DS_BASE + (edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(edx - LO8(eax), LO8(eax)))"),
+        (0x99262, "MEM8(DS_BASE + (eax + 0x376BF8))", "MEM8(GW_WS_GRID_EA(eax - LO8(edx), LO8(edx)))"),
+        (0x99CB4, "MEM8(DS_BASE + (edi + eax + 0x376BF8))", "MEM8(GW_WS_GRID_EA(edi, eax))"),
+        (0x99CE6, "MEM8(DS_BASE + (eax + 0x376BF8))", "MEM8(GW_WS_GRID_EA(eax - edi, edi))"),
+        (0x9A845, "MEM8(DS_BASE + (ecx + edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(ecx, edx))"),
+        (0x9A865, "MEM8(DS_BASE + (edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(edx - LO8(eax), LO8(eax)))"),
+        (0x9B087, "MEM8(DS_BASE + (ecx + edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(ecx, edx))"),
+        (0x9B0A7, "MEM8(DS_BASE + (edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(edx - LO8(eax), LO8(eax)))"),
+        (0x7C50C, "MEM8(DS_BASE + (edx + eax + 0x376BF8))", "MEM8(GW_WS_GRID_EA(eax, edx))"),
+        (0x7C566, "MEM8(DS_BASE + (edx + eax + 0x376BF8))", "MEM8(GW_WS_GRID_EA(eax, edx))"),
+        (0x7C526, "MEM8(DS_BASE + (esi + eax + 0x376BE4))", "MEM8(GW_WS_GRID_EA(eax - 20u, esi))"),
+        (0x7C54B, "MEM8(DS_BASE + (edx + eax + 0x376BE4))", "MEM8(GW_WS_GRID_EA(eax - 20u, edx))"),
+    )
+    if ws_applied:
+        for site, old_ea, new_ea in ws_grid_sites:
+            marker = f"if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;"
+            if text.count(marker) != 1:
+                if lifted_function_containing(site) is None:
+                    continue
+                raise SystemExit(f"widescreen grid site 0x{site:08X}: expected one instruction marker, got {text.count(marker)}")
+            start = text.index(marker) + len(marker)
+            end = text.find("if (!gw_recomp_guest_instruction(", start)
+            block = text[start:end]
+            if old_ea not in block:
+                raise SystemExit(f"widescreen grid site 0x{site:08X}: address {old_ea} not in its instruction")
+            text = text[:start] + block.replace(old_ea, new_ea) + text[end:]
+            ws_applied += 1
     # Phase 4: the ring scroll routines take every 640 literal as the surface width (ring wrap, y*640 rows,
     # window widths); exact at 640.
     if ws_applied:
@@ -3379,6 +3418,11 @@ if partial:
         ws_support = (
             "\n/* True widescreen support (tools/lift_entry_path.py widescreen_rules). */\n"
             "uint32_t g_gw_ws_strip_ext = 0u;\n"
+            "uint32_t g_gw_ws_grid_ext = 0u;   /* cell-grid columns 20..26 (7 x 15 bytes), 0 at 640 */\n"
+            "#define GW_WS_GRID_W (g_gw_ws_grid_ext ? 864u : 0x280u)\n"
+            "#define GW_WS_GRID_EA(row20, col) ((g_gw_ws_grid_ext && (uint32_t)(col) - 20u < 7u && (uint32_t)(row20) < 300u) ? \\\n"
+            "    (uint32_t)(g_gw_ws_grid_ext + ((uint32_t)(row20) / 20u) * 7u + ((uint32_t)(col) - 20u)) : \\\n"
+            "    (uint32_t)(DS_BASE + ((uint32_t)(row20) + (uint32_t)(col) + 0x376BF8u)))\n"
             "uint32_t g_gw_ws_drawpool = 0u;   /* guest address of the widescreen draw-list pool, 0 at 640 */\n"
             "uint32_t g_gw_drawlist_full = 0u; /* inserts 0x78B30 dropped because the draw list was full */\n"
             "#define GW_WS_DRAWPOOL_ENTRIES 1024u\n"
