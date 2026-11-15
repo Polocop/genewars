@@ -16966,12 +16966,28 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
             memcpy(orow,row,128u);
             for(uint32_t x=128u;x<176u;x++) {
                 uint32_t at=0; const int bg_ok=ring_ok && ws_ring_source(memory,GW_CANVAS_W,GW_CANVAS_H,x,y,&at);
-                static uint8_t panel_val[480u*48u],panel_have[480u*48u];
+                /* Panel art never follows the map: counted over the frames where the map colour under the pixel
+                   changed, a panel pixel differs from it (nearly) every time, a map pixel (terrain, a plant, a
+                   building) only while a sprite covers it. Until 8 such samples exist: differs now, or still has
+                   the colour it had when it last differed. */
+                static uint8_t panel_val[480u*48u],panel_have[480u*48u],ring_last[480u*48u];
+                static uint16_t samples[480u*48u],diffs[480u*48u];
                 const uint32_t pi=y*48u+(x-128u);
-                if(SDL_AtomicGet(&g_canvas_panel_reset)) { memset(panel_have,0,sizeof panel_have); SDL_AtomicSet(&g_canvas_panel_reset,0); }
-                int panel=bg_ok && row[x]!=memory[ring+at];
-                if(panel) { panel_val[pi]=row[x]; panel_have[pi]=1u; }
-                else if(panel_have[pi] && row[x]==panel_val[pi]) panel=1;
+                if(SDL_AtomicGet(&g_canvas_panel_reset)) {
+                    memset(panel_have,0,sizeof panel_have); memset(samples,0,sizeof samples); memset(diffs,0,sizeof diffs);
+                    SDL_AtomicSet(&g_canvas_panel_reset,0);
+                }
+                const uint8_t rv=bg_ok?memory[ring+at]:0u;
+                int panel=bg_ok && row[x]!=rv;
+                if(bg_ok && rv!=ring_last[pi]) {
+                    ring_last[pi]=rv; samples[pi]++; diffs[pi]+=(uint16_t)panel;
+                    if(samples[pi]>=1000u) { samples[pi]/=2u; diffs[pi]/=2u; }
+                }
+                if(samples[pi]>=8u) panel=diffs[pi]*10u>=samples[pi]*9u;
+                else {
+                    if(panel) { panel_val[pi]=row[x]; panel_have[pi]=1u; }
+                    else if(panel_have[pi] && row[x]==panel_val[pi]) panel=1;
+                }
                 g_interactive_published_snapshot.canvas_panel[pi]=(uint8_t)panel;
                 orow[x]=panel?row[x]:win[x];
             }
