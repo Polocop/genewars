@@ -8159,6 +8159,7 @@ static SDL_Texture *g_interp_prev_texture,*g_interp_panel_texture;
 static uint8_t g_interp_panel_map[480*48];   /* x=128..175: 1 = seen changing while scrolling (map), 0 = panel */
 static uint32_t g_interp_panel_rgba[480*48],g_interp_panel_saved[480*48];
 static int g_interp_panel_active;
+static SDL_atomic_t g_interp_panel_reset;   /* set by the widescreen switch: relearn the panel mask from scratch */
 static char g_present_dump_path[900];
 static char g_present_burst_dir[700]; static unsigned g_present_burst_left,g_present_burst_index;   /* QA: stem burst_N */
 static uint8_t *g_interp_idx[2];      /* indexed map copies: [0] previous, [1] current, pitch 864 */
@@ -8258,7 +8259,12 @@ static void interp_new_frame(const gw_interactive_visual_snapshot *visual,const 
     }
     /* Panel mask for x=128..175: the map starts at x=128 (MapDisplay+0x1D), the panel art reaches x=175 only in
        some rows. A pixel there that changes while the view scrolls is map; one that never does is panel. */
-    if(g_interp_have_prev && g_interp_w_prev==g_interp_w_cur && (ring_dx || ring_dy)) {
+    /* Learned only on real scroll steps of the mission view (a registered shift of at most 64 px); screen
+       changes such as the options screen or a save load would mark the panel art as map. Cleared when the
+       widescreen surface is switched on or off. */
+    if(SDL_AtomicSet(&g_interp_panel_reset,0)) memset(g_interp_panel_map,0,sizeof g_interp_panel_map);
+    if(g_interp_have_prev && g_interp_w_prev==g_interp_w_cur && (g_interp_dx || g_interp_dy) &&
+       ring_dx>=-64 && ring_dx<=64 && ring_dy>=-64 && ring_dy<=64) {
         for(int y=0;y<480;y++) for(int x=128;x<176;x++)
             if(g_interp_idx[0][(size_t)y*864u+x]!=g_interp_idx[1][(size_t)y*864u+x]) g_interp_panel_map[y*48+(x-128)]=1u;
     }
@@ -16655,6 +16661,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         memset(memory+g_ws_live_grid,2u,128u); g_gw_ws_grid_ext=g_ws_live_grid;   /* all cells redrawn */
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback%c",10); }
         ws_live_viewport_gadget(memory,left,854u);
+        SDL_AtomicSet(&g_interp_panel_reset,1);
         g_ws_live_active=1;
         gw_flag_trace("TRACE widescreen on turn=%u surface=864x480 shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u));
     } else {
@@ -16664,6 +16671,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u; g_gw_ws_grid_ext=0u;
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
         ws_live_viewport_gadget(memory,*(const uint16_t *)(memory+map+0x1Du),640u);
+        SDL_AtomicSet(&g_interp_panel_reset,1);
         g_ws_live_active=0;
         gw_flag_trace("TRACE widescreen off turn=%u ifc=%08X pending=%08X\n",*(const uint32_t *)(memory+0x002F1472u),ifc,pending);
     }
