@@ -8156,7 +8156,9 @@ static int g_ws_canvas;
 static SDL_atomic_t g_canvas_panel_reset;
 static uint8_t g_hud_written[480u*48u],g_hud_val[480u*48u],g_hud_have[480u*48u];   /* panel art on x=128..175 */
 static uint32_t g_hud_ws; static int g_hud_watching;
-static void hud_watch_stop(void);   /* the widescreen switch: forget the kept panel colours */
+static void hud_watch_stop(void);
+void recomp_memory_diag_enable(int enabled);
+int recomp_memory_diag_enabled(void);   /* the widescreen switch: forget the kept panel colours */
 #define GW_CANVAS_W 1152u
 #define GW_CANVAS_H 640u
 #define GW_CANVAS_VX0 301
@@ -17270,8 +17272,6 @@ static void hud_watch_write(uint32_t va,recomp_segment_id seg,uint16_t sel,uint3
 }
 /* the memory diagnostic is on during the HUD pass only: block copies (rep movs, the panel blitters) then go through
    the checked access path and reach the observer as well */
-void recomp_memory_diag_enable(int enabled);
-int recomp_memory_diag_enabled(void);
 static int g_hud_diag_was;
 static void hud_watch_after_map(void) {
     if(!guest_memory || *(const uint32_t *)(guest_memory+0x00376A78u)!=GW_CANVAS_W || g_hud_watching) return;
@@ -17295,6 +17295,18 @@ static void ring_watch_write(uint32_t va,recomp_segment_id seg,uint16_t sel,uint
     gw_flag_trace("TRACE ring_watch va=%08X row=%u x=%u turn=%u%c",va,(lin-g_ws_live_ring)/GW_CANVAS_W,x,
         *(const uint32_t *)(guest_memory+0x002F1472u),10);
 }
+/* QA (GW_HUD_ENTRY_WATCH=1): from IFCMain entry until the canvas switch, which instructions write x=128..175 of the
+   640 WScreen (first 48 distinct, with a hit count at the switch) */
+static uint32_t g_hew_va[48],g_hew_n,g_hew_hits[48],g_hew_ws; static int g_hew_on;
+static void hud_entry_watch_write(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
+    (void)seg; (void)sel; (void)base; (void)user;
+    if(lin<g_hew_ws || lin>=g_hew_ws+640u*480u) return;
+    int hit=0;
+    for(uint32_t k=0;k<width;k++) { const uint32_t x=(lin-g_hew_ws+k)%640u; if(x>=128u && x<176u) { hit=1; break; } }
+    if(!hit) return;
+    for(unsigned i=0;i<g_hew_n;i++) if(g_hew_va[i]==va) { g_hew_hits[i]++; return; }
+    if(g_hew_n<48u) { g_hew_va[g_hew_n]=va; g_hew_hits[g_hew_n++]=1u; }
+}
 static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
     if(!g_ws_requested || !memory || !parked) return;
     const uint32_t ifc=*(const uint32_t *)(memory+0x002EF7E8u),pending=*(const uint32_t *)(memory+0x002EF7ECu);
@@ -17305,6 +17317,18 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
        640-pitch rows in the HUD-side columns */
     {   static unsigned stable;
         stable=want?stable+1u:0u;
+        if(g_ws_canvas && !g_ws_live_active) {
+            const char *hw=getenv("GW_HUD_ENTRY_WATCH");
+            if(hw && hw[0]=='1' && ifc==0x0035FE9Au && !g_hew_on) {
+                g_hew_ws=*(const uint32_t *)(memory+0x00376A5Cu); g_hew_n=0u; g_hew_on=1;
+                recomp_set_guest_write_observer(hud_entry_watch_write,NULL); recomp_memory_diag_enable(1);
+                gw_flag_trace("TRACE hud_entry_watch on turn=%u pending=%08X%c",*(const uint32_t *)(memory+0x002F1472u),pending,10);
+            }
+            if(g_hew_on && want && stable>=8u) {
+                recomp_set_guest_write_observer(NULL,NULL); recomp_memory_diag_enable(0); g_hew_on=0;
+                for(unsigned i=0;i<g_hew_n;i++) gw_flag_trace("TRACE hud_entry_watch va=%08X hits=%u%c",g_hew_va[i],g_hew_hits[i],10);
+            }
+        }
         if(g_ws_canvas && want && !g_ws_live_active && stable<8u) want=0; }
     if(want==g_ws_live_active) return;
     /* the draw list is filled by the simulation and emptied by draw_game in the same tick; switch its pool only
