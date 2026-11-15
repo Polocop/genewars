@@ -3279,7 +3279,11 @@ if partial:
                       (0x1C927, "ecx"), (0x1C92A, "edx")):
         ws_rule(f"{reg} = {reg} << 7u; /* 0x{site:08X}: shl {reg}, 7 */",
                 f"{reg} = GW_WS_ROWS_TIMES_WIDTH({reg}); /* 0x{site:08X}: (5*y) << 7 = y*640 -> y*width */")
-    # strips 20..26 propagate into grid columns 20..26 (GW_WS_GRID_EA, below) like strips 0..19
+    # strips 20..26 propagate into grid columns 20..26 (GW_WS_GRID_EA, below) like strips 0..19 when those columns
+    # exist (live widescreen); without them (snapshot probes) they must not reach the 20-column grid
+    ws_rule("    recomp_begin_memory_access_ex(RECOMP_SEG_SS, 1u, 0x0007C489u, RECOMP_MEM_ACCESS_READ, 105u, \"cmp\");",
+            "    if (!g_gw_ws_grid_ext && MEM8(SS_BASE + (esp + 8)) >= 20u) goto L_0007C57C; /* 0x0007C489: no grid column for this strip */\n"
+            "    recomp_begin_memory_access_ex(RECOMP_SEG_SS, 1u, 0x0007C489u, RECOMP_MEM_ACCESS_READ, 105u, \"cmp\");")
     # Per-frame draw list (0x78B30 inserts, 0x79100/0x79320 walk it): a 256-entry pool of 10-byte entries at
     # MapDisplay+0x3B, linked by index, count at +0x11BB. At 854 px more Things are on screen than fit, and
     # 0x78B30 silently drops the rest (plants and buildings vanish). In widescreen the pool base moves to a
