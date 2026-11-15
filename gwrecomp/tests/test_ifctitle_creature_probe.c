@@ -8293,35 +8293,118 @@ static SDL_Rect ifclevel_presentation_rect(void) {
     return rect;
 }
 
+/* Output geometry of the presented frame (GPU only; the guest keeps drawing 640x480 or 854x480). The frame is
+   composed into a render target at an integer multiple k of the logical size with nearest sampling, then copied to
+   the window:
+     * output height an exact multiple of 480 (1440p: 3x) and the logical width fitting within one logical pixel
+       per side: k = height/480 and a 1:1 copy, cropping the overhang (854x3 = 2562 in 2560) or pillarboxing a
+       narrower frame (640x3 = 1920 centred in 2560);
+     * otherwise (2160p: 4.5x, 1080p: 2.25x) sharp bilinear: k = floor(scale) (at least 2) and one linear
+       resample of that target to the fitted rectangle, which keeps edges crisp without the shimmer of a
+       non-integer nearest scale.
+   The mouse is mapped back through the same geometry. */
+/* --res <WxH|900p|1080p|1440p|2160p> and --fullscreen (borderless at the desktop resolution) */
+static int g_cli_res_w,g_cli_res_h,g_cli_fullscreen;
+static int parse_cli_resolution(const char *v) {
+    static const struct { const char *name; int w,h; } named[]={
+        {"900p",1600,900},{"1080p",1920,1080},{"1440p",2560,1440},{"2160p",3840,2160},{"4k",3840,2160},{"4K",3840,2160}};
+    for(unsigned i=0;i<sizeof named/sizeof named[0];i++)
+        if(!strcmp(v,named[i].name)) { g_cli_res_w=named[i].w; g_cli_res_h=named[i].h; return 1; }
+    int w=0,h=0; char x=0;
+    if(sscanf(v,"%d%c%d",&w,&x,&h)==3 && (x=='x'||x=='X') && w>=640 && h>=480 && w<=8192 && h<=8192) {
+        g_cli_res_w=w; g_cli_res_h=h; return 1; }
+    return 0;
+}
+/* Window size in physical pixels (the process is per-monitor DPI aware): the default sizes are scaled by the
+   monitor's DPI so the window keeps its usual size on screen, now rendered at full resolution. */
+static double play_window_dpi_scale(void) {
+    float ddpi=0.f,hdpi=0.f,vdpi=0.f;
+    if(SDL_GetDisplayDPI(0,&ddpi,&hdpi,&vdpi)==0 && hdpi>=96.f && hdpi<=480.f) return hdpi/96.0;
+    return 1.0;
+}
+static void play_window_default_size(int base_w,int base_h,int *w,int *h) {
+    const double sc=play_window_dpi_scale();
+    *w=(int)(base_w*sc+0.5); *h=(int)(base_h*sc+0.5);
+    SDL_Rect usable;
+    if(SDL_GetDisplayUsableBounds(0,&usable)==0 && usable.w>0 && usable.h>0 && (*w>usable.w || *h>usable.h)) {
+        const double fx=usable.w*0.95/ *w,fy=usable.h*0.95/ *h,f=fx<fy?fx:fy;
+        *w=(int)(*w*f); *h=(int)(*h*f);
+    }
+}
+typedef struct { int k,tw,th,lw,ow,oh,nearest; SDL_Rect src,dst; } gw_present_geo;
+static int present_geo_compute(int ow,int oh,int lw,gw_present_geo *g) {
+    if(!g || ow<=0 || oh<=0 || lw<=0) return 0;
+    memset(g,0,sizeof *g); g->lw=lw; g->ow=ow; g->oh=oh;
+    const int kh=oh/480;
+    if(oh%480==0 && kh>=1 && lw*kh<=ow+2*kh && lw*kh<=8192) {
+        g->k=kh; g->tw=lw*kh; g->th=oh; g->nearest=1;
+        if(g->tw>ow) { g->src=(SDL_Rect){(g->tw-ow)/2,0,ow,g->th}; g->dst=(SDL_Rect){0,0,ow,oh}; }
+        else { g->src=(SDL_Rect){0,0,g->tw,g->th}; g->dst=(SDL_Rect){(ow-g->tw)/2,0,g->tw,g->th}; }
+        return 1;
+    }
+    const double sx=(double)ow/lw,sy=(double)oh/480.0,sc=sx<sy?sx:sy;
+    int k=(int)sc; if(k<2) k=2; while(k>1 && (lw*k>8192 || 480*k>8192)) k--;
+    g->k=k; g->tw=lw*k; g->th=480*k;
+    g->src=(SDL_Rect){0,0,g->tw,g->th};
+    g->dst.w=(int)(lw*sc+0.5); g->dst.h=(int)(480.0*sc+0.5);
+    if(g->dst.w>ow) g->dst.w=ow;
+    if(g->dst.h>oh) g->dst.h=oh;
+    g->dst.x=(ow-g->dst.w)/2; g->dst.y=(oh-g->dst.h)/2;
+    g->nearest=g->dst.w==g->tw && g->dst.h==g->th;
+    return 1;
+}
+static int present_output_size(int *ow,int *oh) {
+    *ow=0; *oh=0;
+    if(g_ifclevel_demo_renderer && SDL_GetRendererOutputSize(g_ifclevel_demo_renderer,ow,oh)==0 && *ow>0 && *oh>0) return 1;
+    if(g_ifclevel_demo_window) SDL_GetWindowSize(g_ifclevel_demo_window,ow,oh);
+    return *ow>0 && *oh>0;
+}
+/* logical (guest) coordinates -> output pixels, and back */
+static void present_logical_to_output(const gw_present_geo *g,double lx,double ly,double *ox,double *oy) {
+    *ox=g->dst.x+(lx*g->k-g->src.x)*(double)g->dst.w/(double)g->src.w;
+    *oy=g->dst.y+(ly*g->k-g->src.y)*(double)g->dst.h/(double)g->src.h;
+}
+static void present_output_to_logical(const gw_present_geo *g,double ox,double oy,double *lx,double *ly) {
+    *lx=(g->src.x+(ox-g->dst.x)*(double)g->src.w/(double)g->dst.w)/g->k;
+    *ly=(g->src.y+(oy-g->dst.y)*(double)g->src.h/(double)g->dst.h)/g->k;
+}
+/* window coordinates (as SDL mouse events report them) -> output pixels */
+static void present_window_to_output(int wx,int wy,int ow,int oh,double *ox,double *oy) {
+    int ww=ow,wh=oh; if(g_ifclevel_demo_window) SDL_GetWindowSize(g_ifclevel_demo_window,&ww,&wh);
+    if(ww<=0) ww=ow;
+    if(wh<=0) wh=oh;
+    *ox=((double)wx+0.5)*ow/ww; *oy=((double)wy+0.5)*oh/wh;
+}
+
 static int map_interactive_window_to_game(int wx,int wy,int *gx,int *gy) {
     if(!g_ifclevel_demo_window || !gx || !gy) return 0;
     if(g_terrain_modern_backend) return terrain_window_to_guest_hud(wx,wy,gx,gy);
-    int ww=1,wh=1; SDL_GetWindowSize(g_ifclevel_demo_window,&ww,&wh);
-    if(ww<=0 || wh<=0) return 0;
     if(!gw_video_surface_valid(&g_ifclevel_guest_surface)) return 0;
-    const double sx=(double)ww/g_ifclevel_guest_surface.width;
-    const double sy=(double)wh/g_ifclevel_guest_surface.height;
-    const double scale=sx<sy?sx:sy;
-    gw_video_rect output={0,0,(int)(g_ifclevel_guest_surface.width*scale),
-        (int)(g_ifclevel_guest_surface.height*scale)};
-    output.x=(ww-output.w)/2; output.y=(wh-output.h)/2;
-    return gw_video_window_to_surface(wx,wy,ww,wh,output,&g_ifclevel_guest_surface,gx,gy);
+    int ow=0,oh=0; gw_present_geo g;
+    if(!present_output_size(&ow,&oh) || !present_geo_compute(ow,oh,g_ifclevel_guest_surface.width,&g)) return 0;
+    double ox=0,oy=0,lx=0,ly=0; present_window_to_output(wx,wy,ow,oh,&ox,&oy);
+    /* a point in the letterbox/pillarbox is outside the frame; up to 4 output pixels around the frame (the
+       rounding of a fitted rectangle) still count, clamped to the edge, so edge scrolling reaches x=W-1, y=0, 479 */
+    if(ox<g.dst.x-4 || oy<g.dst.y-4 || ox>=g.dst.x+g.dst.w+4 || oy>=g.dst.y+g.dst.h+4) return 0;
+    present_output_to_logical(&g,ox,oy,&lx,&ly);
+    int x=lx<0.0?-1:(int)lx,y=ly<0.0?-1:(int)ly;   /* clamped below */
+    const int lw=g_ifclevel_guest_surface.width;
+    if(x<0) x=0;
+    if(x>lw-1) x=lw-1;
+    if(y<0) y=0;
+    if(y>479) y=479;
+    *gx=x; *gy=y; return 1;
 }
 
 static int map_interactive_game_to_window(int gx,int gy,int *wx,int *wy) {
     if(!g_ifclevel_demo_window || !wx || !wy ||
        gx<0 || gy<0 || gx>=g_ifclevel_guest_surface.width || gy>=g_ifclevel_guest_surface.height)
         return 0;
-    int ww=1,wh=1; SDL_GetWindowSize(g_ifclevel_demo_window,&ww,&wh);
-    if(ww<=0 || wh<=0 || !gw_video_surface_valid(&g_ifclevel_guest_surface)) return 0;
-    const double sx=(double)ww/g_ifclevel_guest_surface.width;
-    const double sy=(double)wh/g_ifclevel_guest_surface.height;
-    const double scale=sx<sy?sx:sy;
-    const int out_w=(int)(g_ifclevel_guest_surface.width*scale);
-    const int out_h=(int)(g_ifclevel_guest_surface.height*scale);
-    const int out_x=(ww-out_w)/2,out_y=(wh-out_h)/2;
-    *wx=out_x+(int)((int64_t)gx*out_w/g_ifclevel_guest_surface.width);
-    *wy=out_y+(int)((int64_t)gy*out_h/g_ifclevel_guest_surface.height);
+    int ow=0,oh=0; gw_present_geo g;
+    if(!present_output_size(&ow,&oh) || !present_geo_compute(ow,oh,g_ifclevel_guest_surface.width,&g)) return 0;
+    double ox=0,oy=0; present_logical_to_output(&g,gx+0.5,gy+0.5,&ox,&oy);
+    int ww=ow,wh=oh; SDL_GetWindowSize(g_ifclevel_demo_window,&ww,&wh);
+    *wx=(int)(ox*ww/ow); *wy=(int)(oy*wh/oh);
     return 1;
 }
 
@@ -8604,13 +8687,24 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         /* --play starts in the original 4:3 frame (same size F6 selects), so
            all four map edges are reachable for the original edge scrolling. */
         if(g_cli_play_mode) g_interactive_widescreen=0;
-        const int initial_w=g_interactive_demo_mode?(g_interactive_widescreen?1600:1200):960;
-        const int initial_h=g_interactive_demo_mode?900:720;
+        int initial_w=g_interactive_demo_mode?(g_interactive_widescreen?1600:1200):960;
+        int initial_h=g_interactive_demo_mode?900:720;
+        Uint32 window_flags=SDL_WINDOW_SHOWN|SDL_WINDOW_RESIZABLE|SDL_WINDOW_ALLOW_HIGHDPI;
+        if(g_cli_play_mode) {
+            SDL_Rect desk={0,0,0,0}; (void)SDL_GetDisplayBounds(0,&desk);
+            if(g_cli_res_w) { initial_w=g_cli_res_w; initial_h=g_cli_res_h; }
+            else play_window_default_size(initial_w,initial_h,&initial_w,&initial_h);
+            /* a requested size that fills (or exceeds) the monitor becomes borderless fullscreen */
+            if(g_cli_res_w && desk.w>0 && (g_cli_res_w>=desk.w || g_cli_res_h>=desk.h)) g_cli_fullscreen=1;
+            if(g_cli_fullscreen) window_flags|=SDL_WINDOW_FULLSCREEN_DESKTOP;
+            fprintf(stderr,"TRACE play_window request=%dx%d fullscreen=%d desktop=%dx%d dpi_scale=%.2f
+",
+                initial_w,initial_h,g_cli_fullscreen,desk.w,desk.h,play_window_dpi_scale());
+        }
         g_ifclevel_demo_window=SDL_CreateWindow(g_terrain_modern_backend?
             "GeneWars - Experimental Live Terrain (map clicks disabled)":
             "GeneWars Native Recompilation - Interactive Demo",
-            SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,initial_w,initial_h,
-            SDL_WINDOW_SHOWN|SDL_WINDOW_RESIZABLE|SDL_WINDOW_ALLOW_HIGHDPI);
+            SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,initial_w,initial_h,window_flags);
         /* --play draws the guest pointer when its sprite is available.  Keep
            the host cursor available as a fallback on interfaces (notably the
            title screen) that do not publish a guest cursor sprite. */
@@ -8908,8 +9002,29 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             g_interactive_capture_done=1;
         }
     }
-    const SDL_Rect dst=g_interactive_demo_mode?ifclevel_presentation_rect():(SDL_Rect){0,0,640,480};
+    SDL_Rect dst=g_interactive_demo_mode?ifclevel_presentation_rect():(SDL_Rect){0,0,640,480};
     const uint64_t hp_copy0=SDL_GetPerformanceCounter();
+    /* GPU scaling (see present_geo_compute): compose into the k-times render target, copy it to the window below */
+    static SDL_Texture *scale_target; static int scale_target_w,scale_target_h,scale_target_failed;
+    gw_present_geo geo; int scaled=0;
+    if(g_interactive_demo_mode && !g_terrain_modern_backend && !scale_target_failed) {
+        int ow=0,oh=0;
+        if(present_output_size(&ow,&oh) && present_geo_compute(ow,oh,g_present_w,&geo)) {
+            if(!scale_target || scale_target_w!=geo.tw || scale_target_h!=geo.th) {
+                if(scale_target) SDL_DestroyTexture(scale_target);
+                scale_target=SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_TARGET,geo.tw,geo.th);
+                scale_target_w=geo.tw; scale_target_h=geo.th;
+                if(!scale_target) { scale_target_failed=1; fprintf(stderr,"TRACE present_scale target %dx%d failed: %s
+",geo.tw,geo.th,SDL_GetError()); }
+                else gw_flag_trace("TRACE present_scale output=%dx%d logical=%dx480 k=%d target=%dx%d src=%d,%d,%d,%d dst=%d,%d,%d,%d filter=%s%c",
+                    ow,oh,g_present_w,geo.k,geo.tw,geo.th,geo.src.x,geo.src.y,geo.src.w,geo.src.h,geo.dst.x,geo.dst.y,geo.dst.w,geo.dst.h,
+                    geo.nearest?"nearest(1:1)":"sharp-bilinear",10);
+            }
+            if(scale_target && SDL_SetRenderTarget(g_ifclevel_demo_renderer,scale_target)==0) {
+                scaled=1; dst=(SDL_Rect){0,0,geo.tw,geo.th};
+            }
+        }
+    }
     if(SDL_RenderClear(g_ifclevel_demo_renderer)!=0) {
         fprintf(stderr,"SDL demo present: %s\n",SDL_GetError()); return 0;
     }
@@ -9012,6 +9127,16 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
         if(!map_ok) { fprintf(stderr,"SDL interpolated terrain copy: %s\n",SDL_GetError()); return 0; }
     }
+    if(scaled) {
+        SDL_SetRenderTarget(g_ifclevel_demo_renderer,NULL);
+        if(SDL_RenderClear(g_ifclevel_demo_renderer)!=0 ||
+           SDL_SetTextureScaleMode(scale_target,geo.nearest?SDL_ScaleModeNearest:SDL_ScaleModeLinear)!=0 ||
+           SDL_RenderCopy(g_ifclevel_demo_renderer,scale_target,&geo.src,&geo.dst)!=0) {
+            fprintf(stderr,"SDL scaled present: %s
+",SDL_GetError()); return 0;
+        }
+        dst=geo.dst;
+    }
     g_interactive_present_content_valid=0;
     g_interactive_present_content_hash=0u;
     if(g_interactive_demo_mode && g_interactive_pixel_trace_enabled) {
@@ -9110,12 +9235,29 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 pointer_rgba[y*64u+x]=value;
             }
             SDL_UpdateTexture(pointer_texture,NULL,pointer_rgba,64*(int)sizeof(uint32_t));
+            if(scaled) {
+                /* drawn on the output after the scaled copy: size from the frame scale, position from the real
+                   mouse in output pixels when it is the pointer the guest has (same logical pixel), so it moves
+                   at the monitor's resolution; otherwise from the guest position */
+                const double sc=geo.k*(double)geo.dst.w/(double)geo.src.w;
+                double ox=0,oy=0; present_logical_to_output(&geo,(double)ptr_x,(double)ptr_y,&ox,&oy);
+                int mx=0,my=0;
+                if(SDL_GetMouseFocus()==g_ifclevel_demo_window) {
+                    (void)SDL_GetMouseState(&mx,&my);
+                    double mox=0,moy=0,lx=0,ly=0; present_window_to_output(mx,my,geo.ow,geo.oh,&mox,&moy);
+                    present_output_to_logical(&geo,mox,moy,&lx,&ly);
+                    if((int)lx==ptr_x && (int)ly==ptr_y) { ox=mox; oy=moy; }
+                }
+                const SDL_FRect pointer_dst={(float)(ox+ptr_hot_x*sc),(float)(oy+ptr_hot_y*sc),(float)(64*sc),(float)(64*sc)};
+                SDL_RenderCopyF(g_ifclevel_demo_renderer,pointer_texture,NULL,&pointer_dst);
+            } else {
             const double sx=(double)dst.w/(double)g_present_w,sy=(double)dst.h/480.0;
             const int px=ptr_x+ptr_hot_x;
             const int py=ptr_y+ptr_hot_y;
             SDL_Rect pointer_dst={dst.x+(int)(px*sx),dst.y+(int)(py*sy),
                 (int)(64*sx+0.5),(int)(64*sy+0.5)};
             SDL_RenderCopy(g_ifclevel_demo_renderer,pointer_texture,NULL,&pointer_dst);
+            }
         }
     }
     if(!g_present_dump_path[0] && g_present_burst_left) {
@@ -15706,8 +15848,10 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
                    consumed here and never mutate original game globals. */
                 if(ev.key.keysym.sym==SDLK_F6) {
                     g_interactive_widescreen=!g_interactive_widescreen;
-                    SDL_SetWindowSize(g_ifclevel_demo_window,
-                        g_interactive_widescreen?1600:1200,900);
+                    if(!g_cli_fullscreen) {
+                        int fw=0,fh=0; play_window_default_size(g_interactive_widescreen?1600:1200,900,&fw,&fh);
+                        SDL_SetWindowSize(g_ifclevel_demo_window,fw,fh);
+                    }
                     SDL_SetWindowPosition(g_ifclevel_demo_window,
                         SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED);
                 } else {
@@ -17673,6 +17817,8 @@ static void play_mode_sanitize_environment(void) {
 int main(int argc,char **argv) {
     gw_recomp_dispatch_hits_reset();
     for(int ai=4;ai<argc;ai++) if(!strcmp(argv[ai],"--play")) g_cli_play_mode=1;
+    /* per-monitor DPI awareness before SDL_Init: Windows must not bitmap-stretch (blur) a 1440p/4K window */
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS,"permonitorv2");
     { const char *ws_env=getenv("GW_WIDESCREEN"); if(ws_env && ws_env[0]=='1') g_ws_requested=1; }
     /* The startup replay writes its evidence files under ./evidence and aborts (exit 112) when
        that directory is missing; a player launch from any working directory must not depend on it. */
@@ -17686,6 +17832,8 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[ai],"--skip-intro")) g_cli_skip_intro=1;
         else if(!strcmp(argv[ai],"--order-log")) g_cli_order_log=1;
         else if(!strcmp(argv[ai],"--widescreen")) g_ws_requested=1;
+        else if(!strcmp(argv[ai],"--fullscreen")) g_cli_fullscreen=1;
+        else if(!strcmp(argv[ai],"--res") && ai+1<argc) { if(!parse_cli_resolution(argv[++ai])) return 2; }
         else if(!strcmp(argv[ai],"--level") && ai+1<argc) {
             char *end=NULL; unsigned long n=strtoul(argv[++ai],&end,10);
             if(!end || *end || n<1ul || n>24ul) return 2;
