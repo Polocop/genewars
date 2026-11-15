@@ -14551,10 +14551,22 @@ static void ws_band_copy_impl(void) {
     int rx0=(640-left)+(ring_x-left); rx0%=ring_w; if(rx0<0) rx0+=ring_w;
     const uint32_t band=width-640u;
     const uint32_t first=(uint32_t)(ring_w-rx0)<band?(uint32_t)(ring_w-rx0):band;
+    const uint8_t *grid=(g_gw_ws_grid_ext && g_gw_ws_grid_ext<=GUEST_LIMIT-105u && width==864u)?m+g_gw_ws_grid_ext:NULL;
     for(uint32_t y=0;y<height;y++) {
         int ry=((int)y+ring_y)%(int)height; if(ry<0) ry+=(int)height;
         const uint8_t *src=m+ring+(uint32_t)ry*width+(uint32_t)left;
         uint8_t *dst=m+ws+y*width+640u;
+        if(grid) {
+            /* like 0x1CAE0 for columns 0..19: restore only the 32x32 cells marked in grid columns 20..26, so
+               sprites the game drew in unmarked cells stay on the screen (it redraws a sprite only when one of
+               its cells is marked) */
+            const uint8_t *row=grid+(y>>5)*7u;
+            for(uint32_t c=0;c<7u;c++) {
+                if(!row[c]) continue;
+                for(uint32_t x=c*32u;x<c*32u+32u;x++) dst[x]=src[((uint32_t)rx0+x)%(uint32_t)ring_w];
+            }
+            continue;
+        }
         memcpy(dst,src+rx0,first);
         if(first<band) memcpy(dst+first,src,band-first);
     }
