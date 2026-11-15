@@ -7902,6 +7902,11 @@ typedef struct gw_interactive_visual_snapshot {
     int16_t ring_x,ring_y,ring_left; /* MapDisplay +0x08/+0x0A/+0x1D: the view's ring scroll offsets */
     uint8_t panel_bg[480u*48u];      /* map background (from the ring) under x=128..175, to tell panel art from map */
     int panel_bg_valid;
+    int ring_w,ring_h;               /* ring wrap (W - left, H) */
+    /* zoom-out canvas (--zoomout): the whole 1152x640 WScreen; wscreen above is then the 854x480 view built from it
+       (HUD x<128 and the panel art at x=128..175 from the canvas, the map from the 1x window) */
+    uint8_t canvas[1152u*640u];
+    int canvas_valid;
     uint64_t generation;
     uint64_t captured_at;
     int valid;
@@ -8142,6 +8147,17 @@ static int terrain_window_to_guest_hud(int wx,int wy,int *gx,int *gy) {
 /* True widescreen (GW_WIDESCREEN=1 / --widescreen): presented width and source pitch of the current frame.
    640/640 by default; 854/864 while the game IFC runs on the widened surface. */
 static int g_ws_requested;
+/* --zoomout (GW_ZOOMOUT=1, implies --widescreen): the game draws a 1152x640 canvas (36 strips x 20 cell rows); the
+   host shows its HUD (x<128, y<480) at 1x and the map as a movable/zoomable window on the canvas. At zoom 1.0 that
+   window is the 726x480 area of the 854x480 widescreen view, at (GW_CANVAS_VX0, GW_CANVAS_VY0); zoom down to 0.75
+   shows 968x640. Canvas columns 128..175 carry the panel art, so the visible map starts at x=176. */
+static int g_ws_canvas;
+#define GW_CANVAS_W 1152u
+#define GW_CANVAS_H 640u
+#define GW_CANVAS_VX0 301
+#define GW_CANVAS_VY0 80
+#define GW_CANVAS_MAPX0 176
+#define GW_ZOOM_MIN_CANVAS 0.75
 static int g_present_w=640,g_present_pitch=640;
 /* Host presentation breakdown (main thread, GW_TICK_PROFILE), reported every 10 s: palette conversion + texture
    upload, render copies (frame + pointer), SDL_RenderPresent, pacing wait. */
@@ -8165,6 +8181,10 @@ static int g_grab_user_off,g_grab_state;
    logical pixels and is g_zoom times larger on screen; the HUD stays at 1x */
 static double g_zoom=1.0,g_zoom_target=1.0,g_zoom_x,g_zoom_y,g_zoom_ax,g_zoom_ay,g_zoom_px,g_zoom_py;
 static int g_zoom_anim; static uint64_t g_zoom_t;
+/* zoom-out canvas: map texture of canvas x=176..1151, y=0..639 (current and previous guest frame, for the
+   scroll interpolation); g_canvas_live while the presented frame came from the canvas */
+static SDL_Texture *g_canvas_tex[2]; static int g_canvas_live,g_canvas_tex_ready;
+#define GW_CANVAS_TEX_W (1152-176)
 /* F7 display filter: 0 sharp pixels, 1 EPX (Scale2x on palette indices), 2 CRT mask; saved in gw_display.cfg */
 static int g_filter_mode=-1,g_tex_scale=1;
 static int host_turbo_factor(void) {
@@ -8275,11 +8295,12 @@ static void interp_new_frame(const gw_interactive_visual_snapshot *visual,const 
     g_interp_t_prev=g_interp_t_cur; g_interp_t_cur=visual->captured_at;
     g_interp_dx=g_interp_dy=0;
     int ring_dx=0,ring_dy=0;
-    {   const int ring_w=(g_present_w==854?864:640)-visual->ring_left;
+    {   const int ring_w=visual->ring_w>0?visual->ring_w:(g_present_w==854?864:640)-visual->ring_left;
+        const int ring_h=visual->ring_h>0?visual->ring_h:480;
         if(g_interp_have_prev && ring_w>0) {
             int rx=visual->ring_x-g_interp_ring_x,ry=visual->ring_y-g_interp_ring_y;
             rx%=ring_w; if(rx>ring_w/2) rx-=ring_w; if(rx<-ring_w/2) rx+=ring_w;
-            ry%=480; if(ry>240) ry-=480; if(ry<-240) ry+=480;
+            ry%=ring_h; if(ry>ring_h/2) ry-=ring_h; if(ry<-ring_h/2) ry+=ring_h;
             ring_dx=rx; ring_dy=ry;
         }
         g_interp_ring_x=visual->ring_x; g_interp_ring_y=visual->ring_y;
@@ -8427,7 +8448,21 @@ static int map_interactive_window_to_game(int wx,int wy,int *gx,int *gy) {
     present_output_to_logical(&g,ox,oy,&lx,&ly);
     /* GPU zoom: points on the map viewport map through the visible sub-rectangle. Panel art at x=128..175 and the
        outermost pixels of the frame (right, top, bottom: the original edge-scroll columns/rows) stay unzoomed. */
-    if(g_zoom>1.0001 && lx>=128.0) {
+    int lw=g_ifclevel_guest_surface.width,lh=480;
+    if(g_canvas_live && lx>=128.0) {
+        /* zoom-out canvas: map points go through the window on the canvas; the outermost right/top/bottom pixels
+           of the frame reach the canvas edges (the game's edge scrolling tests x=W-1, y=0, y=H-1) */
+        const int lxi=(int)lx,lyi=ly<0.0?0:(ly>479.0?479:(int)ly);
+        const int panel=lxi<176 && g_interp_panel_active && (g_interp_panel_rgba[lyi*48+(lxi-128)]>>24)!=0u;
+        const int edge_r=ox>=g.dst.x+g.dst.w-3,edge_t=oy<=g.dst.y+2,edge_b=oy>=g.dst.y+g.dst.h-3;
+        lw=(int)GW_CANVAS_W; lh=(int)GW_CANVAS_H;
+        if(!panel) {
+            lx=edge_r?(double)(GW_CANVAS_W-1u):GW_CANVAS_VX0+g_zoom_x+(lx-128.0)/g_zoom;
+            ly=edge_t?0.0:edge_b?(double)(GW_CANVAS_H-1u):GW_CANVAS_VY0+g_zoom_y+ly/g_zoom;
+        }
+    } else if(g_canvas_live) {
+        lw=(int)GW_CANVAS_W; lh=(int)GW_CANVAS_H;   /* the HUD keeps its coordinates */
+    } else if(g_zoom>1.0001 && lx>=128.0) {
         const int lxi=(int)lx,lyi=ly<0.0?0:(ly>479.0?479:(int)ly);
         const int panel=lxi<176 && g_interp_panel_active && (g_interp_panel_rgba[lyi*48+(lxi-128)]>>24)!=0u;
         const int edge_r=ox>=g.dst.x+g.dst.w-3,edge_t=oy<=g.dst.y+2,edge_b=oy>=g.dst.y+g.dst.h-3;
@@ -8437,11 +8472,10 @@ static int map_interactive_window_to_game(int wx,int wy,int *gx,int *gy) {
         }
     }
     int x=lx<0.0?-1:(int)lx,y=ly<0.0?-1:(int)ly;   /* clamped below */
-    const int lw=g_ifclevel_guest_surface.width;
     if(x<0) x=0;
     if(x>lw-1) x=lw-1;
     if(y<0) y=0;
-    if(y>479) y=479;
+    if(y>lh-1) y=lh-1;
     *gx=x; *gy=y; return 1;
 }
 
@@ -8467,7 +8501,7 @@ static int host_window_logical(int wx,int wy,double *lx,double *ly,gw_present_ge
     return 1;
 }
 static void host_zoom_set_target(double target,double lx,double ly) {
-    if(target<1.0) target=1.0;
+    if(target<(g_canvas_live?GW_ZOOM_MIN_CANVAS:1.0)) target=g_canvas_live?GW_ZOOM_MIN_CANVAS:1.0;
     if(target>2.0) target=2.0;
     g_zoom_ax=lx; g_zoom_ay=ly;
     g_zoom_px=g_zoom_x+(lx-128.0)/g_zoom; g_zoom_py=g_zoom_y+ly/g_zoom;
@@ -8488,11 +8522,23 @@ static void host_zoom_tick(void) {
         if(d<0.002 && d>-0.002) { g_zoom=g_zoom_target; g_zoom_anim=0; }
         g_zoom_x=g_zoom_px-(g_zoom_ax-128.0)/g_zoom; g_zoom_y=g_zoom_py-g_zoom_ay/g_zoom;
     }
-    const double mw=(double)g_present_w-128.0,maxx=mw-mw/g_zoom,maxy=480.0-480.0/g_zoom;
+    const double mw=(double)g_present_w-128.0;
+    double minx=0.0,maxx=mw-mw/g_zoom,miny=0.0,maxy=480.0-480.0/g_zoom;
+    if(g_zoom<1.0) {
+        /* zoomed out (canvas): the window always contains the 1x area and stays inside canvas x>=176, y>=0 */
+        if(!g_canvas_live) { g_zoom=g_zoom_target=1.0; g_zoom_x=g_zoom_y=0.0; g_zoom_anim=0; return; }
+        const double vw=mw/g_zoom,vh=480.0/g_zoom;
+        minx=mw-vw; if(minx<(double)(GW_CANVAS_MAPX0-GW_CANVAS_VX0)) minx=(double)(GW_CANVAS_MAPX0-GW_CANVAS_VX0);
+        maxx=(double)GW_CANVAS_W-GW_CANVAS_VX0-vw; if(maxx>0.0) maxx=0.0;
+        miny=480.0-vh; if(miny<(double)-GW_CANVAS_VY0) miny=(double)-GW_CANVAS_VY0;
+        maxy=(double)GW_CANVAS_H-GW_CANVAS_VY0-vh; if(maxy>0.0) maxy=0.0;
+        if(minx>maxx) minx=maxx=(minx+maxx)*0.5;
+        if(miny>maxy) miny=maxy=(miny+maxy)*0.5;
+    }
     if(g_zoom_x>maxx) g_zoom_x=maxx;
-    if(g_zoom_x<0.0) g_zoom_x=0.0;
+    if(g_zoom_x<minx) g_zoom_x=minx;
     if(g_zoom_y>maxy) g_zoom_y=maxy;
-    if(g_zoom_y<0.0) g_zoom_y=0.0;
+    if(g_zoom_y<miny) g_zoom_y=miny;
 }
 /* window mouse grab while the mission map has the input and the window the focus (F10 turns it off/on) */
 static void host_grab_tick(void) {
@@ -8578,7 +8624,7 @@ static int host_controls_event(const SDL_Event *ev) {
         if(!host_window_logical(mx,my,&lx,&ly,NULL) || lx<128.0) return 1;
         double t=g_zoom_target;
         for(int i=0;i<(notches>0?notches:-notches);i++) t=notches>0?t*1.25:t/1.25;
-        if(t<1.03) t=1.0;
+        if(t>0.97 && t<1.03) t=1.0;
         host_zoom_set_target(t,lx,ly);
         return 1;
     }
@@ -9199,6 +9245,27 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             }
             if(panel_split) for(int y=0;y<480;y++) for(int x=0;x<48;x++)
                 g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+128u+(unsigned)x]=g_interp_panel_saved[y*48+x];
+            g_canvas_live=visual && visual->canvas_valid;
+            if(g_canvas_live) {
+                for(int i=0;i<2;i++) if(!g_canvas_tex[i]) {
+                    g_canvas_tex[i]=SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,
+                        SDL_TEXTUREACCESS_STREAMING,GW_CANVAS_TEX_W,(int)GW_CANVAS_H);
+                    if(g_canvas_tex[i]) SDL_SetTextureScaleMode(g_canvas_tex[i],SDL_ScaleModeLinear);
+                }
+                if(g_canvas_tex[0] && g_canvas_tex[1]) {
+                    SDL_Texture *t=g_canvas_tex[0]; g_canvas_tex[0]=g_canvas_tex[1]; g_canvas_tex[1]=t;   /* [0] previous, [1] current */
+                    void *tp=NULL; int tpitch=0;
+                    if(SDL_LockTexture(g_canvas_tex[1],NULL,&tp,&tpitch)==0 && tp) {
+                        for(int y=0;y<(int)GW_CANVAS_H;y++) {
+                            const uint8_t *row=visual->canvas+(size_t)y*GW_CANVAS_W+176u;
+                            uint32_t *o=(uint32_t *)((uint8_t *)tp+(size_t)y*(size_t)tpitch);
+                            for(int x=0;x<GW_CANVAS_TEX_W;x++) o[x]=lut[row[x]];
+                        }
+                        SDL_UnlockTexture(g_canvas_tex[1]);
+                        g_canvas_tex_ready=g_canvas_tex_ready<2?g_canvas_tex_ready+1:2;
+                    }
+                }
+            } else g_canvas_tex_ready=0;
             if(g_interactive_perf_frequency) {
                 g_hostprof_convert_ms+=(double)(SDL_GetPerformanceCounter()-hp_convert0)*1000.0/(double)g_interactive_perf_frequency;
                 g_hostprof_uploads++;
@@ -9341,6 +9408,38 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
             if(!world_ok) { fprintf(stderr,"SDL original terrain composition: %s\n",SDL_GetError()); return 0; }
         }
+    } else if(!g_terrain_modern_backend && g_canvas_live && g_canvas_tex_ready && g_zoom<0.9999) {
+        /* zoomed out: the map window on the canvas (canvas x -> 128 + (x - ux) * z, y -> (y - uy) * z), with the
+           scroll interpolation between the previous and current canvas frames; HUD and panel art at 1x on top */
+        double a=1.0; int idx=0,idy=0;
+        if(visual && interp_enabled() && g_canvas_tex_ready>=2 && (g_interp_dx || g_interp_dy) && g_interp_t_cur>g_interp_t_prev &&
+           g_interactive_perf_frequency && (double)(g_interp_t_cur-g_interp_t_prev)<0.2*(double)g_interactive_perf_frequency) {
+            a=(double)(SDL_GetPerformanceCounter()-g_interp_t_cur)/(double)(g_interp_t_cur-g_interp_t_prev);
+            if(a<0.0) a=0.0; if(a>1.0) a=1.0;
+            idx=g_interp_dx; idy=g_interp_dy;
+        }
+        const double s=(double)dst.w/(double)g_present_w,left=128.0,z=g_zoom;
+        const double ux=GW_CANVAS_VX0+g_zoom_x,uy=GW_CANVAS_VY0+g_zoom_y;
+        const int ts=g_tex_scale;
+        const SDL_Rect hud_src={0,0,128*ts,480*ts};
+        const SDL_Rect hud_dst={dst.x,dst.y,(int)(left*s+0.5),dst.h};
+        const SDL_Rect map_clip={dst.x+(int)(left*s+0.5),dst.y,dst.w-(int)(left*s+0.5),dst.h};
+        const float tw=(float)(GW_CANVAS_TEX_W*z*s),th=(float)(GW_CANVAS_H*z*s);
+        const SDL_FRect prev_dst={(float)(dst.x+(left+(GW_CANVAS_MAPX0+a*idx-ux)*z)*s),(float)(dst.y+(a*idy-uy)*z*s),tw,th};
+        const SDL_FRect cur_dst={(float)(dst.x+(left+(GW_CANVAS_MAPX0-(1.0-a)*idx-ux)*z)*s),(float)(dst.y+(-(1.0-a)*idy-uy)*z*s),tw,th};
+        SDL_SetRenderDrawColor(g_ifclevel_demo_renderer,0,0,0,255);
+        SDL_RenderFillRect(g_ifclevel_demo_renderer,&map_clip);
+        SDL_RenderSetClipRect(g_ifclevel_demo_renderer,&map_clip);
+        int ok=1;
+        if(a<1.0) ok=SDL_RenderCopyF(g_ifclevel_demo_renderer,g_canvas_tex[0],NULL,&prev_dst)==0;
+        ok=ok && SDL_RenderCopyF(g_ifclevel_demo_renderer,g_canvas_tex[1],NULL,&cur_dst)==0;
+        SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
+        ok=ok && SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&hud_src,&hud_dst)==0;
+        if(ok && g_interp_panel_texture && g_interp_panel_active) {
+            const SDL_Rect panel_dst={dst.x+(int)(left*s+0.5),dst.y,(int)(176.0*s+0.5)-(int)(left*s+0.5),dst.h};
+            ok=SDL_RenderCopy(g_ifclevel_demo_renderer,g_interp_panel_texture,NULL,&panel_dst)==0;
+        }
+        if(!ok) { fprintf(stderr,"SDL zoomed-out present: %s\n",SDL_GetError()); return 0; }
     } else if(!g_terrain_modern_backend && visual && g_interp_prev_texture && interp_enabled() &&
               (g_interp_dx || g_interp_dy) && g_interp_t_cur>g_interp_t_prev && g_interactive_perf_frequency &&
               (double)(g_interp_t_cur-g_interp_t_prev)<0.2*(double)g_interactive_perf_frequency) {
@@ -14986,8 +15085,8 @@ extern uint32_t g_gw_ws_strip_ext;
 extern void (*g_gw_ws_band_copy)(void);
 /* widescreen draw-list pool (lifter rules at 0x78B55/0x78BFC/0x78C64/0x78CD0/0x791A6/0x79375): 0 = MapDisplay own pool */
 extern uint32_t g_gw_ws_drawpool,g_gw_drawlist_full;
-extern uint32_t g_gw_ws_grid_ext;   /* cell-grid columns 20..26 (7 x 15), lifter GW_WS_GRID_EA; 0 at 640 */
-#define GW_WS_DRAWPOOL_BYTES (1024u*10u)
+extern uint32_t g_gw_ws_grid_ext,g_gw_ws_buckets;   /* cell-grid columns 20..26 (7 x 15), lifter GW_WS_GRID_EA; 0 at 640 */
+#define GW_WS_DRAWPOOL_BYTES (2048u*10u)
 static uint32_t g_ws_band_copies;
 static int ws_ring_source(const uint8_t *m,uint32_t width,uint32_t height,uint32_t x,uint32_t y,uint32_t *at) {
     const uint32_t map=0x00346D70u;
@@ -15003,7 +15102,7 @@ static int ws_ring_source(const uint8_t *m,uint32_t width,uint32_t height,uint32
 static void ws_band_copy_impl(void) {
     uint8_t *m=guest_memory; if(!m) return;
     const uint32_t width=*(const uint32_t *)(m+0x00376A78u),height=*(const uint32_t *)(m+0x00376A7Cu);
-    if(width<=640u || width>1024u || height!=480u) return;
+    if(width<=640u || width>GW_CANVAS_W || (height!=480u && height!=GW_CANVAS_H)) return;
     const uint32_t ws=*(const uint32_t *)(m+0x00376A5Cu),ring=*(const uint32_t *)(m+0x002EECA0u);
     const uint32_t bytes=width*height;
     if(!ws || !ring || ws>GUEST_LIMIT-bytes || ring>GUEST_LIMIT-bytes) return;
@@ -15016,7 +15115,31 @@ static void ws_band_copy_impl(void) {
     int rx0=(640-left)+(ring_x-left); rx0%=ring_w; if(rx0<0) rx0+=ring_w;
     const uint32_t band=width-640u;
     const uint32_t first=(uint32_t)(ring_w-rx0)<band?(uint32_t)(ring_w-rx0):band;
-    const uint8_t *grid=(g_gw_ws_grid_ext && g_gw_ws_grid_ext<=GUEST_LIMIT-105u && width==864u)?m+g_gw_ws_grid_ext:NULL;
+    /* grid extension (live): cells of columns 20.. (rows 0..14) and of rows 15.. (columns 4.., x>=128) are restored
+       from the ring like 0x1CAE0 restores the original 20x15 cells, then aged the same way */
+    if(g_gw_ws_grid_ext && g_gw_ws_grid_ext<=GUEST_LIMIT-720u) {
+        uint8_t *g=m+g_gw_ws_grid_ext; const int clear=m[0x00362A42u]!=0;
+        const uint32_t cols=(width+31u)>>5,rows=height>>5;
+        for(uint32_t r=0;r<rows && r<20u;r++) for(uint32_t c=(r<15u?20u:4u);c<cols && c<36u;c++) {
+            uint8_t *cell=g+r*36u+c;
+            if(*cell) for(uint32_t y=r*32u;y<r*32u+32u;y++) {
+                int ry=((int)y+ring_y)%(int)height; if(ry<0) ry+=(int)height;
+                const uint8_t *src=m+ring+(uint32_t)ry*width;
+                uint8_t *dst=m+ws+y*width;
+                for(uint32_t x=c*32u;x<c*32u+32u && x<width;x++) {
+                    int rx=((int)x-left)+(ring_x-left); rx%=ring_w; if(rx<0) rx+=ring_w;
+                    dst[x]=src[left+rx];
+                }
+            }
+            /* floor 1: the extension behaves as always dirty, so every sprite touching it is redrawn each frame
+               over the restored cells (it has no dirty-rectangle history of its own before this frame) */
+            *cell=(clear || *cell<=2u)?1u:(uint8_t)(*cell-1u);
+        }
+        g_ws_band_copies++;
+        return;
+    }
+    if(height!=480u) return;
+    const uint8_t *grid=NULL;
     for(uint32_t y=0;y<height;y++) {
         int ry=((int)y+ring_y)%(int)height; if(ry<0) ry+=(int)height;
         const uint8_t *src=m+ring+(uint32_t)ry*width+(uint32_t)left;
@@ -15036,14 +15159,6 @@ static void ws_band_copy_impl(void) {
         if(first<band) memcpy(dst+first,src,band-first);
     }
     g_ws_band_copies++;
-    /* grid columns 20..26 age like the 20 columns 0x1CAE0 has just consumed: a marked cell is cleared when
-       byte [0x362A42] is set and decremented otherwise */
-    if(g_gw_ws_grid_ext && g_gw_ws_grid_ext<=GUEST_LIMIT-105u) {
-        uint8_t *g=m+g_gw_ws_grid_ext; const int clear=m[0x00362A42u]!=0;
-        /* floor 1: the band behaves as always dirty, so every sprite touching x=640..853 is redrawn each frame
-           over the restored cells (the band has no dirty-rectangle history of its own before this frame) */
-        for(uint32_t k=0;k<105u;k++) g[k]=(clear || g[k]<=2u)?1u:(uint8_t)(g[k]-1u);
-    }
 }
 
 typedef struct {
@@ -16810,13 +16925,39 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
     if(memory && *(const uint32_t *)(memory+0x00376A78u)==864u && *(const uint32_t *)(memory+0x00376A7Cu)==480u) {
         pitch=864u; wscreen_guest=*(const uint32_t *)(memory+0x00376A5Cu);
     }
-    const uint32_t frame_bytes=pitch*480u;
+    const int canvas=memory && *(const uint32_t *)(memory+0x00376A78u)==GW_CANVAS_W &&
+        *(const uint32_t *)(memory+0x00376A7Cu)==GW_CANVAS_H;
+    if(canvas) { pitch=GW_CANVAS_W; wscreen_guest=*(const uint32_t *)(memory+0x00376A5Cu); }
+    const uint32_t frame_bytes=pitch*(canvas?GW_CANVAS_H:480u);
     if(!memory || !g_interactive_snapshot_mutex ||
        wscreen_guest>GUEST_LIMIT-frame_bytes ||
        world_guest+GW_INTERACTIVE_WORLD_BYTES>GUEST_LIMIT ||
        map_guest+0x14u>GUEST_LIMIT) return;
     SDL_LockMutex(g_interactive_snapshot_mutex);
-    memcpy(g_interactive_published_snapshot.wscreen,memory+wscreen_guest,frame_bytes);
+    g_interactive_published_snapshot.canvas_valid=0;
+    g_interactive_published_snapshot.ring_w=(int)pitch-*(const int16_t *)(memory+map_guest+0x1Du);
+    g_interactive_published_snapshot.ring_h=canvas?(int)GW_CANVAS_H:480;
+    if(canvas) {
+        /* 854x480 view at pitch 864: x<128 HUD; x=128..175 panel art where the canvas differs from the map
+           background (ring) there, else the 1x window; x>=176 the 1x window */
+        const uint8_t *cv=memory+wscreen_guest; uint8_t *o=g_interactive_published_snapshot.wscreen;
+        const uint32_t ring=*(const uint32_t *)(memory+0x002EECA0u);
+        const int ring_ok=ring && ring<=GUEST_LIMIT-GW_CANVAS_W*GW_CANVAS_H;
+        memcpy(g_interactive_published_snapshot.canvas,cv,GW_CANVAS_W*GW_CANVAS_H);
+        g_interactive_published_snapshot.canvas_valid=1;
+        for(uint32_t y=0;y<480u;y++) {
+            const uint8_t *row=cv+y*GW_CANVAS_W,*win=cv+(GW_CANVAS_VY0+y)*GW_CANVAS_W+GW_CANVAS_VX0-128;
+            uint8_t *orow=o+y*864u;
+            memcpy(orow,row,128u);
+            for(uint32_t x=128u;x<176u;x++) {
+                uint32_t at=0; const int bg_ok=ring_ok && ws_ring_source(memory,GW_CANVAS_W,GW_CANVAS_H,x,y,&at);
+                orow[x]=(bg_ok && row[x]!=memory[ring+at])?row[x]:win[x];
+            }
+            memcpy(orow+176u,win+176u,854u-176u);
+            memset(orow+854u,0,10u);
+        }
+        pitch=864u;
+    } else memcpy(g_interactive_published_snapshot.wscreen,memory+wscreen_guest,frame_bytes);
     g_interactive_published_snapshot.wscreen_pitch=pitch;
     if(g_ws_requested && (generation%200u)==1u) {
         unsigned nz=0; for(uint32_t y=0;y<480u;y+=4) for(uint32_t x=176u;x<640u;x+=4) nz+=g_interactive_published_snapshot.wscreen[y*pitch+x]!=0u;
@@ -16835,12 +16976,14 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
     g_interactive_published_snapshot.ring_y=*(int16_t *)(memory+map_guest+0x0Au);
     g_interactive_published_snapshot.ring_left=*(int16_t *)(memory+map_guest+0x1Du);
     {   const uint32_t ring=*(const uint32_t *)(memory+0x002EECA0u);
-        g_interactive_published_snapshot.panel_bg_valid=ring && ring<=GUEST_LIMIT-pitch*480u &&
+        const uint32_t rw=canvas?GW_CANVAS_W:pitch,rh=canvas?GW_CANVAS_H:480u;
+        const uint32_t ox=canvas?(uint32_t)(GW_CANVAS_VX0-128):0u,oy=canvas?(uint32_t)GW_CANVAS_VY0:0u;
+        g_interactive_published_snapshot.panel_bg_valid=ring && ring<=GUEST_LIMIT-rw*rh &&
             *(const uint16_t *)(memory+map_guest+0x1Du)==128u;
         if(g_interactive_published_snapshot.panel_bg_valid)
             for(uint32_t y=0;y<480u;y++) for(uint32_t x=128u;x<176u;x++) {
                 uint32_t at=0; g_interactive_published_snapshot.panel_bg[y*48u+(x-128u)]=
-                    ws_ring_source(memory,pitch,480u,x,y,&at)?memory[ring+at]:0u;
+                    ws_ring_source(memory,rw,rh,x+ox,y+oy,&at)?memory[ring+at]:0u;
             } }
     g_interactive_published_snapshot.generation=generation;
     g_interactive_published_snapshot.captured_at=SDL_GetPerformanceCounter();
@@ -17025,7 +17168,7 @@ static int gw_vsb16_run_mixer_service(void *user) {
    live in a third block. Leaving the game IFC restores the canonical 640x480 buffers. Every switch requests a
    whole-strip redraw with the ring offsets reset. The lifted renderer follows lbDisplay.GraphicsScreenWidth. */
 static int g_ws_live_active;
-static uint32_t g_ws_live_grid;
+static uint32_t g_ws_live_grid,g_ws_live_buckets;
 static uint32_t g_ws_live_ws,g_ws_live_ring,g_ws_live_flags,g_ws_live_pool,g_ws_saved_ws,g_ws_saved_ring;
 static uint32_t ws_live_alloc(uint8_t *memory,const gw_recomp_context *parked,uint32_t size) {
     const uint32_t esp=(parked->esp-0x4000u)&~0xFu;
@@ -17058,10 +17201,10 @@ static void ws_live_request_redraw(uint8_t *memory,uint32_t width) {
     *(int16_t *)(memory+map+0x08u)=(int16_t)left;          /* ring offsets reset: the whole ring is redrawn */
     *(int16_t *)(memory+map+0x0Au)=0;
     *(uint16_t *)(memory+map+0x33u)=(uint16_t)(width-left); /* as 0x7A099: width - ring_x */
-    *(uint16_t *)(memory+map+0x35u)=480u;
+    *(uint16_t *)(memory+map+0x35u)=(uint16_t)*(const uint32_t *)(memory+0x00376A7Cu);
     memory[map+0x1Cu]|=0x02u;
     memset(memory+map+0x11BDu,2u,20u);
-    if(g_gw_ws_strip_ext) memset(memory+g_gw_ws_strip_ext,2u,7u);
+    if(g_gw_ws_strip_ext) memset(memory+g_gw_ws_strip_ext,2u,16u);
 }
 /* The map viewport gadget (id 5, the click target of the map) gets its rect from MapDisplay init (0x785C0:
    x = MapDisplay+0x1D, w = GraphicsScreenWidth - x, at [0x35F8F8]+0x2C/+0x30). That runs at 640, before the
@@ -17071,8 +17214,17 @@ static void ws_live_viewport_gadget(uint8_t *memory,uint16_t left,uint16_t shown
     const uint32_t g=*(const uint32_t *)(memory+0x0035F8F8u);
     if(!g || g>GUEST_LIMIT-0x34u || *(const uint16_t *)(memory+g+0x2Cu)!=left) return;
     uint16_t *w=(uint16_t *)(memory+g+0x30u);
-    if(*w==(uint16_t)(640u-left) || *w==(uint16_t)(854u-left) || *w==(uint16_t)(864u-left)) *w=(uint16_t)(shown-left);
+    if(*w==(uint16_t)(640u-left) || *w==(uint16_t)(854u-left) || *w==(uint16_t)(864u-left) || *w==(uint16_t)(GW_CANVAS_W-left))
+        *w=(uint16_t)(shown-left);
     gw_flag_trace("TRACE widescreen viewport_gadget x=%u w=%u%c",left,*w,10);
+}
+/* zoom-out canvas: the same gadget's height (+0x32, y at +0x2E) follows the canvas height (480 <-> 640) */
+static void ws_live_viewport_gadget_h(uint8_t *memory,uint16_t left,uint16_t h) {
+    const uint32_t g=*(const uint32_t *)(memory+0x0035F8F8u);
+    if(!g || g>GUEST_LIMIT-0x34u || *(const uint16_t *)(memory+g+0x2Cu)!=left) return;
+    uint16_t *gh=(uint16_t *)(memory+g+0x32u);
+    if(*(const uint16_t *)(memory+g+0x2Eu)==0u && (*gh==480u || *gh==GW_CANVAS_H)) *gh=h;
+    gw_flag_trace("TRACE widescreen viewport_gadget y=%u h=%u%c",*(const uint16_t *)(memory+g+0x2Eu),*gh,10);
 }
 static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
     if(!g_ws_requested || !memory || !parked) return;
@@ -17083,9 +17235,10 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
     /* the draw list is filled by the simulation and emptied by draw_game in the same tick; switch its pool only
        while it is empty (count MapDisplay+0x11BB), otherwise on a later tick */
     if(*(const int16_t *)(memory+map+0x11BBu)!=0) return;
-    const uint32_t W=864u,H=480u,bytes=W*H;
+    const uint32_t W=g_ws_canvas?GW_CANVAS_W:864u,H=g_ws_canvas?GW_CANVAS_H:480u,bytes=W*H;
     if(want) {
         if(*(const uint32_t *)(memory+0x00376A78u)!=640u || *(const uint32_t *)(memory+0x00376A7Cu)!=480u) return;
+        if(g_ws_canvas && g_ws_live_ws && !g_ws_live_buckets) return;
         const uint32_t old_ws=*(const uint32_t *)(memory+0x00376A5Cu),old_ring=*(const uint32_t *)(memory+0x002EECA0u);
         if(!old_ws || !old_ring || old_ws>GUEST_LIMIT-640u*480u || old_ring>GUEST_LIMIT-640u*480u) return;
         if(!g_ws_live_ws) {
@@ -17093,36 +17246,43 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
             g_ws_live_ring=g_ws_live_ws?ws_live_alloc(memory,parked,bytes):0u;
             g_ws_live_flags=g_ws_live_ring?ws_live_alloc(memory,parked,64u):0u;
             g_ws_live_pool=g_ws_live_flags?ws_live_alloc(memory,parked,GW_WS_DRAWPOOL_BYTES):0u;
-            g_ws_live_grid=g_ws_live_pool?ws_live_alloc(memory,parked,128u):0u;
+            g_ws_live_grid=g_ws_live_pool?ws_live_alloc(memory,parked,720u):0u;
+            if(g_ws_canvas) { g_ws_live_buckets=g_ws_live_grid?ws_live_alloc(memory,parked,4u*GW_CANVAS_H):0u; if(!g_ws_live_buckets) g_ws_live_grid=0u; }
             gw_flag_trace("TRACE widescreen alloc wscreen=%08X ring=%08X flags=%08X drawpool=%08X\n",g_ws_live_ws,g_ws_live_ring,
                 g_ws_live_flags,g_ws_live_pool);
             if(!g_ws_live_grid) { g_ws_requested=0; return; }   /* fail closed: stay at 640 */
         }
         const uint16_t left=*(const uint16_t *)(memory+map+0x1Du);
         for(uint32_t y=0;y<H;y++) {
-            memcpy(memory+g_ws_live_ws+y*W,memory+old_ws+y*640u,640u);
-            memset(memory+g_ws_live_ws+y*W+640u,0,W-640u);
+            memset(memory+g_ws_live_ws+y*W,0,W);
             memset(memory+g_ws_live_ring+y*W,0,W);
+            if(y>=480u) continue;
+            memcpy(memory+g_ws_live_ws+y*W,memory+old_ws+y*640u,640u);
             memcpy(memory+g_ws_live_ring+y*W,memory+old_ring+y*640u,left);
         }
         memset(memory+g_ws_live_flags,0,64u);
         g_ws_saved_ws=old_ws; g_ws_saved_ring=old_ring;
         *(uint32_t *)(memory+0x00376A5Cu)=g_ws_live_ws;
         *(uint32_t *)(memory+0x00376A78u)=W;
+        *(uint32_t *)(memory+0x00376A7Cu)=H;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_live_ring;
         g_gw_ws_strip_ext=g_ws_live_flags; g_gw_ws_band_copy=ws_band_copy_impl;
         memset(memory+g_ws_live_pool,0,GW_WS_DRAWPOOL_BYTES); g_gw_ws_drawpool=g_ws_live_pool;
-        memset(memory+g_ws_live_grid,2u,128u); g_gw_ws_grid_ext=g_ws_live_grid;   /* all cells redrawn */
+        memset(memory+g_ws_live_grid,2u,720u); g_gw_ws_grid_ext=g_ws_live_grid;   /* all cells redrawn */
+        if(g_ws_canvas) { memset(memory+g_ws_live_buckets,0,4u*GW_CANVAS_H); g_gw_ws_buckets=g_ws_live_buckets; }
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback%c",10); }
-        ws_live_viewport_gadget(memory,left,854u);
+        ws_live_viewport_gadget(memory,left,g_ws_canvas?(uint16_t)W:854u);
+        if(g_ws_canvas) ws_live_viewport_gadget_h(memory,left,(uint16_t)H);
         SDL_AtomicSet(&g_interp_panel_reset,1);
         g_ws_live_active=1;
-        gw_flag_trace("TRACE widescreen on turn=%u surface=864x480 shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u));
+        gw_flag_trace("TRACE widescreen on turn=%u surface=%ux%u shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u),W,H);
     } else {
         *(uint32_t *)(memory+0x00376A5Cu)=g_ws_saved_ws;
         *(uint32_t *)(memory+0x00376A78u)=640u;
+        *(uint32_t *)(memory+0x00376A7Cu)=480u;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_saved_ring;
-        g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u; g_gw_ws_grid_ext=0u;
+        g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u; g_gw_ws_grid_ext=0u; g_gw_ws_buckets=0u;
+        if(g_ws_canvas) ws_live_viewport_gadget_h(memory,*(const uint16_t *)(memory+map+0x1Du),480u);
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
         ws_live_viewport_gadget(memory,*(const uint16_t *)(memory+map+0x1Du),640u);
         SDL_AtomicSet(&g_interp_panel_reset,1);
@@ -18162,6 +18322,7 @@ int main(int argc,char **argv) {
     /* per-monitor DPI awareness before SDL_Init: Windows must not bitmap-stretch (blur) a 1440p/4K window */
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS,"permonitorv2");
     { const char *ws_env=getenv("GW_WIDESCREEN"); if(ws_env && ws_env[0]=='1') g_ws_requested=1; }
+    { const char *zo_env=getenv("GW_ZOOMOUT"); if(zo_env && zo_env[0]=='1') g_ws_requested=g_ws_canvas=1; }
     /* The startup replay writes its evidence files under ./evidence and aborts (exit 112) when
        that directory is missing; a player launch from any working directory must not depend on it. */
     if(g_cli_play_mode) (void)CreateDirectoryA("evidence",NULL);
@@ -18174,6 +18335,7 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[ai],"--skip-intro")) g_cli_skip_intro=1;
         else if(!strcmp(argv[ai],"--order-log")) g_cli_order_log=1;
         else if(!strcmp(argv[ai],"--widescreen")) g_ws_requested=1;
+        else if(!strcmp(argv[ai],"--zoomout")) g_ws_requested=g_ws_canvas=1;
         else if(!strcmp(argv[ai],"--fullscreen")) g_cli_fullscreen=1;
         else if(!strcmp(argv[ai],"--res") && ai+1<argc) { if(!parse_cli_resolution(argv[++ai])) return 2; }
         else if(!strcmp(argv[ai],"--level") && ai+1<argc) {

@@ -3265,6 +3265,7 @@ if partial:
     #    ~25 writers; the sprite drawers clamp col to lbDisplay.width/32-1 and would overrun it at x>=640.
     #  * 0x7C6B0 derives the camera centre from the surface width; it must stay at the 640 centre (x=384).
     widescreen_rules = []
+    ws_site_rules = []   # (site, old, new): replace inside every lifted copy of that instruction
     def ws_rule(original: str, replacement: str, optional: bool = False) -> None:
         widescreen_rules.append((original, replacement, optional))
     ws_width = "MEM32(DS_BASE + (0x376A78))"
@@ -3304,7 +3305,7 @@ if partial:
             "eax = GW_WS_POOL(eax); /* 0x00079375: draw-list pool base (flags dead: add at 0x7937D) */")
     # camera centre stays at the 640 centre
     ws_rule("eax = MEM32(DS_BASE + (0x376A78)); /* 0x0007C6B0: mov eax, dword ptr [0x376a78] */",
-            "eax = 0x280u; /* 0x0007C6B0: camera centre keeps the 640-pixel frame (x=384) */")
+            "eax = (MEM32(DS_BASE + (0x376A78)) == 864u ? 0x280u : MEM32(DS_BASE + (0x376A78))); /* 0x0007C6B0: camera centre keeps the 640-pixel frame (x=384) at 864 */")
     # sprite window and ring split widths
     ws_rule("ebx = 0x280u; /* 0x000792FB: mov ebx, 0x280 */",
             f"ebx = {ws_width}; /* 0x000792FB: parameterized sprite clip width */")
@@ -3348,14 +3349,35 @@ if partial:
     # 0x79D00 (request a whole redraw) fills the 20 MapDisplay strip levels with 2; fill the extension too
     ws_rule("    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;",
             "    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;\n"
-            "    if (g_gw_ws_strip_ext) { for (uint32_t _k = 0u; _k < 7u; _k++) MEM8(g_gw_ws_strip_ext + _k) = 2u; } /* 0x00079D1C: widescreen strips */")
+            "    if (g_gw_ws_strip_ext) { for (uint32_t _k = 0u; _k < 16u; _k++) MEM8(g_gw_ws_strip_ext + _k) = 2u; } /* 0x00079D1C: widescreen strips */")
     # the camera jumps (minimap click, centre on a Thing, MapDisplay init: 0x784C0/0x786C0/0x78880) reset the ring
     # offsets and memset(MapDisplay+0x11BD, 2, 0x14) through 0x96C10; without the extension the band x=640.. keeps
     # the ring content of the old position
     for site in (0x78528, 0x78726, 0x788D8):
         ws_rule(f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;",
                 f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;\n"
-                f"    if (g_gw_ws_strip_ext) {{ for (uint32_t _k = 0u; _k < 7u; _k++) MEM8(g_gw_ws_strip_ext + _k) = 2u; }} /* 0x{site:08X}: widescreen strips after memset(+0x11BD, 2, 20) */")
+                f"    if (g_gw_ws_strip_ext) {{ for (uint32_t _k = 0u; _k < 16u; _k++) MEM8(g_gw_ws_strip_ext + _k) = 2u; }} /* 0x{site:08X}: widescreen strips after memset(+0x11BD, 2, 20) */")
+    # Zoom-out canvas (taller surface): the map pipeline's 480/479/15-row literals follow lbDisplay.GraphicsScreenHeight
+    # (0x376A7C), the grid rows beyond 15 and columns beyond 26 live in g_gw_ws_grid_ext (36 x 20), the draw list's
+    # 480 per-row heads (MapDisplay+0xA3B..+0x11BB) move to g_gw_ws_buckets. Exact at 480.
+    ws_h = "GW_WS_H"
+    for site in (0x1C801, 0x1C98D, 0x1CB0B, 0x1E824, 0x1E89A, 0x22E87, 0x56EFF, 0x6BA54, 0x6C65D, 0x7BF31,
+                 0x7C16A, 0x7A20D, 0x792F6, 0x794E6, 0x7A07D, 0x7A088, 0x7A093, 0x7A0AC):
+        ws_site_rules.append((site, "0x1E0u", f"({ws_h})"))
+    for site in (0x78C3C, 0x79E68):
+        ws_site_rules.append((site, "0x1DFu", f"({ws_h} - 1u)"))
+    ws_site_rules.append((0x1C997, "0x00012C00u", f"((MEM32(DS_BASE + (0x376A78)) * {ws_h}) >> 2)"))
+    for site in (0x7C4B5, 0x7C4BA):
+        ws_site_rules.append((site, "0xEu", "(GW_WS_GRID_ROWS - 1u)"))
+    ws_site_rules.append((0x7C552, "0x12Cu", "(GW_WS_GRID_ROWS * 20u)"))
+    for site, reg in ((0x78702, "edx"), (0x787FA, "edx"), (0x83929, "ecx")):
+        ws_site_rules.append((site, f"DS_BASE + ({reg} + 0x376BF7)", f"GW_WS_GRID_LIN({reg} - 1u)"))
+    for site in (0x78C7D, 0x78CC6, 0x78D17, 0x78D4B, 0x78D7D):
+        ws_site_rules.append((site, "DS_BASE + (eax + 0xA3B)", "GW_WS_BUCKET_EA(eax)"))
+    ws_site_rules.append((0x79199, "eax = (ebp + 0xA3B);", "eax = GW_WS_BUCKETS(ebp);"))
+    ws_site_rules.append((0x7936A, "eax = eax + 0xA3Bu;", "eax = GW_WS_BUCKETS(eax);"))
+    ws_site_rules.append((0x791AD, "eax = (ebp + 0x11BB);", "eax = GW_WS_BUCKETS_END(ebp);"))
+    ws_site_rules.append((0x7937D, "eax = eax + 0x11BBu;", "eax = GW_WS_BUCKETS_END(eax);"))
     # 0x1C9C0 (cell copy ring -> WScreen on the 20x15 grid) steps 32 rows as 0x5000 and stops at 480 rows as 0x4B000.
     ws_rule("ebp = ebp + 0x5000u; /* 0x0001CA2C: add ebp, 0x5000 */",
             f"ebp = ebp + ({ws_width} << 5); /* 0x0001CA2C: 32 surface rows (0x5000 at 640) */")
@@ -3379,6 +3401,31 @@ if partial:
             raise SystemExit(f"widescreen rule at 0x{site:08X} expected one lifted instruction, got {count}")
         text = text.replace(original, replacement, 1)
         ws_applied += 1
+    for site, old, new in ws_site_rules:
+        if lifted_function_containing(site) is None:
+            continue
+        marker = f"if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;"
+        if marker not in text:
+            raise SystemExit(f"zoom-out site 0x{site:08X}: instruction not in the lifted closure")
+        pos = 0
+        while True:
+            at = text.find(marker, pos)
+            if at < 0:
+                break
+            start = at + len(marker)
+            end = text.find("if (!gw_recomp_guest_instruction(", start)
+            block = text[start:end]
+            code = "\n".join(l.split("/*")[0] for l in block.split("\n"))
+            if old not in code:
+                raise SystemExit(f"zoom-out site 0x{site:08X}: {old} not in its instruction")
+            lines = []
+            for l in block.split("\n"):
+                c, sep, com = l.partition("/*")
+                lines.append(c.replace(old, new) + sep + com)
+            block = "\n".join(lines)
+            text = text[:start] + block + text[end:]
+            pos = start + len(block)
+            ws_applied += 1
     # Cell grid columns 20..26 (widescreen) live in g_gw_ws_grid_ext (7 x 15): every access that forms
     # 0x376BF8 + row*20 + col from a separate column goes through GW_WS_GRID_EA(row*20, col), which is the
     # original address for col < 20 and always at 640.
@@ -3408,7 +3455,7 @@ if partial:
             if lifted_function_containing(site) is None or original not in text:
                 continue
             text = text.replace(original, original + "\n    if (g_gw_ws_grid_ext && ebx == 0x12Cu) { for (uint32_t _k = 0u; "
-                                "_k < 105u; _k++) MEM8(g_gw_ws_grid_ext + _k) = (uint8_t)LO8(edx); } /* grid clear: columns 20..26 too */")
+                                "_k < 720u; _k++) MEM8(g_gw_ws_grid_ext + _k) = (uint8_t)LO8(edx); } /* grid clear: extension cells too */")
             ws_applied += 1
         for site, old_ea, new_ea in ws_grid_sites:
             marker = f"if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;"
@@ -3447,14 +3494,25 @@ if partial:
         ws_support = (
             "\n/* True widescreen support (tools/lift_entry_path.py widescreen_rules). */\n"
             "uint32_t g_gw_ws_strip_ext = 0u;\n"
-            "uint32_t g_gw_ws_grid_ext = 0u;   /* cell-grid columns 20..26 (7 x 15 bytes), 0 at 640 */\n"
-            "#define GW_WS_GRID_W (g_gw_ws_grid_ext ? 864u : 0x280u)\n"
-            "#define GW_WS_GRID_EA(row20, col) ((g_gw_ws_grid_ext && (uint32_t)(col) - 20u < 7u && (uint32_t)(row20) < 300u) ? \\\n"
-            "    (uint32_t)(g_gw_ws_grid_ext + ((uint32_t)(row20) / 20u) * 7u + ((uint32_t)(col) - 20u)) : \\\n"
+            "uint32_t g_gw_ws_grid_ext = 0u;   /* cell grid beyond the original 20 x 15: 36 x 20 bytes (row*36+col), 0 at 640 */\n"
+            "#define GW_WS_H MEM32(DS_BASE + (0x376A7C))\n"
+            "#define GW_WS_GRID_ROWS (g_gw_ws_grid_ext ? (GW_WS_H >> 5) : 15u)\n"
+            "#define GW_WS_GRID_W (g_gw_ws_grid_ext ? MEM32(DS_BASE + (0x376A78)) : 0x280u)\n"
+            "#define GW_WS_GRID_EA(row20, col) ((g_gw_ws_grid_ext && (uint32_t)(row20) < 400u && (uint32_t)(col) < 36u && \\\n"
+            "    ((uint32_t)(col) >= 20u || (uint32_t)(row20) >= 300u)) ? \\\n"
+            "    (uint32_t)(g_gw_ws_grid_ext + ((uint32_t)(row20) / 20u) * 36u + (uint32_t)(col)) : \\\n"
             "    (uint32_t)(DS_BASE + ((uint32_t)(row20) + (uint32_t)(col) + 0x376BF8u)))\n"
+            "#define GW_WS_GRID_LIN(idx) ((g_gw_ws_grid_ext && (uint32_t)(idx) - 300u < 100u) ? \\\n"
+            "    (uint32_t)(g_gw_ws_grid_ext + ((uint32_t)(idx) / 20u) * 36u + (uint32_t)(idx) % 20u) : \\\n"
+            "    (uint32_t)(DS_BASE + ((uint32_t)(idx) + 0x376BF8u)))\n"
+            "uint32_t g_gw_ws_buckets = 0u;   /* zoom-out canvas: the draw list's per-row heads (H dwords), 0 = MapDisplay+0xA3B */\n"
+            "#define GW_WS_BUCKET_EA(r) ((g_gw_ws_buckets && (uint32_t)(r) - 0x00346D70u < 4u * GW_WS_H) ? \\\n"
+            "    (uint32_t)(g_gw_ws_buckets + ((uint32_t)(r) - 0x00346D70u)) : (uint32_t)(DS_BASE + ((uint32_t)(r) + 0xA3Bu)))\n"
+            "#define GW_WS_BUCKETS(md) ((g_gw_ws_buckets && (uint32_t)(md) == 0x00346D70u) ? g_gw_ws_buckets : (uint32_t)((md) + 0xA3Bu))\n"
+            "#define GW_WS_BUCKETS_END(md) ((g_gw_ws_buckets && (uint32_t)(md) == 0x00346D70u) ? g_gw_ws_buckets + 4u * GW_WS_H : (uint32_t)((md) + 0x11BBu))\n"
             "uint32_t g_gw_ws_drawpool = 0u;   /* guest address of the widescreen draw-list pool, 0 at 640 */\n"
             "uint32_t g_gw_drawlist_full = 0u; /* inserts 0x78B30 dropped because the draw list was full */\n"
-            "#define GW_WS_DRAWPOOL_ENTRIES 1024u\n"
+            "#define GW_WS_DRAWPOOL_ENTRIES 2048u\n"
             "#define GW_WS_POOL(md) ((g_gw_ws_drawpool && (uint32_t)(md) == 0x00346D70u) ? g_gw_ws_drawpool : (uint32_t)((md) + 0x3Bu))\n"
             "#define GW_WS_POOL_CAP(md) ((g_gw_ws_drawpool && (uint32_t)(md) == 0x00346D70u) ? GW_WS_DRAWPOOL_ENTRIES : 0x100u)\n"
             "void (*g_gw_ws_band_copy)(void) = 0;\n"
@@ -3462,7 +3520,7 @@ if partial:
             "    (uint32_t)(DS_BASE + ((base_reg) + 0x11BDu)) : (uint32_t)(g_gw_ws_strip_ext + ((uint32_t)(index) - 20u)))\n"
             "#define GW_WS_STRIPS ((MEM32(DS_BASE + (0x376A78)) + 31u) >> 5)\n"
             "#define GW_WS_VIEW_W (MEM32(DS_BASE + (0x376A78)) == 864u ? 854u : MEM32(DS_BASE + (0x376A78)))\n"
-            "#define GW_WS_FLAG_EA(ea) ((((uint32_t)(ea) - 0x00346D70u - 0x11BDu - 20u) < 7u && g_gw_ws_strip_ext) ? \\\n"
+            "#define GW_WS_FLAG_EA(ea) ((((uint32_t)(ea) - 0x00346D70u - 0x11BDu - 20u) < 16u && g_gw_ws_strip_ext) ? \\\n"
             "    (uint32_t)(g_gw_ws_strip_ext + ((uint32_t)(ea) - 0x00346D70u - 0x11BDu - 20u)) : (uint32_t)(ea))\n"
             "#define GW_WS_ROWS_TIMES_WIDTH(v) (MEM32(DS_BASE + (0x376A78)) == 0x280u ? ((v) << 7u) : \\\n"
             "    (uint32_t)(((int32_t)(v) / 5) * (int32_t)MEM32(DS_BASE + (0x376A78))))\n")
