@@ -3314,7 +3314,7 @@ if partial:
     # grid clears: memset(0x376BF8, dl, 0x12C) also clears the widescreen columns 20..26 with the same byte
     for site in (0x15961, 0x20EC6, 0x20F58, 0x7C752, 0x9373C):
         ws_rule(f"eax = 0x00376BF8u; /* 0x{site:08X}: mov eax, 0x376bf8 */",
-                f"eax = 0x00376BF8u; /* 0x{site:08X}: mov eax, 0x376bf8 */\n"
+                f"/* 0x{site:08X}: grid clear */ eax = 0x00376BF8u; /* mov eax, 0x376bf8 */\n"
                 "    if (g_gw_ws_grid_ext && ebx == 0x12Cu) { for (uint32_t _k = 0u; _k < 105u; _k++) MEM8(g_gw_ws_grid_ext + _k) = (uint8_t)LO8(edx); }")
     # after the dirty-cell copy (0x1CAE0) the widescreen band x=640.. is copied whole from the ring
     for site in (0x7C765, 0x7C76E):
