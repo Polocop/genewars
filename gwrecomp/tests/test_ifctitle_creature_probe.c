@@ -17388,10 +17388,7 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
             static int pan_was;
             InterlockedExchange(&g_live_ifc_map,map);
             if(map) {
-                /* held keys: the original scroller moves one 32-px step per tick (1280 px/s at 40 ticks/s, made for
-                   the frame rate of its time); the host presses them on every other tick only */
-                static unsigned pan_tick;
-                LONG dirs=(pan_tick++&1u)?0:InterlockedCompareExchange(&g_pan_hold,0,0);
+                LONG dirs=InterlockedCompareExchange(&g_pan_hold,0,0);
                 /* middle drag: one 32-px step of the original scroller per tick, opposite to the drag (the map
                    follows the hand); at most 4 steps stay pending */
                 const LONG step=32*16;
