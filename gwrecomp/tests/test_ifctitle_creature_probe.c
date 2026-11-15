@@ -8148,6 +8148,7 @@ static int g_present_w=640,g_present_pitch=640;
 static double g_hostprof_convert_ms,g_hostprof_copy_ms,g_hostprof_present_ms,g_hostprof_wait_ms,g_hostprof_frame_ms;
 /* GW_GPU_TIMING=1 (diagnostics): GPU-synchronised time of composition + scaled copy (1-pixel readbacks bracket it,
    so it is an upper bound that includes one readback); reported per frame in the host_window line */
+static double g_hostprof_epx_ms; static unsigned g_hostprof_epx_n;   /* F7 EPX: index copy + filter + texture write, per frame */
 static double g_hostprof_gpu_ms; static unsigned g_hostprof_gpu_frames; static int g_gpu_timing=-1; static uint64_t g_gpu_t0;
 /* ---- Modern host controls (play mode; presentation and input devices only, never game rules) ----
    g_live_ifc_map: set by the simulation worker each tick while the mission map has the input (IFCMain 0x35FE9A, no
@@ -9151,16 +9152,25 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 /* EPX from the palette indices; panel-art pixels at x=128..175 are replaced by the map background
                    as in the RGBA frame (the art itself is in the overlay) */
                 static uint8_t epx_idx[864u*480u]; static uint32_t epx_rgba[1728u*960u];
+                const uint64_t epx0=SDL_GetPerformanceCounter();
                 const int w=g_present_w;
                 for(int y=0;y<480;y++) {
                     memcpy(epx_idx+(size_t)y*w,gw_video_surface_row(source,y),(size_t)w);
                     if(panel_split) for(int x=0;x<48;x++)
                         if(g_interp_panel_rgba[y*48+x]>>24) epx_idx[(size_t)y*w+128+x]=visual->panel_bg[y*48+x];
                 }
-                host_epx2x(epx_idx,w,lut,epx_rgba,texture_w*2);
-                if(SDL_UpdateTexture(g_ifclevel_demo_texture,NULL,epx_rgba,texture_w*2*(int)sizeof(uint32_t))!=0) {
-                    fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
+                /* written straight into the streaming texture (no intermediate 6.5 MB copy) */
+                void *tp=NULL; int tpitch=0;
+                if(SDL_LockTexture(g_ifclevel_demo_texture,NULL,&tp,&tpitch)==0 && tp && tpitch>=texture_w*2*4) {
+                    host_epx2x(epx_idx,w,lut,(uint32_t *)tp,tpitch/4);
+                    SDL_UnlockTexture(g_ifclevel_demo_texture);
+                } else {
+                    host_epx2x(epx_idx,w,lut,epx_rgba,texture_w*2);
+                    if(SDL_UpdateTexture(g_ifclevel_demo_texture,NULL,epx_rgba,texture_w*2*(int)sizeof(uint32_t))!=0) {
+                        fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
+                    }
                 }
+                if(g_interactive_perf_frequency) { g_hostprof_epx_ms+=(double)(SDL_GetPerformanceCounter()-epx0)*1000.0/(double)g_interactive_perf_frequency; g_hostprof_epx_n++; }
             } else
             if(SDL_UpdateTexture(g_ifclevel_demo_texture,NULL,g_ifclevel_demo_rgba,
                                  texture_w*(int)sizeof(uint32_t))!=0) {
@@ -17785,11 +17795,12 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
             const double hsecs=(double)(frame_end-g_hostprof_window_start)/(double)g_interactive_perf_frequency;
             if(hsecs>=10.0) {
                 const double n=g_hostprof_frames?(double)g_hostprof_frames:1.0,u=g_hostprof_uploads?(double)g_hostprof_uploads:1.0;
-                fprintf(g_tick_profile_file,"TRACE host_window seconds=%.1f render_fps=%.1f texture_uploads_per_s=%.1f mean_frame_ms=%.3f convert_upload_ms_per_upload=%.3f render_copy_ms=%.3f sdl_present_ms=%.3f input_ms=%.3f pacing_wait_ms=%.3f gpu_compose_scale_ms=%.3f\n",
+                fprintf(g_tick_profile_file,"TRACE host_window seconds=%.1f render_fps=%.1f texture_uploads_per_s=%.1f mean_frame_ms=%.3f convert_upload_ms_per_upload=%.3f render_copy_ms=%.3f sdl_present_ms=%.3f input_ms=%.3f pacing_wait_ms=%.3f gpu_compose_scale_ms=%.3f epx_ms=%.3f\n",
                     hsecs,g_hostprof_frames/hsecs,g_hostprof_uploads/hsecs,g_hostprof_frame_ms/n,g_hostprof_convert_ms/u,
                     g_hostprof_copy_ms/n,g_hostprof_present_ms/n,input_ms,g_hostprof_wait_ms/n,
-                    g_hostprof_gpu_frames?g_hostprof_gpu_ms/g_hostprof_gpu_frames:-1.0);
-                g_hostprof_gpu_ms=0.0; g_hostprof_gpu_frames=0u;
+                    g_hostprof_gpu_frames?g_hostprof_gpu_ms/g_hostprof_gpu_frames:-1.0,
+                    g_hostprof_epx_n?g_hostprof_epx_ms/g_hostprof_epx_n:-1.0);
+                g_hostprof_gpu_ms=0.0; g_hostprof_gpu_frames=0u; g_hostprof_epx_ms=0.0; g_hostprof_epx_n=0u;
                 fflush(g_tick_profile_file);
                 g_hostprof_window_start=frame_end; g_hostprof_frames=g_hostprof_uploads=0u;
                 g_hostprof_convert_ms=g_hostprof_copy_ms=g_hostprof_present_ms=g_hostprof_wait_ms=g_hostprof_frame_ms=0.0;
