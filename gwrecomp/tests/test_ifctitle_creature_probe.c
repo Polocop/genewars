@@ -8157,6 +8157,7 @@ static SDL_atomic_t g_canvas_panel_reset;
 static uint8_t g_hud_written[480u*48u],g_hud_val[480u*48u],g_hud_have[480u*48u];   /* panel art on x=128..175 */
 static uint32_t g_hud_ws; static int g_hud_watching,g_hud_diag_was;
 static void hud_watch_stop(void);
+static void hud_sentinel_collect(uint8_t *memory);
 void recomp_memory_diag_enable(int enabled);
 int recomp_memory_diag_enabled(void);   /* the widescreen switch: forget the kept panel colours */
 #define GW_CANVAS_W 1152u
@@ -16965,7 +16966,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         const uint8_t *cv=memory+wscreen_guest; uint8_t *o=g_interactive_published_snapshot.wscreen;
         const uint32_t ring=*(const uint32_t *)(memory+0x002EECA0u);
         const int ring_ok=ring && ring<=GUEST_LIMIT-GW_CANVAS_W*GW_CANVAS_H;
-        hud_watch_stop();
+        hud_sentinel_collect(memory);
         memcpy(g_interactive_published_snapshot.canvas,cv,GW_CANVAS_W*GW_CANVAS_H);
         g_interactive_published_snapshot.canvas_valid=1;
         for(uint32_t y=0;y<480u;y++) {
@@ -17277,14 +17278,38 @@ static void hud_watch_write(uint32_t va,recomp_segment_id seg,uint16_t sel,uint3
 }
 /* the memory diagnostic is on during the HUD pass only: block copies (rep movs, the panel blitters) then go through
    the checked access path and reach the observer as well */
+/* Sentinel pass: right after MapDisplay::Draw (0x22F58) the canvas strip x=128..175, y<480 is saved and filled
+   with a sentinel byte; whatever the rest of the frame (the HUD) paints there is no longer the sentinel when the
+   frame is published, which gives the panel-art pixels whatever routine drew them; the sentinel pixels get their
+   saved map colour back before anything else sees the frame. The sentinel alternates between two values. */
+static uint8_t g_hud_saved[480u*48u],g_hud_sentinel=0xFEu; static int g_hud_filled;
 static void hud_watch_after_map(void) {
-    if(!guest_memory || *(const uint32_t *)(guest_memory+0x00376A78u)!=GW_CANVAS_W || g_hud_watching) return;
-    g_hud_ws=*(const uint32_t *)(guest_memory+0x00376A5Cu); g_hud_pitch=GW_CANVAS_W;
-    g_hud_diag_was=recomp_memory_diag_enabled();
-    recomp_set_guest_write_observer(hud_watch_write,NULL); recomp_memory_diag_enable(1); g_hud_watching=1;
+    if(!guest_memory || *(const uint32_t *)(guest_memory+0x00376A78u)!=GW_CANVAS_W || g_hud_filled) return;
+    g_hud_ws=*(const uint32_t *)(guest_memory+0x00376A5Cu);
+    if(!g_hud_ws || g_hud_ws>GUEST_LIMIT-GW_CANVAS_W*480u) return;
+    g_hud_sentinel=g_hud_sentinel==0xFEu?0xFDu:0xFEu;
+    for(uint32_t y=0;y<480u;y++) {
+        uint8_t *row=guest_memory+g_hud_ws+y*GW_CANVAS_W+128u;
+        memcpy(g_hud_saved+y*48u,row,48u); memset(row,g_hud_sentinel,48u);
+    }
+    g_hud_filled=1;
+}
+/* end of the frame (publication, before the copy): pixels the HUD painted -> g_hud_written; sentinels restored */
+static void hud_sentinel_collect(uint8_t *memory) {
+    if(!g_hud_filled) return;
+    g_hud_filled=0;
+    if(!memory || *(const uint32_t *)(memory+0x00376A5Cu)!=g_hud_ws) return;
+    for(uint32_t y=0;y<480u;y++) {
+        uint8_t *row=memory+g_hud_ws+y*GW_CANVAS_W+128u;
+        for(uint32_t x=0;x<48u;x++) {
+            if(row[x]==g_hud_sentinel) row[x]=g_hud_saved[y*48u+x];
+            else g_hud_written[y*48u+x]=1u;
+        }
+    }
 }
 static void hud_watch_stop(void) {
     if(g_hud_watching) { recomp_set_guest_write_observer(NULL,NULL); recomp_memory_diag_enable(g_hud_diag_was); g_hud_watching=0; }
+    g_hud_filled=0;
 }
 /* QA (GW_RING_WATCH=1, zoom-out canvas): which guest instructions write the ring's column x=96..127 (the HUD
    columns just left of the map); the first 32 distinct instruction addresses go to the flags log */
@@ -17309,16 +17334,6 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
        640-pitch rows in the HUD-side columns */
     {   static unsigned stable;
         stable=want?stable+1u:0u;
-        /* HUD art drawn at IFCMain entry (before the canvas exists): watched on the 640 WScreen until the switch */
-        if(g_ws_canvas && !g_ws_live_active) {
-            if(ifc==0x0035FE9Au && !g_hud_watching) {
-                memset(g_hud_written,0,sizeof g_hud_written);
-                g_hud_ws=*(const uint32_t *)(memory+0x00376A5Cu); g_hud_pitch=640u;
-                g_hud_diag_was=recomp_memory_diag_enabled();
-                recomp_set_guest_write_observer(hud_watch_write,NULL); recomp_memory_diag_enable(1); g_hud_watching=1;
-                g_hud_in_map=0; g_gw_ws_map_draw=hud_map_draw;
-            } else if(ifc!=0x0035FE9Au && g_hud_watching) hud_watch_stop();
-        }
         if(g_ws_canvas && want && !g_ws_live_active && stable<8u) want=0; }
     if(want==g_ws_live_active) return;
     /* the draw list is filled by the simulation and emptied by draw_game in the same tick; switch its pool only
@@ -17363,20 +17378,11 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         ws_live_viewport_gadget(memory,left,g_ws_canvas?(uint16_t)W:854u);
         if(g_ws_canvas) { ws_live_viewport_gadget_h(memory,left,(uint16_t)H); SDL_AtomicSet(&g_canvas_panel_reset,1); }
         if(g_ws_canvas) {
-            /* the HUD art recorded since IFCMain entry, with its colour in the frame just copied to the canvas */
             hud_watch_stop();
-            memset(g_hud_have,0,sizeof g_hud_have);
-            unsigned marked=0;
-            for(uint32_t y=0;y<480u;y++) for(uint32_t x=128u;x<176u;x++) {
-                const uint32_t pi=y*48u+(x-128u);
-                if(!g_hud_written[pi]) continue;
-                g_hud_val[pi]=memory[g_ws_live_ws+y*W+x]; g_hud_have[pi]=1u; g_hud_written[pi]=0u; marked++;
-            }
-            gw_flag_trace("TRACE zoomout hud_edge_mask pixels=%u%c",marked,10);
+            memset(g_hud_have,0,sizeof g_hud_have); memset(g_hud_written,0,sizeof g_hud_written);
             const char *rw=getenv("GW_RING_WATCH");
             if(rw && rw[0]=='1') recomp_set_guest_write_observer(ring_watch_write,NULL);
             else g_gw_ws_after_map=hud_watch_after_map;
-            g_gw_ws_map_draw=hud_map_draw;
         }
         SDL_AtomicSet(&g_interp_panel_reset,1);
         g_ws_live_active=1;
