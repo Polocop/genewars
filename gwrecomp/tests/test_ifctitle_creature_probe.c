@@ -9906,6 +9906,19 @@ static int SDLCALL tick_profile_sampler(void *unused) {
             const LONG i=InterlockedIncrement(&g_tick_profile_n)-1;
             if(i>=0 && (ULONG)i<GW_TICK_PROFILE_CAP)
                 g_tick_profile_samples[i]=*(volatile uint32_t *)&g_cur_func;
+            /* a tick still running after ~3 s (no tick_end will report it): the functions it has been sampled in */
+            if(i==3000 && (ULONG)i<GW_TICK_PROFILE_CAP && g_tick_profile_file) {
+                uint32_t va[16],hits[16]; unsigned distinct=0u;
+                for(LONG j=0;j<i;j++) { const uint32_t v=g_tick_profile_samples[j]; unsigned k=0u;
+                    while(k<distinct && va[k]!=v) k++;
+                    if(k==distinct) { if(distinct==16u) continue; va[k]=v; hits[k]=0u; distinct++; }
+                    hits[k]++; }
+                fprintf(g_tick_profile_file,"TRACE stuck_tick samples=%ld turn=%u ifc=%08x pending=%08x funcs=",(long)i,
+                    guest_memory?*(const uint32_t *)(guest_memory+0x002F1472u):0u,guest_memory?*(const uint32_t *)(guest_memory+0x002EF7E8u):0u,
+                    guest_memory?*(const uint32_t *)(guest_memory+0x002EF7ECu):0u);
+                for(unsigned k=0u;k<distinct;k++) fprintf(g_tick_profile_file,"%s%08x:%u",k?",":"",va[k],hits[k]);
+                fprintf(g_tick_profile_file,"\n"); fflush(g_tick_profile_file);
+            }
             if(g_tick_profile_worker && SuspendThread(g_tick_profile_worker)!=(DWORD)-1) {
                 CONTEXT ctx; memset(&ctx,0,sizeof ctx); ctx.ContextFlags=CONTEXT_CONTROL;
                 if(GetThreadContext(g_tick_profile_worker,&ctx)) {
