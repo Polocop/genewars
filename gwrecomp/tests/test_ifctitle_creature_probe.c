@@ -8149,18 +8149,20 @@ static int terrain_window_to_guest_hud(int wx,int wy,int *gx,int *gy) {
    640/640 by default; 854/864 while the game IFC runs on the widened surface. */
 static int g_ws_requested;
 /* --zoomout (GW_ZOOMOUT=1, implies --widescreen): the game draws a 1152x640 canvas (36 strips x 20 cell rows); the
-   host shows its HUD (x<128, y<480) at 1x and the map as a movable/zoomable window on the canvas. At zoom 1.0 that
-   window is the 726x480 area of the 854x480 widescreen view, at (GW_CANVAS_VX0, GW_CANVAS_VY0); zoom down to 0.75
-   shows 968x640. Canvas columns 128..175 carry the panel art, so the visible map starts at x=176. */
+   host shows its HUD (x<128, y<480) at 1x and the map as a zoomable window on the canvas. At zoom 1.0 the window is
+   the canvas' own top-left 854x480 (x=128..853, y=0..479), so everything the game places in screen coordinates
+   (help panels, messages, tooltips) lands exactly where it does on the 854x480 widescreen view; zooming out down to
+   0.75 shows 968x640 from the same corner (the extra area is to the right and below). Under the panel art at
+   x=128..175 the zoomed-out map shows the ring's terrain. */
 static int g_ws_canvas;
 static uint8_t g_hud_written[480u*48u],g_hud_val[480u*48u],g_hud_have[480u*48u];   /* panel art on x=128..175 */
 static uint32_t g_hud_ws;
 static void hud_sentinel_collect(uint8_t *memory);
 #define GW_CANVAS_W 1152u
 #define GW_CANVAS_H 640u
-#define GW_CANVAS_VX0 301
-#define GW_CANVAS_VY0 80
-#define GW_CANVAS_MAPX0 176
+#define GW_CANVAS_VX0 128
+#define GW_CANVAS_VY0 0
+#define GW_CANVAS_MAPX0 128
 #define GW_ZOOM_MIN_CANVAS 0.75
 static int g_present_w=640,g_present_pitch=640;
 /* Host presentation breakdown (main thread, GW_TICK_PROFILE), reported every 10 s: palette conversion + texture
@@ -8190,7 +8192,7 @@ static int g_zoom_anim; static uint64_t g_zoom_t;
 /* zoom-out canvas: map texture of canvas x=176..1151, y=0..639 (current and previous guest frame, for the
    scroll interpolation); g_canvas_live while the presented frame came from the canvas */
 static SDL_Texture *g_canvas_tex[2]; static int g_canvas_live,g_canvas_tex_ready;
-#define GW_CANVAS_TEX_W (1152-176)
+#define GW_CANVAS_TEX_W (1152-128)
 /* F7 display filter: 0 sharp pixels, 1 EPX (Scale2x on palette indices), 2 CRT mask; saved in gw_display.cfg */
 static int g_filter_mode=-1,g_tex_scale=1;
 static int host_turbo_factor(void) {
@@ -8576,7 +8578,7 @@ static void host_zoom_tick(void) {
     const double mw=(double)g_present_w-128.0;
     double minx=0.0,maxx=mw-mw/g_zoom,miny=0.0,maxy=480.0-480.0/g_zoom;
     if(g_zoom<1.0) {
-        /* zoomed out (canvas): the window always contains the 1x area and stays inside canvas x>=176, y>=0 */
+        /* zoomed out (canvas): the window always contains the 1x area (it starts at the canvas' map corner) */
         if(!g_canvas_live) { g_zoom=g_zoom_target=1.0; g_zoom_x=g_zoom_y=0.0; g_zoom_anim=0; return; }
         const double vw=mw/g_zoom,vh=480.0/g_zoom;
         minx=mw-vw; if(minx<(double)(GW_CANVAS_MAPX0-GW_CANVAS_VX0)) minx=(double)(GW_CANVAS_MAPX0-GW_CANVAS_VX0);
@@ -9311,9 +9313,12 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                     void *tp=NULL; int tpitch=0;
                     if(SDL_LockTexture(g_canvas_tex[1],NULL,&tp,&tpitch)==0 && tp) {
                         for(int y=0;y<(int)GW_CANVAS_H;y++) {
-                            const uint8_t *row=visual->canvas+(size_t)y*GW_CANVAS_W+176u;
+                            const uint8_t *row=visual->canvas+(size_t)y*GW_CANVAS_W+128u;
                             uint32_t *o=(uint32_t *)((uint8_t *)tp+(size_t)y*(size_t)tpitch);
                             for(int x=0;x<GW_CANVAS_TEX_W;x++) o[x]=lut[row[x]];
+                            /* panel art on x=128..175: the map under it (ring terrain) in the zoomed-out window */
+                            if(y<480 && visual->panel_bg_valid)
+                                for(int x=0;x<48;x++) if(visual->canvas_panel[y*48+x]) o[x]=lut[visual->panel_bg[y*48+x]];
                         }
                         SDL_UnlockTexture(g_canvas_tex[1]);
                         g_canvas_tex_ready=g_canvas_tex_ready<2?g_canvas_tex_ready+1:2;
