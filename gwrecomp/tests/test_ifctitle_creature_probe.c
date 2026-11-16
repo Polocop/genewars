@@ -8207,9 +8207,11 @@ static void display_filter_load(void) {
     FILE *f=fopen("gw_display.cfg","rb");
     if(f) { int v=0; if(fscanf(f,"filter=%d",&v)==1 && v>=0 && v<=2) g_filter_mode=v; fclose(f); }
 }
+static void gwrecomp_ini_filter_changed(void);
 static void display_filter_save(void) {
     FILE *f=fopen("gw_display.cfg","wb");
     if(f) { fprintf(f,"filter=%d\n",g_filter_mode); fclose(f); }
+    gwrecomp_ini_filter_changed();
 }
 static void gpu_timing_sync(void) { uint32_t px; SDL_Rect r={0,0,1,1}; (void)SDL_RenderReadPixels(g_ifclevel_demo_renderer,&r,SDL_PIXELFORMAT_ARGB8888,&px,4); }
 static unsigned g_hostprof_frames,g_hostprof_uploads;
@@ -8385,10 +8387,54 @@ static int parse_cli_resolution(const char *v) {
 /* gwrecomp.ini (optional, play mode only): next to the executable, else in the working directory. One "key = value"
    per line, ';' or '#' start a comment. Keys: mode = zoomout | widescreen | classic, resolution = 2160p | 1440p |
    1080p | 900p | WxH, fullscreen = 0 | 1, fps = 30..240, data_dir = <Gene Wars folder>. Applied before the
-   environment and the command line, which win when they say something explicitly. */
+   environment and the command line, which win when they say something explicitly.
+   Launcher keys (written by the launcher screen, also valid by hand): filter = sharp | epx | crt (F7 keeps it up to
+   date), turbo = 1 | 2 | 4 (start value of F8), camera_keys = 0 | 1 (WASD / arrows scroll the map),
+   middle_drag = 0 | 1 (middle-button drag scrolls the map), skip_intro = 0 | 1, launcher = 0 | 1 (show the launcher
+   when the program starts without arguments), last_mission = 1..24, cd_cue = <.cue of your CD image> (music). */
 static char g_ini_data_dir[600];
 static unsigned g_ini_fps;   /* gwrecomp.ini fps = N (play mode) */
 static char g_ini_path_used[MAX_PATH];
+static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launcher=1,g_ini_last_mission=1;
+static char g_ini_cd_cue[600];
+/* where the launcher writes: the file that was read, else gwrecomp.ini next to the executable */
+static void gwrecomp_ini_target(char *path,size_t n) {
+    if(g_ini_path_used[0]) { snprintf(path,n,"%s",g_ini_path_used); return; }
+    char exe[MAX_PATH];
+    if(GetModuleFileNameA(NULL,exe,MAX_PATH)) { char *slash=strrchr(exe,92); if(slash) { slash[1]=0; snprintf(path,n,"%sgwrecomp.ini",exe); return; } }
+    snprintf(path,n,"gwrecomp.ini");
+}
+/* set one key: the first "key = ..." line is replaced (its trailing comment kept), every other line (comments,
+   unknown keys) is kept as it is; a missing key is appended. Written to a temporary file and moved over. */
+static int gwrecomp_ini_set(const char *key,const char *val) {
+    char path[MAX_PATH],tmp[MAX_PATH+8]; gwrecomp_ini_target(path,sizeof path);
+    snprintf(tmp,sizeof tmp,"%s.tmp",path);
+    FILE *in=fopen(path,"rb"),*out=fopen(tmp,"wb");
+    if(!out) { if(in) fclose(in); return 0; }
+    int done=0; char line[1024];
+    if(!in) fprintf(out,"; GWRecomp settings (written by the launcher; see gwrecomp.ini.example)\r\n");
+    while(in && fgets(line,sizeof line,in)) {
+        const char *p=line; while(*p==' '||*p=='\t') p++;
+        size_t kl=strlen(key);
+        if(!done && !_strnicmp(p,key,kl)) {
+            const char *q=p+kl; while(*q==' '||*q=='\t') q++;
+            if(*q=='=') {
+                const char *cm=strpbrk(q,";#"); char tail[512]="";
+                if(cm) { snprintf(tail,sizeof tail,"   %s",cm); size_t tl=strlen(tail); while(tl && (tail[tl-1]=='\r'||tail[tl-1]=='\n')) tail[--tl]=0; }
+                fprintf(out,"%s = %s%s\r\n",key,val,tail); done=1; continue;
+            }
+        }
+        fputs(line,out);
+        size_t l=strlen(line); if(l && line[l-1]!='\n') fputs("\r\n",out);
+    }
+    if(!done) fprintf(out,"%s = %s\r\n",key,val);
+    if(in) fclose(in);
+    if(fclose(out)!=0 || !MoveFileExA(tmp,path,MOVEFILE_REPLACE_EXISTING)) { DeleteFileA(tmp); return 0; }
+    if(!g_ini_path_used[0]) snprintf(g_ini_path_used,sizeof g_ini_path_used,"%s",path);
+    return 1;
+}
+static void gwrecomp_ini_set_int(const char *key,int v) { char b[16]; snprintf(b,sizeof b,"%d",v); (void)gwrecomp_ini_set(key,b); }
+static const char *const g_filter_names[3]={"sharp","epx","crt"};
 static void gwrecomp_ini_trim(char *t) {
     char *a=t; while(*a==' '||*a=='\t') a++;
     if(a!=t) memmove(t,a,strlen(a)+1);
@@ -8417,15 +8463,30 @@ static void gwrecomp_ini_load(void) {
             else if(!_stricmp(val,"classic")) { g_ws_requested=0; g_ws_canvas=0; }
             else fprintf(stderr,"gwrecomp.ini: unknown mode '%s' (zoomout, widescreen, classic)\n",val);
         } else if(!strcmp(key,"resolution")) {
-            if(val[0] && !parse_cli_resolution(val)) fprintf(stderr,"gwrecomp.ini: bad resolution '%s'\n",val);
+            if(!val[0] || !_stricmp(val,"auto")) { g_cli_res_w=g_cli_res_h=0; }
+            else if(!parse_cli_resolution(val)) fprintf(stderr,"gwrecomp.ini: bad resolution '%s'\n",val);
         } else if(!strcmp(key,"fullscreen")) g_cli_fullscreen=atoi(val)!=0;
         else if(!strcmp(key,"fps")) {
             const int v=atoi(val);
             if(v>=30 && v<=240) g_ini_fps=(unsigned)v; else fprintf(stderr,"gwrecomp.ini: fps %s out of 30..240\n",val);
         } else if(!strcmp(key,"data_dir")) snprintf(g_ini_data_dir,sizeof g_ini_data_dir,"%s",val);
+        else if(!strcmp(key,"filter")) {
+            int m=-1; for(int i=0;i<3;i++) if(!_stricmp(val,g_filter_names[i])) m=i;
+            if(m>=0) g_filter_mode=m; else fprintf(stderr,"gwrecomp.ini: unknown filter '%s' (sharp, epx, crt)\n",val);
+        } else if(!strcmp(key,"turbo")) { const int v=atoi(val); if(v==1||v==2||v==4) g_turbo_level=v; }
+        else if(!strcmp(key,"camera_keys")) g_ini_camera_keys=atoi(val)!=0;
+        else if(!strcmp(key,"middle_drag")) g_ini_middle_drag=atoi(val)!=0;
+        else if(!strcmp(key,"skip_intro")) g_ini_skip_intro=atoi(val)!=0;
+        else if(!strcmp(key,"launcher")) g_ini_launcher=atoi(val)!=0;
+        else if(!strcmp(key,"last_mission")) { const int v=atoi(val); if(v>=1 && v<=24) g_ini_last_mission=v; }
+        else if(!strcmp(key,"cd_cue")) snprintf(g_ini_cd_cue,sizeof g_ini_cd_cue,"%s",val);
         else if(key[0]) fprintf(stderr,"gwrecomp.ini: unknown key '%s'\n",key);
     }
     fclose(f);
+}
+/* F7 also updates gwrecomp.ini when the player has one (it is never created just for this) */
+static void gwrecomp_ini_filter_changed(void) {
+    if(g_ini_path_used[0] && g_filter_mode>=0 && g_filter_mode<3) (void)gwrecomp_ini_set("filter",g_filter_names[g_filter_mode]);
 }
 /* Window size in physical pixels (the process is per-monitor DPI aware): the default sizes are scaled by the
    monitor's DPI so the window keeps its usual size on screen, now rendered at full resolution. */
@@ -8618,7 +8679,7 @@ static int host_controls_event(const SDL_Event *ev) {
     }
     if(ev->type==SDL_KEYDOWN || ev->type==SDL_KEYUP) {
         const SDL_Keycode k=ev->key.keysym.sym; const int down=ev->type==SDL_KEYDOWN;
-        const LONG bit=host_pan_bit(k);
+        const LONG bit=g_ini_camera_keys?host_pan_bit(k):0;
         if(ev->key.repeat) return k==SDLK_F7 || k==SDLK_F8 || k==SDLK_F10 || (map && (k==SDLK_TAB || k==SDLK_HOME || bit));
         if(k==SDLK_F7) {
             if(down) { display_filter_load(); g_filter_mode=(g_filter_mode+1)%3; display_filter_save();
@@ -8653,7 +8714,7 @@ static int host_controls_event(const SDL_Event *ev) {
         }
         return 0;
     }
-    if((ev->type==SDL_MOUSEBUTTONDOWN || ev->type==SDL_MOUSEBUTTONUP) && ev->button.button==SDL_BUTTON_MIDDLE) {
+    if(g_ini_middle_drag && (ev->type==SDL_MOUSEBUTTONDOWN || ev->type==SDL_MOUSEBUTTONUP) && ev->button.button==SDL_BUTTON_MIDDLE) {
         g_mid_drag=ev->type==SDL_MOUSEBUTTONDOWN && map;
         g_mid_last_x=ev->button.x; g_mid_last_y=ev->button.y;
         return 1;
@@ -18492,8 +18553,396 @@ static void play_mode_sanitize_environment(void) {
     (void)_putenv("GWRECOMP_IFCLEVEL_NATIVE_GAME_LOOP=1");
 }
 
+/* ===================================================================================================================
+   Native launcher (play mode). Shown before any guest memory, VFS or game window exists when the program starts with
+   no arguments (double-click: see standalone_setup) or with --launcher, unless --fast-launch, --level or --load-save
+   is given or gwrecomp.ini says launcher = 0. It only chooses settings and a start action, writes every change to
+   gwrecomp.ini at once, and returns; main() then continues exactly as a command-line start with the same options:
+     INICIAR JUEGO       -> the original title menu (as before)
+     CONTINUAR           -> newest save of the overlay SAVE folder, through the --load-save path
+     MISION N            -> the --level N path (N >= 2 types the game's own level code on the mission screen)
+   Drawing: one 640x400 software canvas (a GDI DIB section: shapes written directly, text through GDI with
+   non-antialiased fonts) uploaded to an SDL texture and scaled up with nearest sampling. Mission names come from
+   the player's own LEVELS\HDRCOn.DAT (planet name at offset 32); nothing of the game is embedded here.
+   =================================================================================================================== */
+#include <shlobj.h>
+#define GL_W 640
+#define GL_H 400
+typedef struct { int x,y,w,h; } gl_rect;
+static struct {
+    uint32_t *px; HDC dc; HBITMAP bmp; HGDIOBJ old_bmp;
+    HFONT f_small,f_body,f_bold,f_head,f_title;
+    int mx,my,clicked,dbl,tab,sel,result;
+    char names[25][28];
+    char data_dir[600];
+    int data_ok[4],data_all;
+    char save_path[MAX_PATH],save_label[96]; int have_save;
+    char root[MAX_PATH];
+    int desk_w,desk_h;
+    char status[160]; uint32_t status_until;
+} GL;
+enum { GLC_BG=0x0B0A18, GLC_PANEL=0x3A3660, GLC_PANEL2=0x24223E, GLC_HI=0x8A86C0, GLC_LO=0x110F22, GLC_CYAN=0x48E8D0,
+       GLC_DIMCYAN=0x2A8C80, GLC_AMBER=0xF0B040, GLC_RED=0xB82A2A, GLC_REDHI=0xF05A4A, GLC_TEXT=0xD8D4F0, GLC_GREY=0x77739A,
+       GLC_GREEN=0x58E070 };
+static void gl_fill(int x,int y,int w,int h,uint32_t c) {
+    GdiFlush();
+    for(int j=y<0?0:y;j<y+h && j<GL_H;j++) for(int i=x<0?0:x;i<x+w && i<GL_W;i++) GL.px[j*GL_W+i]=c;
+}
+static uint32_t gl_mix(uint32_t a,uint32_t b,int t256) {
+    const int r=(((a>>16)&255)*(256-t256)+((b>>16)&255)*t256)>>8,g=(((a>>8)&255)*(256-t256)+((b>>8)&255)*t256)>>8,
+              bl=((a&255)*(256-t256)+(b&255)*t256)>>8;
+    return (uint32_t)(r<<16|g<<8|bl);
+}
+/* metal panel: vertical gradient, 1-pixel bevel, rivets in the corners */
+static void gl_panel(gl_rect r,uint32_t top,uint32_t bot,int raised) {
+    GdiFlush();
+    for(int j=0;j<r.h;j++) { const uint32_t c=gl_mix(top,bot,r.h>1?j*256/(r.h-1):0); gl_fill(r.x,r.y+j,r.w,1,c); }
+    const uint32_t a=raised?GLC_HI:GLC_LO,b=raised?GLC_LO:GLC_HI;
+    gl_fill(r.x,r.y,r.w,1,a); gl_fill(r.x,r.y,1,r.h,a); gl_fill(r.x,r.y+r.h-1,r.w,1,b); gl_fill(r.x+r.w-1,r.y,1,r.h,b);
+    if(r.w>40 && r.h>24) { const int rx[2]={r.x+4,r.x+r.w-6},ry[2]={r.y+4,r.y+r.h-6};
+        for(int i=0;i<2;i++) for(int k=0;k<2;k++) { gl_fill(rx[i],ry[k],2,2,GLC_HI); gl_fill(rx[i]+1,ry[k]+1,1,1,GLC_LO); } }
+}
+static void gl_text(HFONT f,int x,int y,uint32_t c,const wchar_t *s) {
+    SelectObject(GL.dc,f); SetTextColor(GL.dc,RGB((c>>16)&255,(c>>8)&255,c&255)); SetBkMode(GL.dc,TRANSPARENT);
+    TextOutW(GL.dc,x,y,s,(int)wcslen(s));
+}
+static int gl_text_w(HFONT f,const wchar_t *s) { SIZE z={0,0}; SelectObject(GL.dc,f); GetTextExtentPoint32W(GL.dc,s,(int)wcslen(s),&z); return z.cx; }
+static void gl_text_c(HFONT f,gl_rect r,uint32_t c,const wchar_t *s) {
+    SIZE z={0,0}; SelectObject(GL.dc,f); GetTextExtentPoint32W(GL.dc,s,(int)wcslen(s),&z);
+    gl_text(f,r.x+(r.w-z.cx)/2,r.y+(r.h-z.cy)/2,c,s);
+}
+static int gl_in(gl_rect r) { return GL.mx>=r.x && GL.mx<r.x+r.w && GL.my>=r.y && GL.my<r.y+r.h; }
+/* style 0 normal, 1 big red (start), 2 selected/active, 3 disabled */
+static int gl_button(gl_rect r,const wchar_t *label,int style,HFONT f) {
+    const int hot=style!=3 && gl_in(r);
+    if(style==1) gl_panel(r,hot?GLC_REDHI:0xD83A30,hot?0x90201C:GLC_RED,1);
+    else if(style==2) gl_panel(r,0x2E8A80,0x16504A,0);
+    else if(style==3) gl_panel(r,GLC_PANEL2,0x1A1830,1);
+    else gl_panel(r,hot?0x5A5690:GLC_PANEL,hot?0x34305A:GLC_PANEL2,1);
+    gl_text_c(f,r,style==3?GLC_GREY:style==1?0xFFF0D0:style==2?0xFFFFFF:hot?GLC_CYAN:GLC_TEXT,label);
+    return hot && GL.clicked;
+}
+/* a row of mutually exclusive choices; returns the clicked index or -1. dis: bit mask of disabled entries */
+static int gl_choice(int x,int y,int w,int h,const wchar_t *const *labels,int n,int cur,unsigned dis) {
+    int hit=-1; const int gap=4,bw=(w-gap*(n-1))/n;
+    for(int i=0;i<n;i++) {
+        gl_rect r={x+i*(bw+gap),y,bw,h};
+        if(gl_button(r,labels[i],(dis>>i)&1u?3:i==cur?2:0,GL.f_body)) hit=i;
+    }
+    return hit;
+}
+static void gl_status(const char *s) { snprintf(GL.status,sizeof GL.status,"%s",s); GL.status_until=SDL_GetTicks()+4000u; }
+static void gl_wide(const char *s,wchar_t *w,int n) { if(!MultiByteToWideChar(CP_ACP,0,s,-1,w,n)) w[0]=0; }
+
+static void gl_scan_data(void) {
+    static const char *const sub[4]={"DATA","LEVELS","SOUND","INTRO"};
+    GL.data_all=GL.data_dir[0]!=0;
+    for(int i=0;i<4;i++) {
+        char p[700]; snprintf(p,sizeof p,"%s\\%s",GL.data_dir,sub[i]);
+        const DWORD a=GL.data_dir[0]?GetFileAttributesA(p):INVALID_FILE_ATTRIBUTES;
+        GL.data_ok[i]=a!=INVALID_FILE_ATTRIBUTES && (a&FILE_ATTRIBUTE_DIRECTORY);
+        if(!GL.data_ok[i]) GL.data_all=0;
+    }
+    for(int m=1;m<=24;m++) {
+        char p[700]; snprintf(p,sizeof p,"%s\\LEVELS\\HDRCO%d.DAT",GL.data_dir,m);
+        GL.names[m][0]=0;
+        FILE *f=GL.data_dir[0]?fopen(p,"rb"):NULL;
+        if(f) { unsigned char b[64]; const size_t got=fread(b,1,sizeof b,f); fclose(f);
+            if(got>=33) { int k=0; for(size_t i=32;i<got && b[i] && k<(int)sizeof GL.names[m]-1;i++) {
+                const unsigned char ch=b[i]; if(ch<32 || ch>126) { k=0; break; } GL.names[m][k++]=(char)(ch>='a'&&ch<='z'?ch-32:ch); }
+                GL.names[m][k]=0; } }
+    }
+}
+/* newest save written by the game in the host overlay (work\dos_vfs_overlay\save) */
+static void gl_scan_saves(void) {
+    GL.have_save=0; FILETIME best={0,0};
+    static const char *const dirs[1]={"work\\dos_vfs_overlay\\save"};   /* case-insensitive: SAVE too */
+    for(int d=0;d<1;d++) {
+        char pat[MAX_PATH]; snprintf(pat,sizeof pat,"%s\\%s\\*.sav",GL.root,dirs[d]);
+        WIN32_FIND_DATAA fd; HANDLE h=FindFirstFileA(pat,&fd);
+        if(h==INVALID_HANDLE_VALUE) continue;
+        do {
+            const size_t l=strlen(fd.cFileName);
+            if(l<4 || _stricmp(fd.cFileName+l-4,".sav") || fd.nFileSizeHigh || fd.nFileSizeLow!=(DWORD)GW_SAVE_FILE_SIZE) continue;
+            if(!GL.have_save || CompareFileTime(&fd.ftLastWriteTime,&best)>0) {
+                best=fd.ftLastWriteTime; GL.have_save=1;
+                snprintf(GL.save_path,sizeof GL.save_path,"%s\\%s\\%s",GL.root,dirs[d],fd.cFileName);
+                FILETIME lt; SYSTEMTIME st; FileTimeToLocalFileTime(&fd.ftLastWriteTime,&lt); FileTimeToSystemTime(&lt,&st);
+                snprintf(GL.save_label,sizeof GL.save_label,"%s  %02u/%02u/%04u %02u:%02u",fd.cFileName,st.wDay,st.wMonth,st.wYear,st.wHour,st.wMinute);
+            }
+        } while(FindNextFileA(h,&fd));
+        FindClose(h);
+    }
+}
+static void gl_pick_folder(SDL_Window *win) {
+    (void)win;
+    HMODULE sh=LoadLibraryA("shell32.dll"),ole=LoadLibraryA("ole32.dll");
+    typedef LPITEMIDLIST (WINAPI *browse_fn)(LPBROWSEINFOA);
+    typedef BOOL (WINAPI *path_fn)(LPCITEMIDLIST,LPSTR);
+    typedef void (WINAPI *free_fn)(LPVOID);
+    browse_fn browse=sh?(browse_fn)(void *)GetProcAddress(sh,"SHBrowseForFolderA"):NULL;
+    path_fn topath=sh?(path_fn)(void *)GetProcAddress(sh,"SHGetPathFromIDListA"):NULL;
+    free_fn cofree=ole?(free_fn)(void *)GetProcAddress(ole,"CoTaskMemFree"):NULL;
+    if(browse && topath) {
+        char disp[MAX_PATH]=""; BROWSEINFOA bi; memset(&bi,0,sizeof bi);
+        bi.pszDisplayName=disp; bi.lpszTitle="Carpeta GENEWARS de tu copia de Gene Wars 1.1 (con DATA, LEVELS, SOUND e INTRO)";
+        bi.ulFlags=BIF_RETURNONLYFSDIRS|0x40u /* BIF_NEWDIALOGSTYLE */;
+        LPITEMIDLIST id=browse(&bi);
+        if(id) { char p[MAX_PATH]; if(topath(id,p)) {
+                snprintf(GL.data_dir,sizeof GL.data_dir,"%s",p); gl_scan_data();
+                if(gwrecomp_ini_set("data_dir",GL.data_dir)) snprintf(g_ini_data_dir,sizeof g_ini_data_dir,"%s",GL.data_dir);
+                gl_status(GL.data_all?"Carpeta guardada en gwrecomp.ini":"A esa carpeta le faltan subcarpetas del juego"); }
+            if(cofree) cofree(id); }
+    }
+    if(sh) FreeLibrary(sh); if(ole) FreeLibrary(ole);
+}
+static const int gl_res_w[5]={0,1600,1920,2560,3840},gl_res_h[5]={0,900,1080,1440,2160};
+static const char *const gl_res_ini[5]={"auto","900p","1080p","1440p","2160p"};
+static int gl_res_index(void) { for(int i=1;i<5;i++) if(g_cli_res_w==gl_res_w[i] && g_cli_res_h==gl_res_h[i]) return i; return g_cli_res_w?-1:0; }
+static void gl_start_mission(int m) {
+    g_cli_level=(unsigned)m; g_cli_skip_intro=1; GL.result=1;
+    g_ini_last_mission=m; gwrecomp_ini_set_int("last_mission",m);
+}
+
+static void gl_draw_play(void) {
+    const int ready=GL.data_all;
+    gl_panel((gl_rect){12,52,246,300},GLC_PANEL2,0x15142A,0);
+    if(gl_button((gl_rect){22,62,226,58},L"INICIAR JUEGO",ready?1:3,GL.f_head) && ready) { g_cli_skip_intro=g_ini_skip_intro; GL.result=1; }
+    gl_text(GL.f_small,24,124,GLC_GREY,L"Menú de título original: nueva partida o cargar");
+    const int can_cont=ready && GL.have_save;
+    if(gl_button((gl_rect){22,142,226,36},L"CONTINUAR ÚLTIMA PARTIDA",can_cont?0:3,GL.f_bold) && can_cont) {
+        char dst[MAX_PATH]; snprintf(dst,sizeof dst,"%s\\work\\launcher_continue.sav",GL.root);
+        if(CopyFileA(GL.save_path,dst,FALSE) && strlen(dst)<sizeof g_cli_load_save_path) {
+            strcpy(g_cli_load_save_path,dst); g_cli_load_save=1; g_cli_skip_intro=1; GL.result=1;
+        } else gl_status("No se pudo preparar la partida guardada");
+    }
+    { wchar_t w[120]; if(GL.have_save) gl_wide(GL.save_label,w,120); else wcscpy(w,L"(todavía no hay partidas guardadas)");
+      gl_text(GL.f_small,24,182,GL.have_save?GLC_DIMCYAN:GLC_GREY,w); }
+    gl_text(GL.f_bold,24,206,GLC_AMBER,L"AL ARRANCAR");
+    static const wchar_t *const yn[2]={L"NO",L"SÍ"};
+    gl_text(GL.f_body,24,226,GLC_TEXT,L"Saltar vídeos");
+    int c=gl_choice(150,222,96,20,yn,2,g_ini_skip_intro,0u);
+    if(c>=0 && c!=g_ini_skip_intro) { g_ini_skip_intro=c; gwrecomp_ini_set_int("skip_intro",c); }
+    gl_text(GL.f_body,24,252,GLC_TEXT,L"Este lanzador");
+    c=gl_choice(150,248,96,20,yn,2,g_ini_launcher,0u);
+    if(c>=0 && c!=g_ini_launcher) { g_ini_launcher=c; gwrecomp_ini_set_int("launcher",c); }
+    gl_text(GL.f_small,24,274,GLC_GREY,L"(sin él, doble clic arranca directo;");
+    gl_text(GL.f_small,24,286,GLC_GREY,L" --launcher lo vuelve a mostrar)");
+    {   wchar_t w[160]; const int ri=gl_res_index();
+        swprintf(w,160,L"%ls · %u FPS · %ls",g_ws_canvas?L"Zoom out":g_ws_requested?L"Panorámico":L"Clásico",
+            g_ini_fps?g_ini_fps:120u,g_cli_fullscreen?L"pantalla completa":ri==0?L"ventana":L"ventana fija");
+        gl_text(GL.f_small,24,316,GLC_DIMCYAN,w);
+        gl_text(GL.f_small,24,330,GLC_GREY,L"Cambia la imagen en la pestaña PANTALLA"); }
+
+    /* mission select */
+    gl_panel((gl_rect){266,52,362,300},GLC_PANEL2,0x15142A,0);
+    gl_text(GL.f_bold,278,58,GLC_AMBER,L"SELECCIÓN DE MISIÓN");
+    for(int m=1;m<=24;m++) {
+        const int col=(m-1)/8,row=(m-1)%8; gl_rect r={276+col*118,78+row*26,114,23};
+        wchar_t w[48],nm[32]; gl_wide(GL.names[m][0]?GL.names[m]:"---",nm,32); swprintf(w,48,L"%02d %ls",m,nm);
+        const int hot=gl_in(r);
+        if(m==GL.sel) gl_panel(r,0x2E8A80,0x16504A,0); else gl_panel(r,hot?0x4A4678:0x2E2B4E,hot?0x2C2948:0x1E1C36,1);
+        gl_text(GL.f_body,r.x+6,r.y+5,m==GL.sel?0xFFFFFF:hot?GLC_CYAN:GLC_TEXT,w);
+        if(hot && GL.clicked) { GL.sel=m; if(GL.dbl && ready) gl_start_mission(m); }
+    }
+    {   wchar_t w[64],nm[32]; gl_wide(GL.names[GL.sel][0]?GL.names[GL.sel]:"",nm,32);
+        swprintf(w,64,L"JUGAR MISIÓN %02d  %ls",GL.sel,nm);
+        if(gl_button((gl_rect){276,294,342,30},w,ready?1:3,GL.f_bold) && ready) gl_start_mission(GL.sel); }
+    gl_text(GL.f_small,278,328,GLC_GREY,GL.sel>1?L"Usa el código de niveles del juego: sus teclas de truco":
+                                                    L"Partida nueva normal desde la primera misión");
+    if(GL.sel>1) gl_text(GL.f_small,278,340,GLC_GREY,L"quedan activas en esa sesión (guarda, cierra y carga)");
+}
+static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
+    gl_text(GL.f_bold,24,y,GLC_AMBER,t);
+    if(sub) gl_text(GL.f_small,24,y+16,GLC_GREY,sub);
+}
+static void gl_draw_display(void) {
+    gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
+    static const wchar_t *const modes[3]={L"CLÁSICO 4:3",L"PANORÁMICO 854×480",L"ZOOM OUT 1152×640"};
+    gl_row_label(62,L"MODO DE VISTA",L"Zoom out: rueda 0,75x..2x, Inicio = 1x");
+    int cur=g_ws_canvas?2:g_ws_requested?1:0;
+    int c=gl_choice(228,62,390,24,modes,3,cur,0u);
+    if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
+    static const wchar_t *const res[5]={L"AUTO",L"900p",L"1080p",L"1440p",L"2160p"};
+    unsigned dis=0u; for(int i=1;i<5;i++) if(GL.desk_w && (gl_res_w[i]>GL.desk_w || gl_res_h[i]>GL.desk_h)) dis|=1u<<i;
+    gl_row_label(116,L"RESOLUCIÓN",L"Tamaño de la ventana (el juego sigue en 480 líneas)");
+    cur=gl_res_index(); c=gl_choice(228,116,390,24,res,5,cur,dis);
+    if(c>=0 && c!=cur) { g_cli_res_w=gl_res_w[c]; g_cli_res_h=gl_res_h[c]; (void)gwrecomp_ini_set("resolution",gl_res_ini[c]); }
+    static const wchar_t *const fs[2]={L"VENTANA",L"COMPLETA SIN BORDES"};
+    gl_row_label(170,L"PANTALLA",L"Sin bordes usa la resolución del escritorio");
+    c=gl_choice(228,170,390,24,fs,2,g_cli_fullscreen,0u);
+    if(c>=0 && c!=g_cli_fullscreen) { g_cli_fullscreen=c; gwrecomp_ini_set_int("fullscreen",c); }
+    static const wchar_t *const fps[2]={L"60 FPS CLÁSICO",L"120 FPS INTERPOLADO"};
+    gl_row_label(224,L"FOTOGRAMAS",L"La simulación va siempre a la velocidad original");
+    cur=g_ini_fps==60u?0:1; c=gl_choice(228,224,390,24,fps,2,cur,0u);
+    if(c>=0 && c!=cur) { g_ini_fps=c?120u:60u; gwrecomp_ini_set_int("fps",(int)g_ini_fps); }
+    static const wchar_t *const flt[3]={L"NÍTIDO",L"EPX SUAVE",L"CRT"};
+    gl_row_label(278,L"FILTRO (F7)",L"También se cambia en partida con F7");
+    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,278,390,24,flt,3,cur,0u);
+    if(c>=0 && c!=cur) { g_filter_mode=c; (void)gwrecomp_ini_set("filter",g_filter_names[c]); }
+}
+static void gl_draw_controls(void) {
+    gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
+    static const wchar_t *const yn[2]={L"NO",L"SÍ"};
+    gl_row_label(62,L"CÁMARA CON TECLADO",L"WASD y flechas desplazan el mapa");
+    int c=gl_choice(228,62,200,24,yn,2,g_ini_camera_keys,0u);
+    if(c>=0 && c!=g_ini_camera_keys) { g_ini_camera_keys=c; gwrecomp_ini_set_int("camera_keys",c); }
+    gl_row_label(116,L"ARRASTRE BOTÓN CENTRAL",L"Mantén la rueda pulsada y arrastra");
+    c=gl_choice(228,116,200,24,yn,2,g_ini_middle_drag,0u);
+    if(c>=0 && c!=g_ini_middle_drag) { g_ini_middle_drag=c; gwrecomp_ini_set_int("middle_drag",c); }
+    static const wchar_t *const tb[3]={L"1x",L"2x",L"4x"};
+    const LONG tl=g_turbo_level; const int cur=tl==4?2:tl==2?1:0;
+    gl_row_label(170,L"TURBO INICIAL (F8)",L"Multiplicador de ticks en el mapa");
+    c=gl_choice(228,170,200,24,tb,3,cur,0u);
+    if(c>=0 && c!=cur) { g_turbo_level=c==2?4:c==1?2:1; gwrecomp_ini_set_int("turbo",(int)g_turbo_level); }
+    gl_text(GL.f_bold,446,62,GLC_AMBER,L"TECLAS EN PARTIDA");
+    static const wchar_t *const keys[][2]={{L"F7",L"filtro"},{L"F8",L"turbo 1x/2x/4x"},{L"TAB",L"turbo 4x (mantener)"},
+        {L"Rueda",L"zoom"},{L"Inicio",L"zoom 1x"},{L"F10",L"soltar el ratón"},{L"ESC",L"opciones del juego"}};
+    for(int i=0;i<7;i++) { gl_text(GL.f_body,446,84+i*20,GLC_CYAN,keys[i][0]); gl_text(GL.f_body,500,84+i*20,GLC_TEXT,keys[i][1]); }
+}
+static void gl_draw(void) {
+    /* backdrop: deep space with a fixed star field and a violet nebula glow */
+    for(int y=0;y<GL_H;y++) for(int x=0;x<GL_W;x++) {
+        const int dx=x-470,dy=y-150; const int d=(dx*dx)/90+(dy*dy)/40; const int glow=d<1400?(1400-d)*60/1400:0;
+        GL.px[y*GL_W+x]=gl_mix(GLC_BG,0x4A2A80,glow);
+    }
+    { uint32_t s=0x1234567u; for(int i=0;i<260;i++) { s=s*1664525u+1013904223u; const int x=(int)(s>>8)%GL_W; s=s*1664525u+1013904223u;
+        const int y=(int)(s>>8)%GL_H; const uint32_t b=(s>>4)&3u; GL.px[y*GL_W+x]=b==0?0xFFFFFF:b==1?0x9A96D0:0x5A5690; } }
+    /* header */
+    gl_panel((gl_rect){0,0,GL_W,46},0x4A4678,0x23213C,1);
+    gl_text(GL.f_title,14,4,GLC_CYAN,L"GENE WARS");
+    gl_text(GL.f_small,16,32,GLC_AMBER,L"RECOMPILACIÓN NATIVA · LANZADOR");
+    static const wchar_t *const tabs[3]={L"JUGAR",L"PANTALLA",L"CONTROLES"};
+    for(int i=0;i<3;i++) if(gl_button((gl_rect){316+i*104,10,98,26},tabs[i],GL.tab==i?2:0,GL.f_bold)) GL.tab=i;
+    if(GL.tab==0) gl_draw_play(); else if(GL.tab==1) gl_draw_display(); else gl_draw_controls();
+    /* footer: the Gene Wars folder */
+    gl_panel((gl_rect){0,358,GL_W,42},0x3A3660,0x1C1A32,1);
+    {   wchar_t w[620]; gl_wide(GL.data_dir[0]?GL.data_dir:"(no configurada)",w,620);
+        if(wcslen(w)>52) { memmove(w+3,w+wcslen(w)-49,50*sizeof(wchar_t)); w[0]=w[1]=w[2]=L'.'; }
+        gl_text(GL.f_small,12,363,GLC_GREY,L"CARPETA DE GENE WARS"); gl_text(GL.f_body,12,377,GL.data_all?GLC_TEXT:GLC_REDHI,w); }
+    static const wchar_t *const sub[4]={L"DATA",L"LEVELS",L"SOUND",L"INTRO"};
+    for(int i=0;i<4;i++) gl_text(GL.f_small,346+i*44,368,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,sub[i]);
+    for(int i=0;i<4;i++) gl_text(GL.f_small,346+i*44,382,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,GL.data_ok[i]?L"OK":L"FALTA");
+    if(gl_button((gl_rect){526,364,52,28},L"CAMBIAR",0,GL.f_small)) GL.result=2;   /* the folder dialog opens outside the frame */
+    if(gl_button((gl_rect){582,364,52,28},L"SALIR",0,GL.f_small)) GL.result=-1;
+    if(GL.status[0] && SDL_GetTicks()<GL.status_until) { wchar_t w[170]; gl_wide(GL.status,w,170);
+        gl_panel((gl_rect){150,330,340,22},0x2E8A80,0x16504A,1); gl_text_c(GL.f_body,(gl_rect){150,330,340,22},0xFFFFFF,w); }
+    GdiFlush();
+}
+static HFONT gl_font(int h,int weight,const wchar_t *face) {
+    return CreateFontW(h,0,0,0,weight,0,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,NONANTIALIASED_QUALITY,
+        FIXED_PITCH|FF_MODERN,face);
+}
+/* returns 1 to start the game (options chosen), 0 to quit */
+static int launcher_run(const char *data_dir,const char *root) {
+    memset(&GL,0,sizeof GL);
+    snprintf(GL.data_dir,sizeof GL.data_dir,"%s",data_dir && strcmp(data_dir,"-")?data_dir:"");
+    snprintf(GL.root,sizeof GL.root,"%s",root);
+    GL.sel=g_ini_last_mission>=1 && g_ini_last_mission<=24?g_ini_last_mission:1;
+    gl_scan_data(); gl_scan_saves();
+    if(SDL_InitSubSystem(SDL_INIT_VIDEO|SDL_INIT_EVENTS)!=0) { fprintf(stderr,"launcher: SDL_Init %s\n",SDL_GetError()); return 1; }
+    SDL_DisplayMode dm; if(SDL_GetDesktopDisplayMode(0,&dm)==0) { GL.desk_w=dm.w; GL.desk_h=dm.h; }
+    int k=2; while(GL.desk_w && (k+1)*GL_W<=GL.desk_w*9/10 && (k+1)*GL_H<=GL.desk_h*85/100) k++;
+    if(GL.desk_w && k*GL_H>GL.desk_h*85/100) k=1;
+    SDL_Window *win=SDL_CreateWindow("Gene Wars - GWRecomp",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,GL_W*k,GL_H*k,SDL_WINDOW_ALLOW_HIGHDPI);
+    SDL_Renderer *ren=win?SDL_CreateRenderer(win,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC):NULL;
+    if(!ren && win) ren=SDL_CreateRenderer(win,-1,SDL_RENDERER_SOFTWARE);
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"0");
+    SDL_Texture *tex=ren?SDL_CreateTexture(ren,SDL_PIXELFORMAT_RGB888,SDL_TEXTUREACCESS_STREAMING,GL_W,GL_H):NULL;
+    BITMAPINFO bi; memset(&bi,0,sizeof bi);
+    bi.bmiHeader.biSize=sizeof bi.bmiHeader; bi.bmiHeader.biWidth=GL_W; bi.bmiHeader.biHeight=-GL_H;
+    bi.bmiHeader.biPlanes=1; bi.bmiHeader.biBitCount=32; bi.bmiHeader.biCompression=BI_RGB;
+    GL.dc=CreateCompatibleDC(NULL); void *bits=NULL;
+    GL.bmp=GL.dc?CreateDIBSection(GL.dc,&bi,DIB_RGB_COLORS,&bits,NULL,0):NULL;
+    if(!win || !ren || !tex || !GL.bmp) {
+        fprintf(stderr,"launcher: cannot open its window (%s); starting with the saved settings\n",SDL_GetError());
+        if(tex) SDL_DestroyTexture(tex); if(ren) SDL_DestroyRenderer(ren); if(win) SDL_DestroyWindow(win);
+        if(GL.bmp) DeleteObject(GL.bmp); if(GL.dc) DeleteDC(GL.dc);
+        SDL_QuitSubSystem(SDL_INIT_VIDEO|SDL_INIT_EVENTS); return 1;
+    }
+    GL.px=(uint32_t *)bits; GL.old_bmp=SelectObject(GL.dc,GL.bmp);
+    GL.f_small=gl_font(11,FW_NORMAL,L"Consolas"); GL.f_body=gl_font(13,FW_NORMAL,L"Consolas");
+    GL.f_bold=gl_font(13,FW_BOLD,L"Consolas"); GL.f_head=gl_font(20,FW_BOLD,L"Consolas"); GL.f_title=gl_font(30,FW_HEAVY,L"Consolas");
+    SDL_RenderSetLogicalSize(ren,GL_W,GL_H); SDL_RenderSetIntegerScale(ren,SDL_TRUE);
+    const char *shot=getenv("GW_LAUNCHER_SHOT");   /* QA: write the canvas of each tab to <prefix>_<tab>.bmp, then quit */
+    int shot_tab=0;
+    gw_flag_trace("TRACE launcher open data_ok=%d saves=%d last_mission=%d%c",GL.data_all,GL.have_save,GL.sel,10);
+    while(!GL.result) {
+        SDL_Event ev; GL.clicked=GL.dbl=0;
+        while(SDL_PollEvent(&ev)) {
+            if(ev.type==SDL_QUIT) GL.result=-1;
+            else if(ev.type==SDL_MOUSEMOTION) { GL.mx=ev.motion.x; GL.my=ev.motion.y; }
+            else if(ev.type==SDL_MOUSEBUTTONDOWN && ev.button.button==SDL_BUTTON_LEFT) {
+                GL.mx=ev.button.x; GL.my=ev.button.y; GL.clicked=1; GL.dbl=ev.button.clicks>=2; }
+            else if(ev.type==SDL_KEYDOWN) {
+                const SDL_Keycode kc=ev.key.keysym.sym;
+                if(kc==SDLK_ESCAPE) GL.result=-1;
+                else if((kc==SDLK_RETURN || kc==SDLK_KP_ENTER) && GL.data_all) { g_cli_skip_intro=g_ini_skip_intro; GL.result=1; }
+                else if(kc==SDLK_TAB) GL.tab=(GL.tab+1)%3;
+                else if(GL.tab==0 && (kc==SDLK_UP || kc==SDLK_DOWN)) GL.sel=GL.sel+(kc==SDLK_UP?-1:1)<1?24:GL.sel+(kc==SDLK_UP?-1:1)>24?1:GL.sel+(kc==SDLK_UP?-1:1);
+            }
+        }
+        if(GL.result) break;
+        gl_draw();
+        if(shot && shot[0]) {
+            char p[600]; snprintf(p,sizeof p,"%s_%d.bmp",shot,shot_tab);
+            SDL_Surface *s=SDL_CreateRGBSurfaceWithFormatFrom(GL.px,GL_W,GL_H,32,GL_W*4,SDL_PIXELFORMAT_RGB888);
+            if(s) { SDL_SaveBMP(s,p); SDL_FreeSurface(s); }
+            if(++shot_tab>=3) GL.result=-1; else GL.tab=shot_tab;
+        }
+        if(GL.result==2) {   /* folder dialog (modal, outside the SDL frame) */
+            GL.result=0; gl_pick_folder(win); continue;
+        }
+        SDL_UpdateTexture(tex,NULL,GL.px,GL_W*4);
+        SDL_SetRenderDrawColor(ren,0,0,0,255); SDL_RenderClear(ren); SDL_RenderCopy(ren,tex,NULL,NULL); SDL_RenderPresent(ren);
+    }
+    HFONT fonts[5]={GL.f_small,GL.f_body,GL.f_bold,GL.f_head,GL.f_title};
+    SelectObject(GL.dc,GL.old_bmp); for(int i=0;i<5;i++) if(fonts[i]) DeleteObject(fonts[i]);
+    DeleteObject(GL.bmp); DeleteDC(GL.dc);
+    SDL_DestroyTexture(tex); SDL_DestroyRenderer(ren); SDL_DestroyWindow(win);
+    SDL_QuitSubSystem(SDL_INIT_VIDEO|SDL_INIT_EVENTS);
+    if(GL.data_dir[0]) snprintf(g_ini_data_dir,sizeof g_ini_data_dir,"%s",GL.data_dir);
+    gw_flag_trace("TRACE launcher result=%d level=%u load_save=%d mode=%s res=%dx%d fullscreen=%d fps=%u filter=%d turbo=%ld%c",GL.result,
+        g_cli_level,g_cli_load_save,g_ws_canvas?"zoomout":g_ws_requested?"widescreen":"classic",g_cli_res_w,g_cli_res_h,
+        g_cli_fullscreen,g_ini_fps,g_filter_mode,(long)g_turbo_level,10);
+    return GL.result==1;
+}
+/* Started with no arguments (double-click): the build root is the parent of the executable's bin folder. Fill in the
+   arguments and the environment that scripts\play.ps1 would pass, and move the console output to log files. */
+static int standalone_setup(int *pargc,char ***pargv,char *root,size_t root_n) {
+    static char exe[MAX_PATH],guest[MAX_PATH],tsv[MAX_PATH]; static char *nargv[6];
+    if(!GetModuleFileNameA(NULL,exe,MAX_PATH)) return 0;
+    snprintf(root,root_n,"%s",exe);
+    for(int up=0;up<2;up++) { char *s=strrchr(root,92); if(!s) return 0; *s=0; }   /* <root>\bin\gw_demo_sdl2.exe */
+    snprintf(guest,sizeof guest,"%s\\work\\ifctitle_creature_probe_guest.bin",root);
+    snprintf(tsv,sizeof tsv,"%s\\work\\genewars_1_1_install_manifest_creature_probe.tsv",root);
+    if(GetFileAttributesA(guest)==INVALID_FILE_ATTRIBUTES || GetFileAttributesA(tsv)==INVALID_FILE_ATTRIBUTES) {
+        MessageBoxA(NULL,"No se encuentran los datos de la compilaci\xF3n (work\\ifctitle_creature_probe_guest.bin).\n"
+            "Ejecuta gw_demo_sdl2.exe desde la carpeta bin de una compilaci\xF3n completa.","Gene Wars - GWRecomp",MB_ICONERROR);
+        return 0;
+    }
+    (void)SetCurrentDirectoryA(root);
+    nargv[0]=exe; nargv[1]=guest; nargv[2]=(char *)"-"; nargv[3]=tsv; nargv[4]=(char *)"--play"; nargv[5]=NULL;
+    *pargc=5; *pargv=nargv;
+    static const char *const defaults[][2]={{"SDL_RENDER_SCALE_QUALITY","0"},{"SDL_AUDIODRIVER","directsound"},
+        {"GW_INTERACTIVE_QUIET_CONSOLE","1"},{"GW_INTERACTIVE_START_AT_TITLE","1"},{"GW_VSB16","1"},{"GW_DEMO_VSYNC","0"},
+        {"GW_DEMO_CAP_60","1"},{"GW_DEMO_PACING","native"}};
+    for(unsigned i=0;i<sizeof defaults/sizeof defaults[0];i++) if(!getenv(defaults[i][0])) {
+        char a[128]; snprintf(a,sizeof a,"%s=%s",defaults[i][0],defaults[i][1]); (void)_putenv(a); }
+    char lo[MAX_PATH+32];
+    snprintf(lo,sizeof lo,"%s\\play.stdout.log",root); (void)freopen(lo,"w",stdout);
+    snprintf(lo,sizeof lo,"%s\\play.stderr.log",root); (void)freopen(lo,"w",stderr);
+    DWORD procs[4]; if(GetConsoleProcessList(procs,4)==1) FreeConsole();   /* a console opened just for this process */
+    return 1;
+}
+
 int main(int argc,char **argv) {
     gw_recomp_dispatch_hits_reset();
+    char gl_root[MAX_PATH]=""; int launcher_wanted=0;
+    if(argc==1) {
+        if(!standalone_setup(&argc,&argv,gl_root,sizeof gl_root)) return 2;
+        launcher_wanted=1;
+    }
     for(int ai=4;ai<argc;ai++) if(!strcmp(argv[ai],"--play")) g_cli_play_mode=1;
     /* per-monitor DPI awareness before SDL_Init: Windows must not bitmap-stretch (blur) a 1440p/4K window */
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS,"permonitorv2");
@@ -18509,9 +18958,12 @@ int main(int argc,char **argv) {
        that directory is missing; a player launch from any working directory must not depend on it. */
     if(g_cli_play_mode) (void)CreateDirectoryA("evidence",NULL);
     if(g_cli_play_mode) play_mode_sanitize_environment();
+    int fast_launch=0;
     for(int ai=4;ai<argc;ai++) {
         if(!strcmp(argv[ai],"--play")) continue;
-        if(!strcmp(argv[ai],"--save-snapshot") && ai+1<argc) g_snapshot_save_path=argv[++ai];
+        if(!strcmp(argv[ai],"--launcher")) launcher_wanted=2;          /* show it even when gwrecomp.ini says launcher = 0 */
+        else if(!strcmp(argv[ai],"--fast-launch")) fast_launch=1;     /* never show it */
+        else if(!strcmp(argv[ai],"--save-snapshot") && ai+1<argc) g_snapshot_save_path=argv[++ai];
         else if(!strcmp(argv[ai],"--load-snapshot") && ai+1<argc) g_snapshot_load_path=argv[++ai];
         else if(!strcmp(argv[ai],"--probe-live-projection-mesh")) g_cli_live_projection_mesh_capture=1;
         else if(!strcmp(argv[ai],"--skip-intro")) g_cli_skip_intro=1;
@@ -18537,6 +18989,21 @@ int main(int argc,char **argv) {
             g_snapshot_turn=(uint32_t)n;
         } else return 2;
     }
+    /* launcher: play mode only, before the guest memory, the VFS and the game window; a direct start (--level,
+       --load-save, --fast-launch) or launcher = 0 in gwrecomp.ini goes straight in */
+    if(g_cli_play_mode && launcher_wanted && !fast_launch && !g_cli_level && !g_cli_load_save &&
+       (launcher_wanted==2 || g_ini_launcher)) {
+        if(!gl_root[0]) { if(!GetCurrentDirectoryA(sizeof gl_root,gl_root)) gl_root[0]=0; }   /* scripts start in the build root */
+        if(!launcher_run(argv[2],gl_root)) return 0;
+        if(g_ini_data_dir[0]) argv[2]=g_ini_data_dir;   /* the folder shown (and maybe changed) in the launcher */
+    } else if(g_cli_play_mode && g_ini_skip_intro) g_cli_skip_intro=1;
+    if(g_cli_play_mode && !strcmp(argv[2],"-")) {
+        fprintf(stderr,"no Gene Wars folder: set data_dir in gwrecomp.ini (or choose it in the launcher)\n");
+        if(launcher_wanted==1) MessageBoxA(NULL,"Falta la carpeta de Gene Wars. Abre el lanzador y elige la carpeta GENEWARS.","Gene Wars - GWRecomp",MB_ICONERROR);
+        return 2;
+    }
+    if(g_cli_play_mode && g_ini_cd_cue[0] && !getenv("GW_CD_AUDIO_CUE")) {
+        char a[640]; snprintf(a,sizeof a,"GW_CD_AUDIO_CUE=%s",g_ini_cd_cue); (void)_putenv(a); }
     const char *interactive_env=getenv("GW_INTERACTIVE_DEMO");
     g_interactive_demo_mode=interactive_env && strcmp(interactive_env,"1")==0;
     {   const char *vs=getenv("GW_VSB16");   /* V20: virtual SB16 digital audio, interactive mode only (replays stay silent/deterministic) */

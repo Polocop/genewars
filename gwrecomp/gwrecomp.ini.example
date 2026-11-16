@@ -8,7 +8,7 @@
 mode = zoomout
 
 ; window size in physical pixels: 2160p, 1440p, 1080p, 900p or WxH (the game still renders 640/854 x 480;
-; the output is GPU-scaled). Leave empty for the default window.
+; the output is GPU-scaled). auto or empty: the default window.
 resolution = 2160p
 
 ; 1 = borderless fullscreen at the desktop resolution
@@ -19,3 +19,20 @@ fps = 120
 
 ; your own Gene Wars 1.1 GENEWARS folder; used when GENEWARS_INSTALL_DIR / gwrecomp.local.json do not set one
 ; data_dir = C:\path\to\GENEWARS
+
+; ---- also written by the launcher (gw_demo_sdl2.exe started with no arguments, or play.ps1 -Launcher) ----
+; display filter, same as F7 in game (F7 updates this line): sharp, epx or crt
+filter = sharp
+; start value of the F8 turbo: 1, 2 or 4
+turbo = 1
+; 1 = WASD / arrow keys scroll the map; 1 = middle-button drag scrolls the map
+camera_keys = 1
+middle_drag = 1
+; 1 = skip the start-up videos
+skip_intro = 0
+; 1 = show the launcher when the program starts without arguments (--launcher always shows it, --fast-launch never)
+launcher = 1
+; mission selected in the launcher's mission list (1..24)
+last_mission = 1
+; .cue of your own Gene Wars CD image, for the CD music (else GENEWARS_CUE)
+; cd_cue = C:\path\to\genewars.cue

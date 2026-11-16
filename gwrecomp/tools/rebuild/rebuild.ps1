@@ -227,7 +227,7 @@ Phase '7_deterministic_link' {
     $objectRecords = @()
     $objs = @($names | % { "$od\$_.obj" })
   }
-  $a = @('--target=i686-w64-windows-gnu','-m32','-B',$Cfg.Mingw32Lib,'-o',"$buildRoot\bin\gw_demo_sdl2.det.exe") + $objs + @('-L',$Cfg.Mingw32Lib,'-lSDL2','-lbcrypt','-lwinmm','-lm','-Wl,--no-insert-timestamp')
+  $a = @('--target=i686-w64-windows-gnu','-m32','-B',$Cfg.Mingw32Lib,'-o',"$buildRoot\bin\gw_demo_sdl2.det.exe") + $objs + @('-L',$Cfg.Mingw32Lib,'-lSDL2','-lbcrypt','-lwinmm','-lgdi32','-lm','-Wl,--no-insert-timestamp')
   $line = "`"$CLANG_X86`" " + (($a | % { '"' + $_ + '"' }) -join ' ')
   Run $line | Out-Null
   $M.link_command = $line

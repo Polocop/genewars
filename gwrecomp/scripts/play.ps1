@@ -16,7 +16,7 @@
  Requires GENEWARS_INSTALL_DIR (your own game files). Logs go to <build>\play.stdout.log / play.stderr.log.
 #>
 param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave, [switch]$OrderLog, [ValidateRange(0,24)][int]$Level = 0, [switch]$Widescreen, [switch]$ZoomOut, [switch]$Classic, [ValidateRange(30,240)][int]$Fps = 120,
-      [ValidatePattern('^(900p|1080p|1440p|2160p|4k|\d{3,4}x\d{3,4})$')][string]$Resolution, [switch]$Fullscreen)
+      [ValidatePattern('^(900p|1080p|1440p|2160p|4k|\d{3,4}x\d{3,4})$')][string]$Resolution, [switch]$Fullscreen, [switch]$Launcher, [switch]$FastLaunch)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'gwconfig.ps1')
 $root = Get-GwRoot
@@ -87,6 +87,8 @@ try {
     if ($Classic) { $argLine += ' --classic' }   # 640x480 even if gwrecomp.ini says otherwise   # 1152x640 map canvas: wheel zoom down to 0.75 (implies -Widescreen)
     if ($Resolution) { $argLine += (' --res {0}' -f $Resolution) }   # window size in physical pixels (GPU-scaled; the guest stays 640/854x480)
     if ($Fullscreen) { $argLine += ' --fullscreen' }                 # borderless at the desktop resolution
+    if ($Launcher) { $argLine += ' --launcher' }       # the native launcher screen first (settings, mission select, continue)
+    if ($FastLaunch) { $argLine += ' --fast-launch' }
     if ($LoadSave) { $argLine += (' --load-save "{0}"' -f (Resolve-Path -LiteralPath $LoadSave).Path) }
     if ($Detach) {   # for automated interactive tests: start the game and return its process id
         $p = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $br -PassThru -RedirectStandardOutput $out -RedirectStandardError $err

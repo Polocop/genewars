@@ -6635,7 +6635,7 @@ def main()->None:
     # "-B <mingw32>/lib": a 64-bit-host clang (e.g. a plain LLVM install) does not find crt2.o on its own;
     # the 32-bit-host clang of Visual Studio does. -B makes the link independent of that difference.
     link_command=[*LINK_CC,"-m32","-B",MINGW32_LIB,"-o",exe,*objects,
-        "-L",MINGW32_LIB,"-lSDL2","-lbcrypt","-lwinmm","-lm"]
+        "-L",MINGW32_LIB,"-lSDL2","-lbcrypt","-lwinmm","-lgdi32","-lm"]
     # Opt-in only: a link map lets a host_rip from the GWRECOMP_WATCH_BYTE
     # hardware watch be resolved to a lifted or runtime symbol. It does not
     # change the generated code.
