@@ -17078,7 +17078,12 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
     if(!g_ws_requested || !memory || !parked) return;
     const uint32_t ifc=*(const uint32_t *)(memory+0x002EF7E8u),pending=*(const uint32_t *)(memory+0x002EF7ECu);
     const uint32_t map=0x00346D70u;
-    const int want=ifc==0x0035FE9Au && !pending && *(const uint16_t *)(memory+map+0x1Du)==128u;
+    int want=ifc==0x0035FE9Au && !pending && *(const uint16_t *)(memory+map+0x1Du)==128u;
+    /* level over: the level evaluation (0x5E450/0x5E130) sets [0x2F1464] bit 0x80 without a pendingIFC, and the
+       original loop top (0x927E9) publishes the end-of-level IFC 0x35FEF8 and plugs it in within the next tick,
+       before the host runs again; that screen decodes its 640x480 art through lbDisplay and hangs in its
+       decompressor (0xB9EA2) on a widened surface. Go back to 640x480 as soon as the bit is up. */
+    if((memory[0x002F1464u]&0x80u) && !(memory[0x002F1660u]&0x01u)) want=0;
     if(want==g_ws_live_active) return;
     /* the draw list is filled by the simulation and emptied by draw_game in the same tick; switch its pool only
        while it is empty (count MapDisplay+0x11BB), otherwise on a later tick */
