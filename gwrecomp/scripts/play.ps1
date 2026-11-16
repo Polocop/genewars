@@ -15,7 +15,7 @@
  -Build defaults to the newest build\rebuild-* directory. -SmokeFrames N makes the program exit after N frames (smoke test).
  Requires GENEWARS_INSTALL_DIR (your own game files). Logs go to <build>\play.stdout.log / play.stderr.log.
 #>
-param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave, [switch]$OrderLog, [ValidateRange(0,24)][int]$Level = 0, [switch]$Widescreen, [switch]$ZoomOut, [ValidateRange(30,240)][int]$Fps = 120,
+param([string]$Build, [ValidateRange(0,1000000)][int]$SmokeFrames = 0, [ValidateSet('default','terrain_modern')][string]$Backend = 'default', [switch]$Detach, [switch]$SkipIntro, [string]$LoadSave, [switch]$OrderLog, [ValidateRange(0,24)][int]$Level = 0, [switch]$Widescreen, [switch]$ZoomOut, [switch]$Classic, [ValidateRange(30,240)][int]$Fps = 120,
       [ValidatePattern('^(900p|1080p|1440p|2160p|4k|\d{3,4}x\d{3,4})$')][string]$Resolution, [switch]$Fullscreen)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'gwconfig.ps1')
@@ -23,7 +23,12 @@ $root = Get-GwRoot
 $cfg = Get-GwConfig
 Set-GwEnvironment $cfg
 function Fail($m) { Write-Host "BLOCKED: $m" -ForegroundColor Red; exit 2 }
-if (-not $cfg.Install) { Fail 'GENEWARS_INSTALL_DIR is not set (your own Gene Wars 1.1 GENEWARS folder).' }
+function Get-IniDataDir($dir) {   # data_dir from an optional gwrecomp.ini (next to the executable or in the build root)
+    foreach ($p in @((Join-Path $dir 'bin\gwrecomp.ini'), (Join-Path $dir 'gwrecomp.ini'))) {
+        if (Test-Path -LiteralPath $p) { foreach ($l in Get-Content -LiteralPath $p) { if ($l -match '^\s*data_dir\s*=\s*([^;#]+?)\s*(?:[;#].*)?$') { return $Matches[1] } } }
+    }
+    return $null
+}
 if (-not $Build) {
     $latest = Get-ChildItem -LiteralPath $cfg.WorkRoot -Directory -Filter 'rebuild-*' -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -Last 1
     if (-not $latest) { Fail "no build found under $($cfg.WorkRoot). Run scripts\build.ps1 -Level B first." }
@@ -33,6 +38,12 @@ $manifest = Join-Path $Build 'rebuild_manifest.json'
 if (-not (Test-Path $manifest)) { Fail "$Build has no rebuild_manifest.json (not a completed Level B build)." }
 $m = Get-Content $manifest -Raw | ConvertFrom-Json
 $br = $m.build_root
+# the Gene Wars folder: GENEWARS_INSTALL_DIR, else data_dir in gwrecomp.ini (the game reads it when it gets "-")
+$installArg = $cfg.Install
+if (-not $installArg) {
+    if (Get-IniDataDir $br) { $installArg = '-' }
+    else { Fail 'GENEWARS_INSTALL_DIR is not set and gwrecomp.ini has no data_dir (your own Gene Wars 1.1 GENEWARS folder).' }
+}
 $exe = Join-Path $br 'bin\gw_demo_sdl2.exe'
 $guest = Join-Path $br 'work\ifctitle_creature_probe_guest.bin'
 $tsv = Join-Path $br 'work\genewars_1_1_install_manifest_creature_probe.tsv'
@@ -46,7 +57,7 @@ if ($alpha) {
     # Alpha play mode: no harness bound, the original title menu is driven by the user, 60 fps native pacing
     Remove-Item Env:GWRECOMP_IFCLEVEL_HOST_BOUND_TURN -ErrorAction SilentlyContinue
     $env:GW_INTERACTIVE_START_AT_TITLE = '1'; $env:GW_VSB16 = '1'
-    $env:GW_DEMO_VSYNC = '0'; $env:GW_DEMO_CAP_60 = '1'; $env:GW_TARGET_FPS = [string]$Fps;   # presentation rate; the simulation keeps the game's own tick rate
+    $env:GW_DEMO_VSYNC = '0'; $env:GW_DEMO_CAP_60 = '1'; if ($PSBoundParameters.ContainsKey('Fps')) { $env:GW_TARGET_FPS = [string]$Fps } else { Remove-Item Env:GW_TARGET_FPS -ErrorAction SilentlyContinue };   # presentation rate (-Fps, else gwrecomp.ini fps, else 120); the simulation keeps the game's own tick rate
     $env:GW_DEMO_PACING = 'native'
     if ($cfg.Cue) { $env:GW_CD_AUDIO_CUE = $cfg.Cue } else { Write-Host 'Note: GENEWARS_CUE is not set, so there is no CD music (sound effects only).' -ForegroundColor Yellow }
     # the sound trace is opened for appending: start each session with a fresh file
@@ -66,13 +77,14 @@ Push-Location $br
 # Start-Process writes the game's stdout/stderr (TRACE lines) as plain bytes; a plain '2>' redirect in Windows PowerShell 5.1
 # would wrap stderr lines in error records and write UTF-16
 try {
-    $argLine = ('"{0}" "{1}" "{2}"' -f $guest, $cfg.Install, $tsv)
+    $argLine = ('"{0}" "{1}" "{2}"' -f $guest, $installArg, $tsv)
     if ($alpha) { $argLine += ' --play' }
     if ($SkipIntro) { $argLine += ' --skip-intro' }
     if ($OrderLog) { $argLine += ' --order-log' }
     if ($Level -gt 1) { if ($LoadSave) { throw '-Level starts a new game; it cannot be combined with -LoadSave' }; $argLine += (' --level {0}' -f $Level) }
     if ($Widescreen) { $argLine += ' --widescreen' }   # 854x480 in missions (true widescreen of the original renderer)
-    if ($ZoomOut) { $argLine += ' --widescreen --zoomout' }   # 1152x640 map canvas: wheel zoom down to 0.75 (implies -Widescreen)
+    if ($ZoomOut) { $argLine += ' --widescreen --zoomout' }
+    if ($Classic) { $argLine += ' --classic' }   # 640x480 even if gwrecomp.ini says otherwise   # 1152x640 map canvas: wheel zoom down to 0.75 (implies -Widescreen)
     if ($Resolution) { $argLine += (' --res {0}' -f $Resolution) }   # window size in physical pixels (GPU-scaled; the guest stays 640/854x480)
     if ($Fullscreen) { $argLine += ' --fullscreen' }                 # borderless at the desktop resolution
     if ($LoadSave) { $argLine += (' --load-save "{0}"' -f (Resolve-Path -LiteralPath $LoadSave).Path) }

@@ -8153,13 +8153,9 @@ static int g_ws_requested;
    window is the 726x480 area of the 854x480 widescreen view, at (GW_CANVAS_VX0, GW_CANVAS_VY0); zoom down to 0.75
    shows 968x640. Canvas columns 128..175 carry the panel art, so the visible map starts at x=176. */
 static int g_ws_canvas;
-static SDL_atomic_t g_canvas_panel_reset;
 static uint8_t g_hud_written[480u*48u],g_hud_val[480u*48u],g_hud_have[480u*48u];   /* panel art on x=128..175 */
-static uint32_t g_hud_ws; static int g_hud_watching,g_hud_diag_was;
-static void hud_watch_stop(void);
+static uint32_t g_hud_ws;
 static void hud_sentinel_collect(uint8_t *memory);
-void recomp_memory_diag_enable(int enabled);
-int recomp_memory_diag_enabled(void);   /* the widescreen switch: forget the kept panel colours */
 #define GW_CANVAS_W 1152u
 #define GW_CANVAS_H 640u
 #define GW_CANVAS_VX0 301
@@ -8383,6 +8379,50 @@ static int parse_cli_resolution(const char *v) {
     if(sscanf(v,"%d%c%d",&w,&x,&h)==3 && (x=='x'||x=='X') && w>=640 && h>=480 && w<=8192 && h<=8192) {
         g_cli_res_w=w; g_cli_res_h=h; return 1; }
     return 0;
+}
+/* gwrecomp.ini (optional, play mode only): next to the executable, else in the working directory. One "key = value"
+   per line, ';' or '#' start a comment. Keys: mode = zoomout | widescreen | classic, resolution = 2160p | 1440p |
+   1080p | 900p | WxH, fullscreen = 0 | 1, fps = 30..240, data_dir = <Gene Wars folder>. Applied before the
+   environment and the command line, which win when they say something explicitly. */
+static char g_ini_data_dir[600];
+static char g_ini_path_used[MAX_PATH];
+static void gwrecomp_ini_trim(char *t) {
+    char *a=t; while(*a==' '||*a=='\t') a++;
+    if(a!=t) memmove(t,a,strlen(a)+1);
+    size_t n=strlen(t); while(n && (t[n-1]==' '||t[n-1]=='\t'||t[n-1]=='\r'||t[n-1]=='\n')) t[--n]=0;
+}
+static void gwrecomp_ini_load(void) {
+    char path[MAX_PATH]; FILE *f=NULL;
+    if(GetModuleFileNameA(NULL,path,MAX_PATH)) {
+        char *slash=strrchr(path,92);
+        if(slash && (size_t)(slash-path)+16u<sizeof path) { strcpy(slash+1,"gwrecomp.ini"); f=fopen(path,"rb"); }
+    }
+    if(!f) { snprintf(path,sizeof path,"gwrecomp.ini"); f=fopen(path,"rb"); }
+    if(!f) return;
+    snprintf(g_ini_path_used,sizeof g_ini_path_used,"%s",path);
+    char line[800];
+    while(fgets(line,sizeof line,f)) {
+        char *c=strpbrk(line,";#"); if(c) *c=0;
+        char *eq=strchr(line,'='); if(!eq) continue;
+        *eq=0; char key[64],val[700];
+        snprintf(key,sizeof key,"%s",line); snprintf(val,sizeof val,"%s",eq+1);
+        gwrecomp_ini_trim(key); gwrecomp_ini_trim(val);
+        for(char *k=key;*k;k++) if(*k>='A'&&*k<='Z') *k=(char)(*k-'A'+'a');
+        if(!strcmp(key,"mode")) {
+            if(!_stricmp(val,"zoomout")) { g_ws_requested=1; g_ws_canvas=1; }
+            else if(!_stricmp(val,"widescreen")) { g_ws_requested=1; g_ws_canvas=0; }
+            else if(!_stricmp(val,"classic")) { g_ws_requested=0; g_ws_canvas=0; }
+            else fprintf(stderr,"gwrecomp.ini: unknown mode '%s' (zoomout, widescreen, classic)\n",val);
+        } else if(!strcmp(key,"resolution")) {
+            if(val[0] && !parse_cli_resolution(val)) fprintf(stderr,"gwrecomp.ini: bad resolution '%s'\n",val);
+        } else if(!strcmp(key,"fullscreen")) g_cli_fullscreen=atoi(val)!=0;
+        else if(!strcmp(key,"fps")) {
+            const int v=atoi(val);
+            if(v>=30 && v<=240) g_ini_fps=(unsigned)v; else fprintf(stderr,"gwrecomp.ini: fps %s out of 30..240\n",val);
+        } else if(!strcmp(key,"data_dir")) snprintf(g_ini_data_dir,sizeof g_ini_data_dir,"%s",val);
+        else if(key[0]) fprintf(stderr,"gwrecomp.ini: unknown key '%s'\n",key);
+    }
+    fclose(f);
 }
 /* Window size in physical pixels (the process is per-monitor DPI aware): the default sizes are scaled by the
    monitor's DPI so the window keeps its usual size on screen, now rendered at full resolution. */
@@ -8934,9 +8974,10 @@ static unsigned interactive_frame_limit(void) {
         (unsigned)parsed:0u;
 }
 
+static unsigned g_ini_fps;   /* gwrecomp.ini fps = N (play mode) */
 static unsigned interactive_target_fps(void) {
     const char *value=getenv("GW_TARGET_FPS");
-    if(!value || !value[0]) return 60u;
+    if(!value || !value[0]) return g_ini_fps?g_ini_fps:(g_cli_play_mode?120u:60u);
     char *end=NULL;
     unsigned long parsed=strtoul(value,&end,10);
     return end && *end=='\0' && parsed>0u && parsed<=1000u?(unsigned)parsed:60u;
@@ -17258,26 +17299,7 @@ static void ws_live_viewport_gadget_h(uint8_t *memory,uint16_t left,uint16_t h) 
     if(*(const uint16_t *)(memory+g+0x2Eu)==0u && (*gh==480u || *gh==GW_CANVAS_H)) *gh=h;
     gw_flag_trace("TRACE widescreen viewport_gadget y=%u h=%u%c",*(const uint16_t *)(memory+g+0x2Eu),*gh,10);
 }
-/* Zoom-out canvas: exact panel-art mask on the map's left edge (x=128..175, y<480). From the end of MapDisplay::Draw
-   (lifter hook at 0x22F58) to the frame's publication, the guest write observer records every WScreen write there:
-   that is the HUD pass drawing its art over the map. */
-extern void (*g_gw_ws_after_map)(void);
-static uint32_t g_hud_pitch=GW_CANVAS_W;
-static int g_hud_in_map;
-extern void (*g_gw_ws_map_draw)(int);
-static void hud_map_draw(int inside) { g_hud_in_map=inside; }
-static void hud_watch_write(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
-    (void)va; (void)seg; (void)sel; (void)base; (void)user;
-    if(lin<g_hud_ws || lin>=g_hud_ws+g_hud_pitch*480u) return;
-    if(g_hud_in_map) return;   /* inside MapDisplay::Draw: terrain, buildings and creatures, not the HUD */
-    const uint32_t off=lin-g_hud_ws;
-    for(uint32_t k=0;k<width;k++) {
-        const uint32_t x=(off+k)%g_hud_pitch,y=(off+k)/g_hud_pitch;
-        if(x>=128u && x<176u && y<480u) g_hud_written[y*48u+(x-128u)]=1u;
-    }
-}
-/* the memory diagnostic is on during the HUD pass only: block copies (rep movs, the panel blitters) then go through
-   the checked access path and reach the observer as well */
+extern void (*g_gw_ws_after_map)(void);   /* lifter hook at 0x22F58, after MapDisplay::Draw in the IFCMain draw */
 /* Sentinel pass: right after MapDisplay::Draw (0x22F58) the canvas strip x=128..175, y<480 is saved and filled
    with a sentinel byte; whatever the rest of the frame (the HUD) paints there is no longer the sentinel when the
    frame is published, which gives the panel-art pixels whatever routine drew them; the sentinel pixels get their
@@ -17307,23 +17329,7 @@ static void hud_sentinel_collect(uint8_t *memory) {
         }
     }
 }
-static void hud_watch_stop(void) {
-    if(g_hud_watching) { recomp_set_guest_write_observer(NULL,NULL); recomp_memory_diag_enable(g_hud_diag_was); g_hud_watching=0; }
-    g_hud_filled=0;
-}
-/* QA (GW_RING_WATCH=1, zoom-out canvas): which guest instructions write the ring's column x=96..127 (the HUD
-   columns just left of the map); the first 32 distinct instruction addresses go to the flags log */
-static uint32_t g_ring_watch_va[32]; static unsigned g_ring_watch_n;
-static void ring_watch_write(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
-    (void)seg; (void)sel; (void)base; (void)width; (void)user;
-    if(!g_ws_live_ring || lin<g_ws_live_ring || lin>=g_ws_live_ring+GW_CANVAS_W*480u) return;
-    const uint32_t x=(lin-g_ws_live_ring)%GW_CANVAS_W;
-    if(x<96u || x>=128u || g_ring_watch_n>=32u) return;
-    for(unsigned i=0;i<g_ring_watch_n;i++) if(g_ring_watch_va[i]==va) return;
-    g_ring_watch_va[g_ring_watch_n++]=va;
-    gw_flag_trace("TRACE ring_watch va=%08X row=%u x=%u turn=%u%c",va,(lin-g_ws_live_ring)/GW_CANVAS_W,x,
-        *(const uint32_t *)(guest_memory+0x002F1472u),10);
-}
+static void hud_sentinel_reset(void) { g_hud_filled=0; }
 static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
     if(!g_ws_requested || !memory || !parked) return;
     const uint32_t ifc=*(const uint32_t *)(memory+0x002EF7E8u),pending=*(const uint32_t *)(memory+0x002EF7ECu);
@@ -17376,13 +17382,11 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         if(g_ws_canvas) { memset(memory+g_ws_live_buckets,0,4u*GW_CANVAS_H); g_gw_ws_buckets=g_ws_live_buckets; }
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,W); memory[0x00346D70u+0x11D5u]=1u; gw_flag_trace("TRACE widescreen redraw fallback%c",10); }
         ws_live_viewport_gadget(memory,left,g_ws_canvas?(uint16_t)W:854u);
-        if(g_ws_canvas) { ws_live_viewport_gadget_h(memory,left,(uint16_t)H); SDL_AtomicSet(&g_canvas_panel_reset,1); }
         if(g_ws_canvas) {
-            hud_watch_stop();
+            ws_live_viewport_gadget_h(memory,left,(uint16_t)H);
+            hud_sentinel_reset();
             memset(g_hud_have,0,sizeof g_hud_have); memset(g_hud_written,0,sizeof g_hud_written);
-            const char *rw=getenv("GW_RING_WATCH");
-            if(rw && rw[0]=='1') recomp_set_guest_write_observer(ring_watch_write,NULL);
-            else g_gw_ws_after_map=hud_watch_after_map;
+            g_gw_ws_after_map=hud_watch_after_map;
         }
         SDL_AtomicSet(&g_interp_panel_reset,1);
         g_ws_live_active=1;
@@ -17393,7 +17397,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A7Cu)=480u;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_saved_ring;
         g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u; g_gw_ws_grid_ext=0u; g_gw_ws_buckets=0u;
-        g_gw_ws_after_map=NULL; g_gw_ws_map_draw=NULL; g_hud_in_map=0; hud_watch_stop();
+        g_gw_ws_after_map=NULL; hud_sentinel_reset();
         if(g_ws_canvas) ws_live_viewport_gadget_h(memory,*(const uint16_t *)(memory+map+0x1Du),480u);
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
         ws_live_viewport_gadget(memory,*(const uint16_t *)(memory+map+0x1Du),640u);
@@ -18434,6 +18438,13 @@ int main(int argc,char **argv) {
     for(int ai=4;ai<argc;ai++) if(!strcmp(argv[ai],"--play")) g_cli_play_mode=1;
     /* per-monitor DPI awareness before SDL_Init: Windows must not bitmap-stretch (blur) a 1440p/4K window */
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS,"permonitorv2");
+    if(g_cli_play_mode) gwrecomp_ini_load();
+    /* the Gene Wars folder: argv[2], or the ini's data_dir when the launcher passes "-" (no install configured) */
+    if(argc>2 && (!strcmp(argv[2],"-") || !argv[2][0]) && g_ini_data_dir[0]) argv[2]=g_ini_data_dir;
+    if(g_ini_path_used[0]) fprintf(stderr,"TRACE gwrecomp_ini path=%s mode=%s res=%dx%d fullscreen=%d fps=%u data_dir=%s
+",
+        g_ini_path_used,g_ws_canvas?"zoomout":g_ws_requested?"widescreen":"classic",g_cli_res_w,g_cli_res_h,g_cli_fullscreen,g_ini_fps,
+        g_ini_data_dir[0]?"set":"-");
     { const char *ws_env=getenv("GW_WIDESCREEN"); if(ws_env && ws_env[0]=='1') g_ws_requested=1; }
     { const char *zo_env=getenv("GW_ZOOMOUT"); if(zo_env && zo_env[0]=='1') g_ws_requested=g_ws_canvas=1; }
     /* The startup replay writes its evidence files under ./evidence and aborts (exit 112) when
@@ -18447,8 +18458,10 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[ai],"--probe-live-projection-mesh")) g_cli_live_projection_mesh_capture=1;
         else if(!strcmp(argv[ai],"--skip-intro")) g_cli_skip_intro=1;
         else if(!strcmp(argv[ai],"--order-log")) g_cli_order_log=1;
-        else if(!strcmp(argv[ai],"--widescreen")) g_ws_requested=1;
+        else if(!strcmp(argv[ai],"--widescreen")) { g_ws_requested=1; g_ws_canvas=0; }
         else if(!strcmp(argv[ai],"--zoomout")) g_ws_requested=g_ws_canvas=1;
+        else if(!strcmp(argv[ai],"--classic")) g_ws_requested=g_ws_canvas=0;
+        else if(!strcmp(argv[ai],"--windowed")) g_cli_fullscreen=0;
         else if(!strcmp(argv[ai],"--fullscreen")) g_cli_fullscreen=1;
         else if(!strcmp(argv[ai],"--res") && ai+1<argc) { if(!parse_cli_resolution(argv[++ai])) return 2; }
         else if(!strcmp(argv[ai],"--level") && ai+1<argc) {
