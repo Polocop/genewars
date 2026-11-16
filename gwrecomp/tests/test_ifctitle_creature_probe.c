@@ -17342,6 +17342,26 @@ static void hud_sentinel_collect(uint8_t *memory) {
     }
 }
 static void hud_sentinel_reset(void) { g_hud_filled=0; }
+/* QA (GW_WATCH_ADDR=hex[,hex...], up to 4 guest addresses, play worker): every instruction that writes one of them,
+   with Turn and the byte before/after the store, to the flags log (the first 64 hits). The write observer turns
+   the fast memory path off while it is installed. */
+static uint32_t g_aw_addr[4]; static unsigned g_aw_n,g_aw_hits; static int g_aw_init;
+static void addr_watch_write(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
+    (void)seg; (void)sel; (void)base; (void)user;
+    for(unsigned i=0;i<g_aw_n;i++) if(g_aw_addr[i]>=lin && g_aw_addr[i]<lin+width && g_aw_hits<64u) {
+        g_aw_hits++;
+        gw_flag_trace("TRACE addr_watch va=%08X addr=%08X width=%u old=%02X turn=%u%c",va,g_aw_addr[i],width,
+            guest_memory?guest_memory[g_aw_addr[i]]:0u,guest_memory?*(const uint32_t *)(guest_memory+0x002F1472u):0u,10);
+    }
+}
+static void addr_watch_tick(uint8_t *memory) {
+    if(g_aw_init || !memory) return;
+    g_aw_init=1;
+    const char *e=getenv("GW_WATCH_ADDR"); if(!e || !e[0]) return;
+    char buf[128]; snprintf(buf,sizeof buf,"%s",e);
+    for(char *t=strtok(buf,",");t && g_aw_n<4u;t=strtok(NULL,",")) g_aw_addr[g_aw_n++]=(uint32_t)strtoul(t,NULL,16);
+    if(g_aw_n) { recomp_set_guest_write_observer(addr_watch_write,NULL); gw_flag_trace("TRACE addr_watch installed n=%u first=%08X%c",g_aw_n,g_aw_addr[0],10); }
+}
 static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
     if(!g_ws_requested || !memory || !parked) return;
     const uint32_t ifc=*(const uint32_t *)(memory+0x002EF7E8u),pending=*(const uint32_t *)(memory+0x002EF7ECu);
@@ -17502,6 +17522,7 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
                 pan_was=0;
             }
         }
+        addr_watch_tick(memory);
         ws_live_update(memory,c);
         const uint64_t sync0=SDL_GetPerformanceCounter();
         if(!g_interactive_guest_suspended &&
