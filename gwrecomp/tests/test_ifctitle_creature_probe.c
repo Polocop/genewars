@@ -18738,7 +18738,7 @@ static void gl_draw_play(void) {
     gl_panel((gl_rect){266,52,362,300},GLC_PANEL2,0x15142A,0);
     gl_text(GL.f_bold,278,58,GLC_AMBER,L"SELECCIÓN DE MISIÓN");
     for(int m=1;m<=24;m++) {
-        const int col=(m-1)/8,row=(m-1)%8; gl_rect r={276+col*118,78+row*26,114,23};
+        const int col=(m-1)/8,row=(m-1)%8; gl_rect r={276+col*116,78+row*26,112,23};
         wchar_t w[48],nm[32]; gl_wide(GL.names[m][0]?GL.names[m]:"---",nm,32); swprintf(w,48,L"%02d %ls",m,nm);
         const int hot=gl_in(r);
         if(m==GL.sel) gl_panel(r,0x2E8A80,0x16504A,0); else gl_panel(r,hot?0x4A4678:0x2E2B4E,hot?0x2C2948:0x1E1C36,1);
@@ -18759,7 +18759,7 @@ static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
 static void gl_draw_display(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
     static const wchar_t *const modes[3]={L"CLÁSICO 4:3",L"PANORÁMICO 854×480",L"ZOOM OUT 1152×640"};
-    gl_row_label(62,L"MODO DE VISTA",L"Zoom out: rueda 0,75x..2x, Inicio = 1x");
+    gl_row_label(62,L"MODO DE VISTA",L"Rueda 0,75x..2x, Inicio = 1x");
     int cur=g_ws_canvas?2:g_ws_requested?1:0;
     int c=gl_choice(228,62,390,24,modes,3,cur,0u);
     if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
@@ -18861,7 +18861,7 @@ static int launcher_run(const char *data_dir,const char *root) {
         SDL_QuitSubSystem(SDL_INIT_VIDEO|SDL_INIT_EVENTS); return 1;
     }
     GL.px=(uint32_t *)bits; GL.old_bmp=SelectObject(GL.dc,GL.bmp);
-    GL.f_small=gl_font(11,FW_NORMAL,L"Consolas"); GL.f_body=gl_font(13,FW_NORMAL,L"Consolas");
+    GL.f_small=gl_font(12,FW_NORMAL,L"Consolas"); GL.f_body=gl_font(13,FW_NORMAL,L"Consolas");
     GL.f_bold=gl_font(13,FW_BOLD,L"Consolas"); GL.f_head=gl_font(20,FW_BOLD,L"Consolas"); GL.f_title=gl_font(30,FW_HEAVY,L"Consolas");
     SDL_RenderSetLogicalSize(ren,GL_W,GL_H); SDL_RenderSetIntegerScale(ren,SDL_TRUE);
     const char *shot=getenv("GW_LAUNCHER_SHOT");   /* QA: write the canvas of each tab to <prefix>_<tab>.bmp, then quit */
