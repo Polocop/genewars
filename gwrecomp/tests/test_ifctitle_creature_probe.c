@@ -17127,6 +17127,14 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A5Cu)=g_ws_saved_ws;
         *(uint32_t *)(memory+0x00376A78u)=640u;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_saved_ring;
+        /* the clip window (LbSetWindow 0x96338: base [0x376A68], x/y/w/h [0x376A80..8C]) and the raster vectors
+           (setup_vecs 0xE8963 at 0x2DA100: base-pitch, base, pitch, width, height) still describe the widened
+           surface; the map draw refreshes them every frame, a screen that follows (end of level) does not */
+        *(uint32_t *)(memory+0x00376A68u)=g_ws_saved_ws;
+        *(uint32_t *)(memory+0x00376A80u)=0u; *(uint32_t *)(memory+0x00376A84u)=0u;
+        *(uint32_t *)(memory+0x00376A88u)=640u; *(uint32_t *)(memory+0x00376A8Cu)=480u;
+        *(uint32_t *)(memory+0x002DA100u)=g_ws_saved_ws-640u; *(uint32_t *)(memory+0x002DA104u)=g_ws_saved_ws;
+        *(uint32_t *)(memory+0x002DA110u)=640u; *(uint32_t *)(memory+0x002DA114u)=640u; *(uint32_t *)(memory+0x002DA118u)=480u;
         g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u; g_gw_ws_grid_ext=0u;
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
         ws_live_viewport_gadget(memory,*(const uint16_t *)(memory+map+0x1Du),640u);
