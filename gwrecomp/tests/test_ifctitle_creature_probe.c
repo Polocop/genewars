@@ -18708,7 +18708,7 @@ static void gl_draw_play(void) {
     const int ready=GL.data_all;
     gl_panel((gl_rect){12,52,246,300},GLC_PANEL2,0x15142A,0);
     if(gl_button((gl_rect){22,62,226,58},L"INICIAR JUEGO",ready?1:3,GL.f_head) && ready) { g_cli_skip_intro=g_ini_skip_intro; GL.result=1; }
-    gl_text(GL.f_small,24,124,GLC_GREY,L"Menú de título original: nueva partida o cargar");
+    gl_text(GL.f_small,24,124,GLC_GREY,L"Menú de título original");
     const int can_cont=ready && GL.have_save;
     if(gl_button((gl_rect){22,142,226,36},L"CONTINUAR ÚLTIMA PARTIDA",can_cont?0:3,GL.f_bold) && can_cont) {
         char dst[MAX_PATH]; snprintf(dst,sizeof dst,"%s\\work\\launcher_continue.sav",GL.root);
