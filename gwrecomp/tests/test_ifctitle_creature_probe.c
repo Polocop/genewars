@@ -8385,6 +8385,7 @@ static int parse_cli_resolution(const char *v) {
    1080p | 900p | WxH, fullscreen = 0 | 1, fps = 30..240, data_dir = <Gene Wars folder>. Applied before the
    environment and the command line, which win when they say something explicitly. */
 static char g_ini_data_dir[600];
+static unsigned g_ini_fps;   /* gwrecomp.ini fps = N (play mode) */
 static char g_ini_path_used[MAX_PATH];
 static void gwrecomp_ini_trim(char *t) {
     char *a=t; while(*a==' '||*a=='\t') a++;
@@ -8974,7 +8975,6 @@ static unsigned interactive_frame_limit(void) {
         (unsigned)parsed:0u;
 }
 
-static unsigned g_ini_fps;   /* gwrecomp.ini fps = N (play mode) */
 static unsigned interactive_target_fps(void) {
     const char *value=getenv("GW_TARGET_FPS");
     if(!value || !value[0]) return g_ini_fps?g_ini_fps:(g_cli_play_mode?120u:60u);
@@ -18441,8 +18441,7 @@ int main(int argc,char **argv) {
     if(g_cli_play_mode) gwrecomp_ini_load();
     /* the Gene Wars folder: argv[2], or the ini's data_dir when the launcher passes "-" (no install configured) */
     if(argc>2 && (!strcmp(argv[2],"-") || !argv[2][0]) && g_ini_data_dir[0]) argv[2]=g_ini_data_dir;
-    if(g_ini_path_used[0]) fprintf(stderr,"TRACE gwrecomp_ini path=%s mode=%s res=%dx%d fullscreen=%d fps=%u data_dir=%s
-",
+    if(g_ini_path_used[0]) fprintf(stderr,"TRACE gwrecomp_ini path=%s mode=%s res=%dx%d fullscreen=%d fps=%u data_dir=%s\n",
         g_ini_path_used,g_ws_canvas?"zoomout":g_ws_requested?"widescreen":"classic",g_cli_res_w,g_cli_res_h,g_cli_fullscreen,g_ini_fps,
         g_ini_data_dir[0]?"set":"-");
     { const char *ws_env=getenv("GW_WIDESCREEN"); if(ws_env && ws_env[0]=='1') g_ws_requested=1; }
