@@ -18912,13 +18912,16 @@ static int launcher_run(const char *data_dir,const char *root) {
 static int standalone_setup(int *pargc,char ***pargv,char *root,size_t root_n) {
     static char exe[MAX_PATH],guest[MAX_PATH],tsv[MAX_PATH]; static char *nargv[6];
     if(!GetModuleFileNameA(NULL,exe,MAX_PATH)) return 0;
+    /* release folder (tools\package_release.ps1): <root>\gwrecomp.exe next to <root>\work; build: <root>\bin\gw_demo_sdl2.exe */
     snprintf(root,root_n,"%s",exe);
-    for(int up=0;up<2;up++) { char *s=strrchr(root,92); if(!s) return 0; *s=0; }   /* <root>\bin\gw_demo_sdl2.exe */
+    { char *s=strrchr(root,92); if(!s) return 0; *s=0; }
+    snprintf(guest,sizeof guest,"%s\\work\\ifctitle_creature_probe_guest.bin",root);
+    if(GetFileAttributesA(guest)==INVALID_FILE_ATTRIBUTES) { char *s=strrchr(root,92); if(!s) return 0; *s=0; }
     snprintf(guest,sizeof guest,"%s\\work\\ifctitle_creature_probe_guest.bin",root);
     snprintf(tsv,sizeof tsv,"%s\\work\\genewars_1_1_install_manifest_creature_probe.tsv",root);
     if(GetFileAttributesA(guest)==INVALID_FILE_ATTRIBUTES || GetFileAttributesA(tsv)==INVALID_FILE_ATTRIBUTES) {
         MessageBoxA(NULL,"No se encuentran los datos de la compilaci\xF3n (work\\ifctitle_creature_probe_guest.bin).\n"
-            "Ejecuta gw_demo_sdl2.exe desde la carpeta bin de una compilaci\xF3n completa.","Gene Wars - GWRecomp",MB_ICONERROR);
+            "Ejecuta el programa desde una carpeta de GWRecomp completa (con su carpeta work).","Gene Wars - GWRecomp",MB_ICONERROR);
         return 0;
     }
     (void)SetCurrentDirectoryA(root);
