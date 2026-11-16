@@ -1,4 +1,4 @@
-<#
+﻿<#
  Portable release folder from a completed build (scripts\build.ps1 -Level B / tools\rebuild\rebuild.ps1).
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\package_release.ps1 [-Build <rebuild dir>] [-Name GWRecomp-v1.0-win32] [-Test]
  Writes dist\<Name>\ (dist\ is git-ignored):
@@ -33,6 +33,7 @@ $br = $bm.build_root
 $exe = Join-Path $br 'bin\gw_demo_sdl2.exe'
 if (-not (Test-Path -LiteralPath $exe)) { Fail "missing $exe" }
 $mingwBin = $cfg.Mingw32Bin
+if (-not $mingwBin) { Fail 'MSYS2 not found: set MSYS2_ROOT (or Msys2 in gwrecomp.local.json) to the MSYS2 folder (it has mingw32\bin)' }
 $objdump = Join-Path $mingwBin 'objdump.exe'
 if (-not (Test-Path -LiteralPath $objdump)) { Fail "objdump not found in $mingwBin (MSYS2 mingw32 binutils)" }
 
@@ -87,8 +88,8 @@ foreach ($pe in Get-ChildItem -LiteralPath $out -File | ? { $_.Extension -in '.e
 }
 
 # ---- runtime inputs of the build (read by the program at start) ----
-$inputs = 'ifctitle_creature_probe_guest.bin', 'genewars_1_1_install_manifest_creature_probe.tsv', 'ifctitle_startup_lowmem.bin',
-          'ifctitle_plugin_titlescr_input.bin', 'lbdataload_relocated_rnc_payload.bin', 'lbdataload_rnc_pristine_in_place.bin'
+# (the program also writes some work\*.bin evidence files of its own while it runs; those are not inputs)
+$inputs = 'ifctitle_creature_probe_guest.bin', 'genewars_1_1_install_manifest_creature_probe.tsv', 'ifctitle_startup_lowmem.bin'
 foreach ($f in $inputs) {
     $src = Join-Path $br "work\$f"
     if (-not (Test-Path -LiteralPath $src)) { Fail "missing build input $src" }
@@ -108,7 +109,7 @@ launcher = 1
 skip_intro = 0
 ; your Gene Wars 1.1 folder (the launcher's CAMBIAR button fills this in)
 ; data_dir = C:\Juegos\GENEWARS
-'@ -replace "`r?`n", "`r`n" | Set-Content -LiteralPath (Join-Path $out 'gwrecomp.ini') -Encoding ascii -NoNewline
+'@ -replace "`r?`n", "`r`n" | Set-Content -LiteralPath (Join-Path $out 'gwrecomp.ini') -Encoding ascii   # ends with a line break
 $sdlLicense = Join-Path (Split-Path -Parent $mingwBin) 'share\licenses\SDL2\LICENSE.txt'
 if (Test-Path -LiteralPath $sdlLicense) { Copy-Item -LiteralPath $sdlLicense -Destination (Join-Path $out 'licenses\SDL2-LICENSE.txt') }
 else { Fail "SDL2 license not found at $sdlLicense" }
@@ -119,7 +120,8 @@ GWRecomp - Gene Wars recompilado de forma nativa para Windows
 
 QUÉ NECESITAS
   Tu propia copia de Gene Wars 1.1 (Bullfrog / Electronic Arts, 1996) INSTALADA: la carpeta GENEWARS que crea el
-  instalador original del juego. GWRecomp no incluye ningún archivo del juego.
+  instalador original del juego. GWRecomp no incluye los gráficos, sonidos, vídeos ni niveles del juego
+  (lee los de tu carpeta; mira también el AVISO del final sobre la carpeta work\).
   Al arrancar, el programa comprueba con SHA-256 los archivos de esa carpeta (versión 1.1, edición europea) y solo
   la lee: nunca la modifica.
 
@@ -172,6 +174,8 @@ Write-Host "Windows DLLs: $(($system.Values | Sort-Object) -join ', ')"
 # ---- 4. clean-PATH start test ----
 if ($Test) {
     Get-Process gwrecomp -ErrorAction SilentlyContinue | Stop-Process -Force
+    $before = @{}; Get-ChildItem -LiteralPath $out -Recurse -Force | % { $before[$_.FullName] = 1 }
+    $iniBytes = [IO.File]::ReadAllBytes((Join-Path $out 'gwrecomp.ini'))
     $psi = New-Object Diagnostics.ProcessStartInfo (Join-Path $out 'gwrecomp.exe')
     $psi.UseShellExecute = $false; $psi.WorkingDirectory = $env:SystemRoot   # started from somewhere else, as from a shortcut
     $keep = 'SystemRoot', 'windir', 'SystemDrive', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH',
@@ -184,7 +188,11 @@ if ($Test) {
     while ($sw.Elapsed.TotalSeconds -lt 20 -and -not $p.HasExited) { Start-Sleep -Milliseconds 500; $p.Refresh(); if ($p.MainWindowHandle -ne 0) { $title = $p.MainWindowTitle; break } }
     if ($title) { Start-Sleep 3; $p.Refresh() }
     $alive = -not $p.HasExited
-    if ($alive) { [void]$p.CloseMainWindow(); if (-not $p.WaitForExit(15000)) { $p.Kill() } }
+    if ($alive) { [void]$p.CloseMainWindow(); if (-not $p.WaitForExit(15000)) { $p.Kill(); [void]$p.WaitForExit(5000) } }
+    # leave the folder as packaged: drop what the test run created (logs, evidence\) and restore gwrecomp.ini
+    Get-ChildItem -LiteralPath $out -Recurse -Force | Sort-Object { $_.FullName.Length } -Descending |
+        ? { -not $before[$_.FullName] -and $_.FullName.StartsWith($out + '\') } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    [IO.File]::WriteAllBytes((Join-Path $out 'gwrecomp.ini'), $iniBytes)
     if (-not $title -or -not $alive) { Fail "clean-PATH start: no launcher window (exited=$($p.HasExited) code=$(if($p.HasExited){$p.ExitCode}))" }
     Write-Host "clean-PATH start: window '$title' opened and stayed up; closed with exit code $($p.ExitCode)" -ForegroundColor Green
 }
