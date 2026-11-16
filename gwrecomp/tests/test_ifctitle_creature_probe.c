@@ -16244,7 +16244,14 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
     const uint32_t trace_turn=(memory && g_exceland_build_probe)?*(uint32_t *)(memory+0x002F1472u):0u;
     const int trace_mouse=g_exceland_build_probe && memory && trace_turn>=1292u && trace_turn<=1316u;
     static unsigned trace_mouse_seq=0u;
+    static int key_trace=-1;
+    if(key_trace<0) { const char *kt=getenv("GW_KEY_TRACE"); key_trace=kt && kt[0]=='1'; }
     while(SDL_PollEvent(&ev)) {
+        if(key_trace && (ev.type==SDL_KEYDOWN || ev.type==SDL_KEYUP))   /* QA: GW_KEY_TRACE=1 */
+            gw_flag_trace("TRACE key_event type=%s sym=%d window=%u demo=%d play=%d manual=%d ifclevel=%d memory=%d focus_window=%u%c",
+                ev.type==SDL_KEYDOWN?"down":"up",(int)ev.key.keysym.sym,ev.key.windowID,g_interactive_demo_mode,g_cli_play_mode,
+                g_ifclevel_demo_manual_input,g_ifclevel_demo_mode,memory!=NULL,
+                SDL_GetKeyboardFocus()?SDL_GetWindowID(SDL_GetKeyboardFocus()):0u,10);
         if(g_cli_play_mode && g_interactive_demo_mode && host_controls_event(&ev)) { n++; continue; }
         if(g_ifclevel_demo_mode && ev.type==SDL_QUIT) {
             g_ifclevel_demo_closed=1;
