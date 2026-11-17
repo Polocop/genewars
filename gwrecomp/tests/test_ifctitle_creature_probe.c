@@ -18567,12 +18567,19 @@ static void play_mode_sanitize_environment(void) {
    the player's own LEVELS\HDRCOn.DAT (planet name at offset 32); nothing of the game is embedded here.
    =================================================================================================================== */
 #include <shlobj.h>
+#include <wchar.h>
+/* layout in 640x400 units; the canvas has GL_S pixels per unit, so panels keep their chunky 2-pixel look while the
+   text is drawn (antialiased) at the full canvas resolution */
 #define GL_W 640
 #define GL_H 400
+#define GL_S 2
+#define GL_CW (GL_W*GL_S)
+#define GL_CH (GL_H*GL_S)
 typedef struct { int x,y,w,h; } gl_rect;
 static struct {
     uint32_t *px; HDC dc; HBITMAP bmp; HGDIOBJ old_bmp;
-    HFONT f_small,f_body,f_bold,f_head,f_title;
+    HFONT f_tiny,f_small,f_body,f_bold,f_bold_small,f_head,f_title;
+    int overflow;   /* texts that had to be shrunk or cut this frame (QA trace) */
     int mx,my,clicked,dbl,tab,sel,result;
     char names[25][28];
     char data_dir[600];
@@ -18587,7 +18594,8 @@ enum { GLC_BG=0x0B0A18, GLC_PANEL=0x3A3660, GLC_PANEL2=0x24223E, GLC_HI=0x8A86C0
        GLC_GREEN=0x58E070 };
 static void gl_fill(int x,int y,int w,int h,uint32_t c) {
     GdiFlush();
-    for(int j=y<0?0:y;j<y+h && j<GL_H;j++) for(int i=x<0?0:x;i<x+w && i<GL_W;i++) GL.px[j*GL_W+i]=c;
+    const int x0=x*GL_S,y0=y*GL_S,x1=(x+w)*GL_S,y1=(y+h)*GL_S;
+    for(int j=y0<0?0:y0;j<y1 && j<GL_CH;j++) for(int i=x0<0?0:x0;i<x1 && i<GL_CW;i++) GL.px[j*GL_CW+i]=c;
 }
 static uint32_t gl_mix(uint32_t a,uint32_t b,int t256) {
     const int r=(((a>>16)&255)*(256-t256)+((b>>16)&255)*t256)>>8,g=(((a>>8)&255)*(256-t256)+((b>>8)&255)*t256)>>8,
@@ -18603,14 +18611,43 @@ static void gl_panel(gl_rect r,uint32_t top,uint32_t bot,int raised) {
     if(r.w>40 && r.h>24) { const int rx[2]={r.x+4,r.x+r.w-6},ry[2]={r.y+4,r.y+r.h-6};
         for(int i=0;i<2;i++) for(int k=0;k<2;k++) { gl_fill(rx[i],ry[k],2,2,GLC_HI); gl_fill(rx[i]+1,ry[k]+1,1,1,GLC_LO); } }
 }
-static void gl_text(HFONT f,int x,int y,uint32_t c,const wchar_t *s) {
+/* text in canvas pixels; positions and widths below are in layout units */
+static SIZE gl_extent(HFONT f,const wchar_t *s,int n) { SIZE z={0,0}; SelectObject(GL.dc,f); GetTextExtentPoint32W(GL.dc,s,n,&z); return z; }
+static void gl_text_px(HFONT f,int px,int py,uint32_t c,const wchar_t *s,int n) {
     SelectObject(GL.dc,f); SetTextColor(GL.dc,RGB((c>>16)&255,(c>>8)&255,c&255)); SetBkMode(GL.dc,TRANSPARENT);
-    TextOutW(GL.dc,x,y,s,(int)wcslen(s));
+    TextOutW(GL.dc,px,py,s,n);
 }
-static int gl_text_w(HFONT f,const wchar_t *s) { SIZE z={0,0}; SelectObject(GL.dc,f); GetTextExtentPoint32W(GL.dc,s,(int)wcslen(s),&z); return z.cx; }
+/* the next smaller face for text that does not fit */
+static HFONT gl_smaller(HFONT f) {
+    return f==GL.f_title?GL.f_head:f==GL.f_head?GL.f_bold:f==GL.f_bold?GL.f_bold_small:f==GL.f_body?GL.f_small:
+           f==GL.f_small||f==GL.f_bold_small?GL.f_tiny:NULL;
+}
+/* fit s into maxw units: same font, else smaller ones, else cut with an ellipsis. Returns the font used, the visible
+   length in *n and the width in canvas pixels in *wpx. */
+static HFONT gl_fit(HFONT f,const wchar_t *s,int maxw,int *n,int *wpx) {
+    const int lim=maxw*GL_S,len=(int)wcslen(s);
+    for(HFONT t=f;t;t=gl_smaller(t)) { const SIZE z=gl_extent(t,s,len); if(z.cx<=lim) { *n=len; *wpx=z.cx; if(t!=f) GL.overflow++; return t; } }
+    HFONT t=GL.f_tiny; int k=len;
+    static wchar_t buf[256];
+    while(k>0) { const int m=k<250?k:250; wmemcpy(buf,s,(size_t)m); buf[m]=0x2026; const SIZE z=gl_extent(t,buf,m+1); if(z.cx<=lim) { *n=-(m+1); *wpx=z.cx; GL.overflow++; return t; } k--; }
+    *n=0; *wpx=0; GL.overflow++; return t;
+}
+static void gl_text_fit(HFONT f,int x,int y,int maxw,uint32_t c,const wchar_t *s) {
+    int n=0,w=0; HFONT t=gl_fit(f,s,maxw,&n,&w);
+    const SIZE zf=gl_extent(f,L"Hg",2),zt=gl_extent(t,L"Hg",2);   /* keep the line's vertical centre */
+    const int py=y*GL_S+(zf.cy-zt.cy)/2;
+    if(n>=0) gl_text_px(t,x*GL_S,py,c,s,n);
+    else { static wchar_t b[256]; const int m=-n; wmemcpy(b,s,(size_t)(m-1)); b[m-1]=0x2026; gl_text_px(t,x*GL_S,py,c,b,m); }
+}
+static void gl_text(HFONT f,int x,int y,uint32_t c,const wchar_t *s) { gl_text_px(f,x*GL_S,y*GL_S,c,s,(int)wcslen(s)); }
+static int gl_text_w(HFONT f,const wchar_t *s) { const SIZE z=gl_extent(f,s,(int)wcslen(s)); return (z.cx+GL_S-1)/GL_S; }
+/* centred in r, shrunk or cut to the rectangle's inner width */
 static void gl_text_c(HFONT f,gl_rect r,uint32_t c,const wchar_t *s) {
-    SIZE z={0,0}; SelectObject(GL.dc,f); GetTextExtentPoint32W(GL.dc,s,(int)wcslen(s),&z);
-    gl_text(f,r.x+(r.w-z.cx)/2,r.y+(r.h-z.cy)/2,c,s);
+    int n=0,w=0; HFONT t=gl_fit(f,s,r.w-8,&n,&w);
+    const SIZE z=gl_extent(t,L"Hg",2);
+    const int px=r.x*GL_S+(r.w*GL_S-w)/2,py=r.y*GL_S+(r.h*GL_S-z.cy)/2;
+    if(n>=0) gl_text_px(t,px,py,c,s,n);
+    else { static wchar_t b[256]; const int m=-n; wmemcpy(b,s,(size_t)(m-1)); b[m-1]=0x2026; gl_text_px(t,px,py,c,b,m); }
 }
 static int gl_in(gl_rect r) { return GL.mx>=r.x && GL.mx<r.x+r.w && GL.my>=r.y && GL.my<r.y+r.h; }
 /* style 0 normal, 1 big red (start), 2 selected/active, 3 disabled */
@@ -18709,7 +18746,7 @@ static void gl_draw_play(void) {
     const int ready=GL.data_all;
     gl_panel((gl_rect){12,52,246,300},GLC_PANEL2,0x15142A,0);
     if(gl_button((gl_rect){22,62,226,58},L"INICIAR JUEGO",ready?1:3,GL.f_head) && ready) { g_cli_skip_intro=g_ini_skip_intro; GL.result=1; }
-    gl_text(GL.f_small,24,124,GLC_GREY,L"Menú de título original");
+    gl_text_fit(GL.f_small,24,124,224,GLC_GREY,L"Menú de título original");
     const int can_cont=ready && GL.have_save;
     if(gl_button((gl_rect){22,142,226,36},L"CONTINUAR ÚLTIMA PARTIDA",can_cont?0:3,GL.f_bold) && can_cont) {
         char dst[MAX_PATH]; snprintf(dst,sizeof dst,"%s\\work\\launcher_continue.sav",GL.root);
@@ -18718,112 +18755,117 @@ static void gl_draw_play(void) {
         } else gl_status("No se pudo preparar la partida guardada");
     }
     { wchar_t w[120]; if(GL.have_save) gl_wide(GL.save_label,w,120); else wcscpy(w,L"(todavía no hay partidas guardadas)");
-      gl_text(GL.f_small,24,182,GL.have_save?GLC_DIMCYAN:GLC_GREY,w); }
-    gl_text(GL.f_bold,24,206,GLC_AMBER,L"AL ARRANCAR");
+      gl_text_fit(GL.f_small,24,182,224,GL.have_save?GLC_DIMCYAN:GLC_GREY,w); }
+    gl_text_fit(GL.f_bold,24,206,224,GLC_AMBER,L"AL ARRANCAR");
     static const wchar_t *const yn[2]={L"NO",L"SÍ"};
-    gl_text(GL.f_body,24,226,GLC_TEXT,L"Saltar vídeos");
+    gl_text_fit(GL.f_body,24,226,120,GLC_TEXT,L"Saltar vídeos");
     int c=gl_choice(150,222,96,20,yn,2,g_ini_skip_intro,0u);
     if(c>=0 && c!=g_ini_skip_intro) { g_ini_skip_intro=c; gwrecomp_ini_set_int("skip_intro",c); }
-    gl_text(GL.f_body,24,252,GLC_TEXT,L"Este lanzador");
+    gl_text_fit(GL.f_body,24,252,120,GLC_TEXT,L"Este lanzador");
     c=gl_choice(150,248,96,20,yn,2,g_ini_launcher,0u);
     if(c>=0 && c!=g_ini_launcher) { g_ini_launcher=c; gwrecomp_ini_set_int("launcher",c); }
-    gl_text(GL.f_small,24,274,GLC_GREY,L"(sin él, doble clic arranca directo;");
-    gl_text(GL.f_small,24,286,GLC_GREY,L" --launcher lo vuelve a mostrar)");
+    gl_text_fit(GL.f_small,24,274,224,GLC_GREY,L"Sin él, el doble clic arranca");
+    gl_text_fit(GL.f_small,24,287,224,GLC_GREY,L"directo (--launcher lo muestra)");
     {   wchar_t w[160]; const int ri=gl_res_index();
         swprintf(w,160,L"%ls · %u FPS · %ls",g_ws_canvas?L"Zoom out":g_ws_requested?L"Panorámico":L"Clásico",
-            g_ini_fps?g_ini_fps:120u,g_cli_fullscreen?L"pantalla completa":ri==0?L"ventana":L"ventana fija");
-        gl_text(GL.f_small,24,316,GLC_DIMCYAN,w);
-        gl_text(GL.f_small,24,330,GLC_GREY,L"Cambia la imagen en la pestaña PANTALLA"); }
+            g_ini_fps?g_ini_fps:120u,g_cli_fullscreen?L"sin bordes":ri==0?L"ventana":L"ventana fija");
+        gl_text_fit(GL.f_small,24,316,224,GLC_DIMCYAN,w);
+        gl_text_fit(GL.f_small,24,330,224,GLC_GREY,L"Imagen: pestaña PANTALLA"); }
 
     /* mission select */
     gl_panel((gl_rect){266,52,362,300},GLC_PANEL2,0x15142A,0);
-    gl_text(GL.f_bold,278,58,GLC_AMBER,L"SELECCIÓN DE MISIÓN");
+    gl_text_fit(GL.f_bold,278,58,340,GLC_AMBER,L"SELECCIÓN DE MISIÓN");
     for(int m=1;m<=24;m++) {
         const int col=(m-1)/8,row=(m-1)%8; gl_rect r={276+col*116,78+row*26,112,23};
         wchar_t w[48],nm[32]; gl_wide(GL.names[m][0]?GL.names[m]:"---",nm,32); swprintf(w,48,L"%02d %ls",m,nm);
         const int hot=gl_in(r);
         if(m==GL.sel) gl_panel(r,0x2E8A80,0x16504A,0); else gl_panel(r,hot?0x4A4678:0x2E2B4E,hot?0x2C2948:0x1E1C36,1);
-        gl_text(GL.f_body,r.x+6,r.y+5,m==GL.sel?0xFFFFFF:hot?GLC_CYAN:GLC_TEXT,w);
+        gl_text_fit(GL.f_body,r.x+6,r.y+5,r.w-10,m==GL.sel?0xFFFFFF:hot?GLC_CYAN:GLC_TEXT,w);
         if(hot && GL.clicked) { GL.sel=m; if(GL.dbl && ready) gl_start_mission(m); }
     }
     {   wchar_t w[64],nm[32]; gl_wide(GL.names[GL.sel][0]?GL.names[GL.sel]:"",nm,32);
         swprintf(w,64,L"JUGAR MISIÓN %02d  %ls",GL.sel,nm);
         if(gl_button((gl_rect){276,294,342,30},w,ready?1:3,GL.f_bold) && ready) gl_start_mission(GL.sel); }
-    gl_text(GL.f_small,278,328,GLC_GREY,GL.sel>1?L"Usa el código de niveles del juego: sus teclas de truco":
-                                                    L"Partida nueva normal desde la primera misión");
-    if(GL.sel>1) gl_text(GL.f_small,278,340,GLC_GREY,L"quedan activas en esa sesión (guarda, cierra y carga)");
+    gl_text_fit(GL.f_small,278,328,340,GLC_GREY,GL.sel>1?L"Usa el código de niveles del juego: sus trucos":
+                                                          L"Partida nueva normal desde la primera misión");
+    if(GL.sel>1) gl_text_fit(GL.f_small,278,340,340,GLC_GREY,L"siguen activos en esa sesión (guarda y vuelve a cargar)");
 }
+/* settings row: name and one-line description in the left column (x 24..216), choices from x = 228 */
 static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
-    gl_text(GL.f_bold,24,y,GLC_AMBER,t);
-    if(sub) gl_text(GL.f_small,24,y+16,GLC_GREY,sub);
+    gl_text_fit(GL.f_bold,24,y,192,GLC_AMBER,t);
+    if(sub) gl_text_fit(GL.f_small,24,y+17,192,GLC_GREY,sub);
 }
 static void gl_draw_display(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
     static const wchar_t *const modes[3]={L"CLÁSICO 4:3",L"PANORÁMICO 854×480",L"ZOOM OUT 1152×640"};
-    gl_row_label(62,L"MODO DE VISTA",L"Rueda 0,75x..2x, Inicio = 1x");
+    gl_row_label(62,L"MODO DE VISTA",L"Zoom: rueda; Inicio = 1x");
     int cur=g_ws_canvas?2:g_ws_requested?1:0;
     int c=gl_choice(228,62,390,24,modes,3,cur,0u);
     if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
     static const wchar_t *const res[5]={L"AUTO",L"900p",L"1080p",L"1440p",L"2160p"};
     unsigned dis=0u; for(int i=1;i<5;i++) if(GL.desk_w && (gl_res_w[i]>GL.desk_w || gl_res_h[i]>GL.desk_h)) dis|=1u<<i;
-    gl_row_label(116,L"RESOLUCIÓN",L"Tamaño de la ventana (el juego sigue en 480 líneas)");
+    gl_row_label(116,L"RESOLUCIÓN",L"Tamaño de la ventana");
     cur=gl_res_index(); c=gl_choice(228,116,390,24,res,5,cur,dis);
     if(c>=0 && c!=cur) { g_cli_res_w=gl_res_w[c]; g_cli_res_h=gl_res_h[c]; (void)gwrecomp_ini_set("resolution",gl_res_ini[c]); }
     static const wchar_t *const fs[2]={L"VENTANA",L"COMPLETA SIN BORDES"};
-    gl_row_label(170,L"PANTALLA",L"Sin bordes usa la resolución del escritorio");
+    gl_row_label(170,L"PANTALLA",L"Sin bordes = escritorio");
     c=gl_choice(228,170,390,24,fs,2,g_cli_fullscreen,0u);
     if(c>=0 && c!=g_cli_fullscreen) { g_cli_fullscreen=c; gwrecomp_ini_set_int("fullscreen",c); }
     static const wchar_t *const fps[2]={L"60 FPS CLÁSICO",L"120 FPS INTERPOLADO"};
-    gl_row_label(224,L"FOTOGRAMAS",L"La simulación va siempre a la velocidad original");
+    gl_row_label(224,L"FOTOGRAMAS",L"El ritmo del juego no cambia");
     cur=g_ini_fps==60u?0:1; c=gl_choice(228,224,390,24,fps,2,cur,0u);
     if(c>=0 && c!=cur) { g_ini_fps=c?120u:60u; gwrecomp_ini_set_int("fps",(int)g_ini_fps); }
     static const wchar_t *const flt[3]={L"NÍTIDO",L"EPX SUAVE",L"CRT"};
-    gl_row_label(278,L"FILTRO (F7)",L"También se cambia en partida con F7");
+    gl_row_label(278,L"FILTRO (F7)",L"También con F7 al jugar");
     cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,278,390,24,flt,3,cur,0u);
     if(c>=0 && c!=cur) { g_filter_mode=c; (void)gwrecomp_ini_set("filter",g_filter_names[c]); }
 }
 static void gl_draw_controls(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
     static const wchar_t *const yn[2]={L"NO",L"SÍ"};
-    gl_row_label(62,L"CÁMARA CON TECLADO",L"WASD y flechas desplazan el mapa");
+    gl_row_label(62,L"CÁMARA CON TECLADO",L"WASD y flechas");
     int c=gl_choice(228,62,200,24,yn,2,g_ini_camera_keys,0u);
     if(c>=0 && c!=g_ini_camera_keys) { g_ini_camera_keys=c; gwrecomp_ini_set_int("camera_keys",c); }
-    gl_row_label(116,L"ARRASTRE BOTÓN CENTRAL",L"Mantén la rueda pulsada y arrastra");
+    gl_row_label(116,L"ARRASTRE CON RUEDA",L"Pulsa la rueda y arrastra");
     c=gl_choice(228,116,200,24,yn,2,g_ini_middle_drag,0u);
     if(c>=0 && c!=g_ini_middle_drag) { g_ini_middle_drag=c; gwrecomp_ini_set_int("middle_drag",c); }
     static const wchar_t *const tb[3]={L"1x",L"2x",L"4x"};
     const LONG tl=g_turbo_level; const int cur=tl==4?2:tl==2?1:0;
-    gl_row_label(170,L"TURBO INICIAL (F8)",L"Multiplicador de ticks en el mapa");
+    gl_row_label(170,L"TURBO INICIAL (F8)",L"Velocidad al empezar");
     c=gl_choice(228,170,200,24,tb,3,cur,0u);
     if(c>=0 && c!=cur) { g_turbo_level=c==2?4:c==1?2:1; gwrecomp_ini_set_int("turbo",(int)g_turbo_level); }
-    gl_text(GL.f_bold,446,62,GLC_AMBER,L"TECLAS EN PARTIDA");
+    gl_panel((gl_rect){444,58,176,166},0x2E2B4E,0x1E1C36,0);
+    gl_text_fit(GL.f_bold,454,66,160,GLC_AMBER,L"TECLAS EN PARTIDA");
     static const wchar_t *const keys[][2]={{L"F7",L"filtro"},{L"F8",L"turbo 1x/2x/4x"},{L"TAB",L"turbo 4x (mantener)"},
         {L"Rueda",L"zoom"},{L"Inicio",L"zoom 1x"},{L"F10",L"soltar el ratón"},{L"ESC",L"opciones del juego"}};
-    for(int i=0;i<7;i++) { gl_text(GL.f_body,446,84+i*20,GLC_CYAN,keys[i][0]); gl_text(GL.f_body,500,84+i*20,GLC_TEXT,keys[i][1]); }
+    for(int i=0;i<7;i++) { gl_text_fit(GL.f_body,454,88+i*19,44,GLC_CYAN,keys[i][0]); gl_text_fit(GL.f_body,500,88+i*19,114,GLC_TEXT,keys[i][1]); }
 }
 static void gl_draw(void) {
     /* backdrop: deep space with a fixed star field and a violet nebula glow */
-    for(int y=0;y<GL_H;y++) for(int x=0;x<GL_W;x++) {
-        const int dx=x-470,dy=y-150; const int d=(dx*dx)/90+(dy*dy)/40; const int glow=d<1400?(1400-d)*60/1400:0;
-        GL.px[y*GL_W+x]=gl_mix(GLC_BG,0x4A2A80,glow);
+    GL.overflow=0;
+    for(int y=0;y<GL_CH;y++) for(int x=0;x<GL_CW;x++) {
+        const int dx=x/GL_S-470,dy=y/GL_S-150; const int d=(dx*dx)/90+(dy*dy)/40; const int glow=d<1400?(1400-d)*60/1400:0;
+        GL.px[y*GL_CW+x]=gl_mix(GLC_BG,0x4A2A80,glow);
     }
-    { uint32_t s=0x1234567u; for(int i=0;i<260;i++) { s=s*1664525u+1013904223u; const int x=(int)(s>>8)%GL_W; s=s*1664525u+1013904223u;
-        const int y=(int)(s>>8)%GL_H; const uint32_t b=(s>>4)&3u; GL.px[y*GL_W+x]=b==0?0xFFFFFF:b==1?0x9A96D0:0x5A5690; } }
+    { uint32_t s=0x1234567u; for(int i=0;i<520;i++) { s=s*1664525u+1013904223u; const int x=(int)(s>>8)%GL_CW; s=s*1664525u+1013904223u;
+        const int y=(int)(s>>8)%GL_CH; const uint32_t b=(s>>4)&3u; GL.px[y*GL_CW+x]=b==0?0xFFFFFF:b==1?0x9A96D0:0x5A5690; } }
     /* header */
     gl_panel((gl_rect){0,0,GL_W,46},0x4A4678,0x23213C,1);
-    gl_text(GL.f_title,14,4,GLC_CYAN,L"GENE WARS");
-    gl_text(GL.f_small,16,32,GLC_AMBER,L"RECOMPILACIÓN NATIVA · LANZADOR");
+    gl_text_fit(GL.f_title,14,4,290,GLC_CYAN,L"GENE WARS");
+    gl_text_fit(GL.f_small,16,31,290,GLC_AMBER,L"RECOMPILACIÓN NATIVA · LANZADOR");
     static const wchar_t *const tabs[3]={L"JUGAR",L"PANTALLA",L"CONTROLES"};
     for(int i=0;i<3;i++) if(gl_button((gl_rect){316+i*104,10,98,26},tabs[i],GL.tab==i?2:0,GL.f_bold)) GL.tab=i;
     if(GL.tab==0) gl_draw_play(); else if(GL.tab==1) gl_draw_display(); else gl_draw_controls();
     /* footer: the Gene Wars folder */
     gl_panel((gl_rect){0,358,GL_W,42},0x3A3660,0x1C1A32,1);
     {   wchar_t w[620]; gl_wide(GL.data_dir[0]?GL.data_dir:"(no configurada)",w,620);
-        if(wcslen(w)>52) { memmove(w+3,w+wcslen(w)-49,50*sizeof(wchar_t)); w[0]=w[1]=w[2]=L'.'; }
-        gl_text(GL.f_small,12,363,GLC_GREY,L"CARPETA DE GENE WARS"); gl_text(GL.f_body,12,377,GL.data_all?GLC_TEXT:GLC_REDHI,w); }
+        /* a long path keeps its end (the GENEWARS folder) and loses its start */
+        const wchar_t *p=w; static wchar_t cut[624];
+        while(gl_text_w(GL.f_body,p)>326 && wcslen(p)>8) { p++; swprintf(cut,624,L"…%ls",p); if(gl_text_w(GL.f_body,cut)<=326) { p=cut; break; } }
+        gl_text_fit(GL.f_small,12,362,320,GLC_GREY,L"CARPETA DE GENE WARS"); gl_text_fit(GL.f_body,12,377,326,GL.data_all?GLC_TEXT:GLC_REDHI,p); }
     static const wchar_t *const sub[4]={L"DATA",L"LEVELS",L"SOUND",L"INTRO"};
-    for(int i=0;i<4;i++) gl_text(GL.f_small,346+i*44,368,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,sub[i]);
-    for(int i=0;i<4;i++) gl_text(GL.f_small,346+i*44,382,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,GL.data_ok[i]?L"OK":L"FALTA");
+    for(int i=0;i<4;i++) gl_text_fit(GL.f_small,346+i*44,366,42,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,sub[i]);
+    for(int i=0;i<4;i++) gl_text_fit(GL.f_small,346+i*44,380,42,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,GL.data_ok[i]?L"OK":L"FALTA");
     if(gl_button((gl_rect){526,364,52,28},L"CAMBIAR",0,GL.f_small)) GL.result=2;   /* the folder dialog opens outside the frame */
     if(gl_button((gl_rect){582,364,52,28},L"SALIR",0,GL.f_small)) GL.result=-1;
     if(GL.status[0] && SDL_GetTicks()<GL.status_until) { wchar_t w[170]; gl_wide(GL.status,w,170);
@@ -18831,7 +18873,8 @@ static void gl_draw(void) {
     GdiFlush();
 }
 static HFONT gl_font(int h,int weight,const wchar_t *face) {
-    return CreateFontW(h,0,0,0,weight,0,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,NONANTIALIASED_QUALITY,
+    /* h in layout units: the face is made at canvas resolution, antialiased (grey levels blend over the panels) */
+    return CreateFontW(h*GL_S,0,0,0,weight,0,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,ANTIALIASED_QUALITY,
         FIXED_PITCH|FF_MODERN,face);
 }
 /* returns 1 to start the game (options chosen), 0 to quit */
@@ -18843,15 +18886,22 @@ static int launcher_run(const char *data_dir,const char *root) {
     gl_scan_data(); gl_scan_saves();
     if(SDL_InitSubSystem(SDL_INIT_VIDEO|SDL_INIT_EVENTS)!=0) { fprintf(stderr,"launcher: SDL_Init %s\n",SDL_GetError()); return 1; }
     SDL_DisplayMode dm; if(SDL_GetDesktopDisplayMode(0,&dm)==0) { GL.desk_w=dm.w; GL.desk_h=dm.h; }
-    int k=2; while(GL.desk_w && (k+1)*GL_W<=GL.desk_w*9/10 && (k+1)*GL_H<=GL.desk_h*85/100) k++;
-    if(GL.desk_w && k*GL_H>GL.desk_h*85/100) k=1;
-    SDL_Window *win=SDL_CreateWindow("Gene Wars - GWRecomp",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,GL_W*k,GL_H*k,SDL_WINDOW_ALLOW_HIGHDPI);
+    /* window: the largest whole multiple of the 1280x800 canvas that fits 90% x 85% of the desktop; on a smaller
+       desktop a smooth downscale to fit (whole multiples stay pixel-exact) */
+    int ww=GL_CW,wh=GL_CH,whole=1;
+    if(GL.desk_w) {
+        const int mw=GL.desk_w*9/10,mh=GL.desk_h*85/100; int k=1;
+        while((k+1)*GL_CW<=mw && (k+1)*GL_CH<=mh) k++;
+        if(GL_CW<=mw && GL_CH<=mh) { ww=k*GL_CW; wh=k*GL_CH; }
+        else { const double s=(double)mw/GL_CW<(double)mh/GL_CH?(double)mw/GL_CW:(double)mh/GL_CH; ww=(int)(GL_CW*s); wh=(int)(GL_CH*s); whole=0; }
+    }
+    SDL_Window *win=SDL_CreateWindow("Gene Wars - GWRecomp",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,ww,wh,SDL_WINDOW_ALLOW_HIGHDPI);
     SDL_Renderer *ren=win?SDL_CreateRenderer(win,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC):NULL;
     if(!ren && win) ren=SDL_CreateRenderer(win,-1,SDL_RENDERER_SOFTWARE);
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"0");
-    SDL_Texture *tex=ren?SDL_CreateTexture(ren,SDL_PIXELFORMAT_RGB888,SDL_TEXTUREACCESS_STREAMING,GL_W,GL_H):NULL;
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,whole?"0":"1");
+    SDL_Texture *tex=ren?SDL_CreateTexture(ren,SDL_PIXELFORMAT_RGB888,SDL_TEXTUREACCESS_STREAMING,GL_CW,GL_CH):NULL;
     BITMAPINFO bi; memset(&bi,0,sizeof bi);
-    bi.bmiHeader.biSize=sizeof bi.bmiHeader; bi.bmiHeader.biWidth=GL_W; bi.bmiHeader.biHeight=-GL_H;
+    bi.bmiHeader.biSize=sizeof bi.bmiHeader; bi.bmiHeader.biWidth=GL_CW; bi.bmiHeader.biHeight=-GL_CH;
     bi.bmiHeader.biPlanes=1; bi.bmiHeader.biBitCount=32; bi.bmiHeader.biCompression=BI_RGB;
     GL.dc=CreateCompatibleDC(NULL); void *bits=NULL;
     GL.bmp=GL.dc?CreateDIBSection(GL.dc,&bi,DIB_RGB_COLORS,&bits,NULL,0):NULL;
@@ -18862,9 +18912,10 @@ static int launcher_run(const char *data_dir,const char *root) {
         SDL_QuitSubSystem(SDL_INIT_VIDEO|SDL_INIT_EVENTS); return 1;
     }
     GL.px=(uint32_t *)bits; GL.old_bmp=SelectObject(GL.dc,GL.bmp);
-    GL.f_small=gl_font(12,FW_NORMAL,L"Consolas"); GL.f_body=gl_font(13,FW_NORMAL,L"Consolas");
-    GL.f_bold=gl_font(13,FW_BOLD,L"Consolas"); GL.f_head=gl_font(20,FW_BOLD,L"Consolas"); GL.f_title=gl_font(30,FW_HEAVY,L"Consolas");
-    SDL_RenderSetLogicalSize(ren,GL_W,GL_H); SDL_RenderSetIntegerScale(ren,SDL_TRUE);
+    GL.f_tiny=gl_font(10,FW_NORMAL,L"Consolas"); GL.f_small=gl_font(11,FW_NORMAL,L"Consolas"); GL.f_body=gl_font(12,FW_NORMAL,L"Consolas");
+    GL.f_bold_small=gl_font(11,FW_BOLD,L"Consolas"); GL.f_bold=gl_font(12,FW_BOLD,L"Consolas");
+    GL.f_head=gl_font(19,FW_BOLD,L"Consolas"); GL.f_title=gl_font(28,FW_BOLD,L"Consolas");
+    SDL_RenderSetLogicalSize(ren,GL_CW,GL_CH); SDL_RenderSetIntegerScale(ren,whole?SDL_TRUE:SDL_FALSE);
     const char *shot=getenv("GW_LAUNCHER_SHOT");   /* QA: write the canvas of each tab to <prefix>_<tab>.bmp, then quit */
     int shot_tab=0;
     gw_flag_trace("TRACE launcher open data_ok=%d saves=%d last_mission=%d%c",GL.data_all,GL.have_save,GL.sel,10);
@@ -18872,9 +18923,9 @@ static int launcher_run(const char *data_dir,const char *root) {
         SDL_Event ev; GL.clicked=GL.dbl=0;
         while(SDL_PollEvent(&ev)) {
             if(ev.type==SDL_QUIT) GL.result=-1;
-            else if(ev.type==SDL_MOUSEMOTION) { GL.mx=ev.motion.x; GL.my=ev.motion.y; }
+            else if(ev.type==SDL_MOUSEMOTION) { GL.mx=ev.motion.x/GL_S; GL.my=ev.motion.y/GL_S; }   /* canvas -> layout units */
             else if(ev.type==SDL_MOUSEBUTTONDOWN && ev.button.button==SDL_BUTTON_LEFT) {
-                GL.mx=ev.button.x; GL.my=ev.button.y; GL.clicked=1; GL.dbl=ev.button.clicks>=2; }
+                GL.mx=ev.button.x/GL_S; GL.my=ev.button.y/GL_S; GL.clicked=1; GL.dbl=ev.button.clicks>=2; }
             else if(ev.type==SDL_KEYDOWN) {
                 const SDL_Keycode kc=ev.key.keysym.sym;
                 if(kc==SDLK_ESCAPE) GL.result=-1;
@@ -18887,18 +18938,19 @@ static int launcher_run(const char *data_dir,const char *root) {
         gl_draw();
         if(shot && shot[0]) {
             char p[600]; snprintf(p,sizeof p,"%s_%d.bmp",shot,shot_tab);
-            SDL_Surface *s=SDL_CreateRGBSurfaceWithFormatFrom(GL.px,GL_W,GL_H,32,GL_W*4,SDL_PIXELFORMAT_RGB888);
+            SDL_Surface *s=SDL_CreateRGBSurfaceWithFormatFrom(GL.px,GL_CW,GL_CH,32,GL_CW*4,SDL_PIXELFORMAT_RGB888);
             if(s) { SDL_SaveBMP(s,p); SDL_FreeSurface(s); }
+            gw_flag_trace("TRACE launcher shot tab=%d texts_shrunk_or_cut=%d%c",shot_tab,GL.overflow,10);
             if(++shot_tab>=3) GL.result=-1; else GL.tab=shot_tab;
         }
         if(GL.result==2) {   /* folder dialog (modal, outside the SDL frame) */
             GL.result=0; gl_pick_folder(win); continue;
         }
-        SDL_UpdateTexture(tex,NULL,GL.px,GL_W*4);
+        SDL_UpdateTexture(tex,NULL,GL.px,GL_CW*4);
         SDL_SetRenderDrawColor(ren,0,0,0,255); SDL_RenderClear(ren); SDL_RenderCopy(ren,tex,NULL,NULL); SDL_RenderPresent(ren);
     }
-    HFONT fonts[5]={GL.f_small,GL.f_body,GL.f_bold,GL.f_head,GL.f_title};
-    SelectObject(GL.dc,GL.old_bmp); for(int i=0;i<5;i++) if(fonts[i]) DeleteObject(fonts[i]);
+    HFONT fonts[7]={GL.f_tiny,GL.f_small,GL.f_body,GL.f_bold_small,GL.f_bold,GL.f_head,GL.f_title};
+    SelectObject(GL.dc,GL.old_bmp); for(int i=0;i<7;i++) if(fonts[i]) DeleteObject(fonts[i]);
     DeleteObject(GL.bmp); DeleteDC(GL.dc);
     SDL_DestroyTexture(tex); SDL_DestroyRenderer(ren); SDL_DestroyWindow(win);
     SDL_QuitSubSystem(SDL_INIT_VIDEO|SDL_INIT_EVENTS);
