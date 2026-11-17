@@ -8149,6 +8149,8 @@ static int terrain_window_to_guest_hud(int wx,int wy,int *gx,int *gy) {
 /* True widescreen (GW_WIDESCREEN=1 / --widescreen): presented width and source pitch of the current frame.
    640/640 by default; 854/864 while the game IFC runs on the widened surface. */
 static int g_ws_requested;
+static volatile int g_ws_save_opened;   /* the game opened a .sav since the canvas was last switched on (see ws_live_update) */
+static int g_ws_live_active;            /* tentative definition; the live widescreen state is defined with ws_live_update */
 /* --zoomout (GW_ZOOMOUT=1, implies --widescreen): the game draws a 1152x640 canvas (36 strips x 20 cell rows); the
    host shows its HUD (x<128, y<480) at 1x and the map as a zoomable window on the canvas. At zoom 1.0 the window is
    the canvas' own top-left 854x480 (x=128..853, y=0..479), so everything the game places in screen coordinates
@@ -10643,6 +10645,148 @@ void gw_smk_call_hook(uint32_t guest_va,uint32_t g_eax,uint32_t g_ebx,uint32_t g
     }
 }
 
+/* ---- Smacker audio, decoded by the host -------------------------------------------------------------------------
+   The game plays its clips with the Miles digital driver forced off at both GetSoundDriver_ call sites
+   (gw_smk_mss_gate: the AIL timer path is not emulated), so RAD's player decodes video only. The clips do carry an
+   audio track (BIOINTRO/LOGO/SYSTEM1-4/BIOWIN/BIOLOSE: track 0, 22050 Hz, 16-bit stereo, Smacker-compressed). The
+   host reads that track from the same file the guest opened (read-only, its own handle), decodes one frame's audio
+   each time the guest decodes that video frame and queues it on its own SDL audio device, so the sound follows the
+   original frame pacing; the clip's end (or a skip) clears the queue. Format: RAD Smacker 2 audio (bit-level
+   Huffman trees + DPCM), as documented by the open-source decoders (libsmacker, FFmpeg smacker.c). */
+typedef struct { int16_t c[2]; uint8_t v,leaf; } smka_node;
+typedef struct { smka_node n[512]; int count,empty; } smka_tree;
+typedef struct { const uint8_t *p; size_t n,bit; } smka_bits;
+static int smka_bit(smka_bits *b) { if(b->bit>=b->n*8u) { b->bit++; return 0; } const int v=(b->p[b->bit>>3]>>(b->bit&7u))&1; b->bit++; return v; }
+static unsigned smka_get(smka_bits *b,int k) { unsigned v=0; for(int i=0;i<k;i++) v|=(unsigned)smka_bit(b)<<i; return v; }
+static int smka_tree_node(smka_bits *b,smka_tree *t,int depth) {
+    if(depth>32 || t->count>=512) return -1;
+    const int i=t->count++;
+    if(!smka_bit(b)) { t->n[i].leaf=1; t->n[i].v=(uint8_t)smka_get(b,8); return i; }
+    t->n[i].leaf=0;
+    const int a=smka_tree_node(b,t,depth+1); if(a<0) return -1;
+    const int c=smka_tree_node(b,t,depth+1); if(c<0) return -1;
+    t->n[i].c[0]=(int16_t)a; t->n[i].c[1]=(int16_t)c; return i;
+}
+static uint8_t smka_decode(smka_bits *b,const smka_tree *t) {
+    if(t->empty || !t->count) return 0;
+    int i=0; for(int guard=0;!t->n[i].leaf && guard<64;guard++) i=t->n[i].c[smka_bit(b)];
+    return t->n[i].v;
+}
+static struct {
+    FILE *f; uint32_t frames,*fsize,next; uint8_t *ftype; long *foff;
+    uint32_t rate; int bits16,stereo,packed,ok;
+    SDL_AudioDeviceID dev; int dev_rate;
+    uint64_t queued_bytes; uint32_t frames_decoded,decode_errors;
+} g_smka;
+static char g_smka_open_path[700];   /* host path of the last .smk the guest opened (set in host_open) */
+static void smka_stop(const char *why) {
+    if(g_smka.dev) { SDL_ClearQueuedAudio(g_smka.dev); SDL_PauseAudioDevice(g_smka.dev,1); }
+    if(g_smka.f) {
+        gw_smk_trace("TRACE smacker_audio stop reason=%s frames_decoded=%u queued_bytes=%llu decode_errors=%u%c",why,
+            g_smka.frames_decoded,(unsigned long long)g_smka.queued_bytes,g_smka.decode_errors,10);
+        fclose(g_smka.f);
+    }
+    free(g_smka.fsize); free(g_smka.ftype); free(g_smka.foff);
+    g_smka.f=NULL; g_smka.fsize=NULL; g_smka.ftype=NULL; g_smka.foff=NULL; g_smka.ok=0;
+}
+/* the guest started a clip: open the file it opened last and read the header and frame table */
+static void smka_begin(void) {
+    smka_stop("new-clip");
+    if(!gw_vsb16_enabled() || !g_smka_open_path[0]) return;   /* audio off (GW_VSB16=0) or no clip file seen */
+    FILE *f=fopen(g_smka_open_path,"rb"); uint8_t h[0x68];
+    if(!f || fread(h,1,sizeof h,f)!=sizeof h || memcmp(h,"SMK",3)) { if(f) fclose(f); return; }
+    const uint32_t frames=(uint32_t)(h[0xC]|h[0xD]<<8|h[0xE]<<16|(uint32_t)h[0xF]<<24)+((h[0x14]&1u)?1u:0u);
+    const uint32_t trees=(uint32_t)(h[0x34]|h[0x35]<<8|h[0x36]<<16|(uint32_t)h[0x37]<<24);
+    const uint32_t ar=(uint32_t)(h[0x48]|h[0x49]<<8|h[0x4A]<<16|(uint32_t)h[0x4B]<<24);
+    if(!(ar&0x40000000u) || !frames || frames>100000u) { fclose(f); gw_smk_trace("TRACE smacker_audio none path=%s%c",g_smka_open_path,10); return; }
+    g_smka.fsize=(uint32_t *)malloc(frames*4u); g_smka.ftype=(uint8_t *)malloc(frames); g_smka.foff=(long *)malloc(frames*sizeof(long));
+    if(!g_smka.fsize || !g_smka.ftype || !g_smka.foff || fread(g_smka.fsize,4,frames,f)!=frames || fread(g_smka.ftype,1,frames,f)!=frames) {
+        fclose(f); g_smka.f=NULL; smka_stop("header"); return; }
+    long off=0x68L+(long)frames*5L+(long)trees;
+    for(uint32_t i=0;i<frames;i++) { g_smka.foff[i]=off; g_smka.fsize[i]&=~3u; off+=(long)g_smka.fsize[i]; }
+    g_smka.f=f; g_smka.frames=frames; g_smka.next=0; g_smka.ok=1;
+    g_smka.rate=ar&0xFFFFFFu; g_smka.packed=(ar&0x80000000u)!=0; g_smka.bits16=(ar&0x20000000u)!=0; g_smka.stereo=(ar&0x10000000u)!=0;
+    g_smka.queued_bytes=0; g_smka.frames_decoded=0; g_smka.decode_errors=0;
+    if(g_smka.dev && g_smka.dev_rate!=(int)g_smka.rate) { SDL_CloseAudioDevice(g_smka.dev); g_smka.dev=0; }
+    if(!g_smka.dev) {
+        if(!SDL_WasInit(SDL_INIT_AUDIO) && SDL_InitSubSystem(SDL_INIT_AUDIO)!=0) { smka_stop("sdl-audio"); return; }
+        SDL_AudioSpec want,have; SDL_zero(want); want.freq=(int)g_smka.rate; want.format=AUDIO_S16SYS; want.channels=2; want.samples=1024;
+        g_smka.dev=SDL_OpenAudioDevice(NULL,0,&want,&have,0); g_smka.dev_rate=(int)g_smka.rate;
+        if(!g_smka.dev) { gw_smk_trace("TRACE smacker_audio device failed: %s%c",SDL_GetError(),10); smka_stop("device"); return; }
+    }
+    SDL_ClearQueuedAudio(g_smka.dev); SDL_PauseAudioDevice(g_smka.dev,0);
+    gw_smk_trace("TRACE smacker_audio begin path=%s frames=%u rate=%u %s %s %s%c",g_smka_open_path,frames,g_smka.rate,
+        g_smka.bits16?"16-bit":"8-bit",g_smka.stereo?"stereo":"mono",g_smka.packed?"packed":"pcm",10);
+}
+/* one video frame decoded by the guest: decode and queue the audio of the next frame of the file */
+static void smka_frame(void) {
+    if(!g_smka.ok || g_smka.next>=g_smka.frames) return;
+    const uint32_t k=g_smka.next++;
+    if(!(g_smka.ftype[k]&0x02u) || !g_smka.fsize[k]) return;   /* no track-0 audio in this frame */
+    uint8_t *fr=(uint8_t *)malloc(g_smka.fsize[k]); if(!fr) return;
+    if(fseek(g_smka.f,g_smka.foff[k],SEEK_SET) || fread(fr,1,g_smka.fsize[k],g_smka.f)!=g_smka.fsize[k]) { free(fr); g_smka.decode_errors++; return; }
+    size_t p=0;
+    if(g_smka.ftype[k]&0x01u) p+=(size_t)fr[0]*4u;                          /* palette record */
+    if(p+4u>g_smka.fsize[k]) { free(fr); g_smka.decode_errors++; return; }
+    const uint32_t len=(uint32_t)(fr[p]|fr[p+1]<<8|fr[p+2]<<16|(uint32_t)fr[p+3]<<24);
+    if(len<4u || p+len>g_smka.fsize[k]) { free(fr); g_smka.decode_errors++; return; }
+    const uint8_t *a=fr+p+4u; const size_t an=len-4u;
+    int16_t *out=NULL; size_t frames_out=0;
+    if(g_smka.packed) {
+        if(an<4u) { free(fr); return; }
+        const uint32_t unp=(uint32_t)(a[0]|a[1]<<8|a[2]<<16|(uint32_t)a[3]<<24);
+        smka_bits b={a+4,an-4u,0};
+        if(unp && unp<=0x100000u && smka_bit(&b)) {
+            const int stereo=smka_bit(&b),bits16=smka_bit(&b);
+            const int nt=1<<(bits16+stereo);
+            smka_tree *t=(smka_tree *)calloc(4,sizeof *t);
+            if(t) {
+                int bad=0;
+                for(int i=0;i<nt;i++) { if(smka_bit(&b)) { if(smka_tree_node(&b,&t[i],0)<0) bad=1; (void)smka_bit(&b); } else t[i].empty=1; }
+                const size_t ch=stereo?2u:1u, samples=bits16?unp/2u:unp;
+                frames_out=samples/ch;
+                out=bad?NULL:(int16_t *)malloc(frames_out*4u+8u);
+                if(out) {
+                    int pred[2]={0,0}; size_t s=0;
+                    if(bits16) {
+                        for(int c=stereo;c>=0;c--) { const unsigned hi=smka_get(&b,8),lo=smka_get(&b,8); pred[c]=(int16_t)(hi<<8|lo); }
+                        int16_t *tmp=(int16_t *)malloc(samples*2u+4u);
+                        if(tmp) {
+                            for(int c=0;c<=stereo && s<samples;c++) tmp[s++]=(int16_t)pred[c];
+                            for(;s<samples;s++) {
+                                const int r=(int)(s&(size_t)stereo);
+                                const unsigned lo=smka_decode(&b,&t[r?2:0]),hi=smka_decode(&b,&t[r?3:1]);
+                                pred[r]=(int16_t)(pred[r]+(int16_t)(lo|hi<<8)); tmp[s]=(int16_t)pred[r];
+                            }
+                            for(size_t i=0;i<frames_out;i++) { out[2*i]=tmp[i*ch]; out[2*i+1]=tmp[i*ch+ch-1u]; }
+                            free(tmp);
+                        } else { free(out); out=NULL; }
+                    } else {
+                        uint8_t *tmp=(uint8_t *)malloc(samples+4u);
+                        if(tmp) {
+                            for(int c=stereo;c>=0;c--) pred[c]=(int)smka_get(&b,8);
+                            for(int c=0;c<=stereo && s<samples;c++) tmp[s++]=(uint8_t)pred[c];
+                            for(;s<samples;s++) { const int r=(int)(s&(size_t)stereo); pred[r]+=(int8_t)smka_decode(&b,&t[r]); tmp[s]=(uint8_t)pred[r]; }
+                            for(size_t i=0;i<frames_out;i++) { out[2*i]=(int16_t)((tmp[i*ch]-128)<<8); out[2*i+1]=(int16_t)((tmp[i*ch+ch-1u]-128)<<8); }
+                            free(tmp);
+                        } else { free(out); out=NULL; }
+                    }
+                }
+                if(bad) g_smka.decode_errors++;
+                free(t);
+            }
+        }
+    } else {   /* raw PCM track */
+        const size_t ch=g_smka.stereo?2u:1u, bps=g_smka.bits16?2u:1u; frames_out=an/(ch*bps);
+        out=(int16_t *)malloc(frames_out*4u+8u);
+        if(out) for(size_t i=0;i<frames_out;i++) for(size_t c=0;c<2u;c++) {
+            const size_t at=(i*ch+(c<ch?c:0u))*bps;
+            out[2*i+c]=bps==2u?(int16_t)(a[at]|a[at+1]<<8):(int16_t)((a[at]-128)<<8); }
+    }
+    if(out && frames_out && g_smka.dev && SDL_QueueAudio(g_smka.dev,out,(Uint32)(frames_out*4u))==0) g_smka.queued_bytes+=frames_out*4u;
+    if(out) g_smka.frames_decoded++;
+    free(out); free(fr);
+}
 static void gw_smk_worker_hook(uint32_t guest_va,uint32_t g_ebp) {
     if(!g_interactive_window_started || !g_ifclevel_demo_renderer) return;
     const int stopping=SDL_AtomicGet(&g_interactive_worker_stop)!=0;
@@ -10677,6 +10821,7 @@ static void gw_smk_worker_hook(uint32_t guest_va,uint32_t g_ebp) {
                     (double)SDL_GetPerformanceFrequency(),10);
             gw_smk_log_invariants("end");
             gw_smk_fine_clock_end("worker"); gw_tl_dump();
+            smka_stop("end");
             InterlockedExchange(&g_smk_mb.active,0);
         }
         return;
@@ -10705,8 +10850,10 @@ static void gw_smk_worker_hook(uint32_t guest_va,uint32_t g_ebp) {
             guest_memory[0x00376AF1u],guest_memory[0x00376B0Cu],
             guest_memory[0x00376B29u],guest_memory[0x00376AC2u],10);
         gw_smk_log_invariants("begin");
+        smka_begin();
         InterlockedExchange(&g_smk_mb.active,1);
     }
+    smka_frame();   /* the audio of the frame the guest just decoded */
     if(stopping) return;
     /* One slot: wait (bounded) until the main thread has drawn the previous frame. */
     const uint64_t t0=SDL_GetPerformanceCounter(),freq=SDL_GetPerformanceFrequency();
@@ -10763,6 +10910,7 @@ void gw_smk_video_hook(uint32_t guest_va,uint32_t g_ebp) {
                     (double)SDL_GetPerformanceFrequency());
             gw_smk_trace("TRACE smacker_video original_input_polls=%u%c",g_smk_wait_checks,10);
             gw_smk_prof_finish("main-thread"); gw_tl_dump(); gw_smk_fine_clock_end("main");
+            smka_stop("end");
             g_smk_active=0; gw_recomp_pit_host_hold(0); timeEndPeriod(1u);
             g_fadeclip_valid=(g_fadeclip_idx!=NULL && g_fadeclip_w && g_fadeclip_h);
             gw_smk_close_window();
@@ -10794,7 +10942,9 @@ void gw_smk_video_hook(uint32_t guest_va,uint32_t g_ebp) {
             g_smk_frames_total,g_smk_period_ms,guest_va==0x000AE485u?"direct":"via_buffer",
             guest_memory[0x00376AF1u],guest_memory[0x00376B0Cu],
             guest_memory[0x00376B29u],guest_memory[0x00376AC2u]);
+        smka_begin();
     }
+    smka_frame();
     if(g_cli_skip_intro && g_smk_frames_presented>=1u) {
         /* --skip-intro: the original loop leaves on its own ESC flag, exactly as for a key press. */
         guest_memory[0x00376AF1u]=1u;
@@ -11927,6 +12077,12 @@ static uint16_t host_open(void *user,const char *path,uint8_t access,void **out)
     h->fp=fp;
     h->capture_rnc=capture; s->opens++;
     strncpy(h->path,path,sizeof h->path-1u);
+    {   /* a clip: remember the host file, the Smacker audio decoder reads its sound track from it (read-only) */
+        const size_t pl=strlen(path);
+        if(access==0u && pl>4u && !_stricmp(path+pl-4u,".smk"))
+            snprintf(g_smka_open_path,sizeof g_smka_open_path,"%s",save_overlay_exists?save_overlay:source);
+        if(access==0u && pl>4u && !_stricmp(path+pl-4u,".sav")) g_ws_save_opened=1;   /* a load: the canvas waits 8 ticks */
+    }
     if (!s->first_path[0]) strncpy(s->first_path,path,sizeof s->first_path-1u);
     strncpy(s->last_path,path,sizeof s->last_path-1u); *out=h;
     fprintf(stderr,"TRACE original VFS open path='%s' access=%u result=0 handle=%u source='%s' mode=%s manifest_sha256=%s\n",path,access,s->opens,access?overlay:(save_overlay_exists?save_overlay:source),access?"overlay-rw":(save_overlay_exists?"overlay-ro":"install-ro"),(access||!manifest)?"overlay-only":manifest->sha256);
@@ -17080,6 +17236,17 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         *(const uint32_t *)(memory+0x00376A7Cu)==GW_CANVAS_H;
     if(canvas) { pitch=GW_CANVAS_W; wscreen_guest=*(const uint32_t *)(memory+0x00376A5Cu); }
     const uint32_t frame_bytes=pitch*(canvas?GW_CANVAS_H:480u);
+    {   /* the mission (IFCMain) is current but the widened surface is not on yet: keep showing the previous frame
+           instead of a 4:3 mission frame, so the view goes straight to 16:9 (at most 40 ticks, never frozen) */
+        static unsigned held;
+        if(memory && g_ws_requested && !g_ws_live_active && pitch==640u &&
+           *(const uint32_t *)(memory+0x002EF7E8u)==0x0035FE9Au && !*(const uint32_t *)(memory+0x002EF7ECu) &&
+           !(memory[0x002F1464u]&0x80u) && held<40u) {
+            if(!held) gw_flag_trace("TRACE widescreen hold_4x3_frames start turn=%u%c",*(const uint32_t *)(memory+0x002F1472u),10);
+            held++; return;
+        }
+        if(held) { gw_flag_trace("TRACE widescreen hold_4x3_frames end held=%u%c",held,10); held=0; }
+    }
     if(!memory || !g_interactive_snapshot_mutex ||
        wscreen_guest>GUEST_LIMIT-frame_bytes ||
        world_guest+GW_INTERACTIVE_WORLD_BYTES>GUEST_LIMIT ||
@@ -17451,8 +17618,10 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
        640x480 map ring (0x5BB90..) into [0x2EECA0] in its first ticks, which on the 1152-pitch ring left striped
        640-pitch rows in the HUD-side columns */
     {   static unsigned stable;
+        /* only after the game opened a save (g_ws_save_opened, set by host_open): a new mission from the planet
+           screen loads no saved ring, so it switches at once and its first mission frame is already 16:9 */
         stable=want?stable+1u:0u;
-        if(g_ws_canvas && want && !g_ws_live_active && stable<8u) want=0; }
+        if(g_ws_canvas && want && !g_ws_live_active && stable<8u && g_ws_save_opened) want=0; }
     if(want==g_ws_live_active) return;
     /* the draw list is filled by the simulation and emptied by draw_game in the same tick; switch its pool only
        while it is empty (count MapDisplay+0x11BB), otherwise on a later tick */
@@ -17501,7 +17670,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
             g_gw_ws_after_map=hud_watch_after_map;
         }
         SDL_AtomicSet(&g_interp_panel_reset,1);
-        g_ws_live_active=1;
+        g_ws_live_active=1; g_ws_save_opened=0;
         gw_flag_trace("TRACE widescreen on turn=%u surface=%ux%u shown=854x480\n",*(const uint32_t *)(memory+0x002F1472u),W,H);
     } else {
         *(uint32_t *)(memory+0x00376A5Cu)=g_ws_saved_ws;
@@ -19125,6 +19294,9 @@ static int standalone_setup(int *pargc,char ***pargv,char *root,size_t root_n) {
         {"GW_DEMO_CAP_60","1"},{"GW_DEMO_PACING","native"}};
     for(unsigned i=0;i<sizeof defaults/sizeof defaults[0];i++) if(!getenv(defaults[i][0])) {
         char a[128]; snprintf(a,sizeof a,"%s=%s",defaults[i][0],defaults[i][1]); (void)_putenv(a); }
+    if(!getenv("GW_VSB16_LOG")) {   /* the sound log (Miles slots, samples, Smacker audio) like play.ps1 keeps it; one per session */
+        char a[MAX_PATH+40],p[MAX_PATH+20]; snprintf(p,sizeof p,"%s\\play.sound.log",root); (void)DeleteFileA(p);
+        snprintf(a,sizeof a,"GW_VSB16_LOG=%s",p); (void)_putenv(a); }
     char lo[MAX_PATH+32];
     snprintf(lo,sizeof lo,"%s\\play.stdout.log",root); (void)freopen(lo,"w",stdout);
     snprintf(lo,sizeof lo,"%s\\play.stderr.log",root); (void)freopen(lo,"w",stderr);
@@ -19209,6 +19381,25 @@ int main(int argc,char **argv) {
     }
     if(g_cli_play_mode && g_ini_cd_cue[0] && !getenv("GW_CD_AUDIO_CUE")) {
         char a[640]; snprintf(a,sizeof a,"GW_CD_AUDIO_CUE=%s",g_ini_cd_cue); (void)_putenv(a); }
+    if(g_cli_play_mode && !getenv("GW_CD_AUDIO_CUE") && argv[2] && strcmp(argv[2],"-")) {
+        /* CD music without configuration: the .cue of a CD image usually sits in the GENEWARS folder or one or two
+           folders above it (image dumps keep the installed game next to the .cue/.bin files). The first one found is
+           used and remembered as cd_cue in gwrecomp.ini when the player has one. */
+        char dir[700]; snprintf(dir,sizeof dir,"%s",argv[2]);
+        for(int up=0;up<3 && dir[0];up++) {
+            char pat[760]; snprintf(pat,sizeof pat,"%s\\*.cue",dir);
+            WIN32_FIND_DATAA fd; HANDLE fh=FindFirstFileA(pat,&fd);
+            if(fh!=INVALID_HANDLE_VALUE) {
+                FindClose(fh);
+                char cue[1000],a[1040]; snprintf(cue,sizeof cue,"%s\\%s",dir,fd.cFileName);
+                snprintf(a,sizeof a,"GW_CD_AUDIO_CUE=%s",cue); (void)_putenv(a);
+                gw_flag_trace("TRACE cd_audio cue_found %s%c",cue,10);
+                if(g_ini_path_used[0]) (void)gwrecomp_ini_set("cd_cue",cue);
+                break;
+            }
+            char *s=strrchr(dir,92); if(!s) break; *s=0;
+        }
+    }
     const char *interactive_env=getenv("GW_INTERACTIVE_DEMO");
     g_interactive_demo_mode=interactive_env && strcmp(interactive_env,"1")==0;
     {   const char *vs=getenv("GW_VSB16");   /* V20: virtual SB16 digital audio, interactive mode only (replays stay silent/deterministic) */
@@ -22237,6 +22428,13 @@ int main(int argc,char **argv) {
                 continuation_ok=0; break;
             }
             timer_tick_count++;
+            if(ifclevel_manual && gw_vsb16_enabled()) {
+                /* the Miles mixer service between ticks, as in the game loop worker: before IFCMain (title, planet
+                   screen) nothing else runs it, so the samples the game starts there were never mixed */
+                gw_vsb16_service_ctx vsx={&timer_context,memory,0};
+                gw_vsb16_pump(memory,GUEST_LIMIT,gw_vsb16_run_mixer_service,&vsx);
+                if(vsx.failed) { fprintf(interaction,"tick=%u stage=vsb16-mixer-service failed\n",tick); continuation_ok=0; break; }
+            }
             int mcb_valid=validate_dos_mcb_chain(memory,vfs.dos.dos_segment_end);
             uint32_t current=*(uint32_t *)(memory+0x002EF7E8u),pending=*(uint32_t *)(memory+0x002EF7ECu);
             const uint32_t planet_table=*(uint32_t *)(memory+level_this+0x340u);
