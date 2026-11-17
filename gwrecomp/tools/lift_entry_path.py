@@ -3391,11 +3391,14 @@ if partial:
     # the translucent placement ghost covers far more than the
     # 64 x 64 pointer box marked above, and on the wider canvas cells it left were not always restored (ghost
     # remnants). In that mode mark every map cell (columns 4.., x >= 128) with the pointer level so the whole map is
-    # restored from the ring and redrawn each frame; the cells age out as usual once the mode ends.
+    # restored from the ring and redrawn each frame, and keep doing it for 16 frames after the mode drops to 0
+    # (cancel, place, or pointer leaving the map): the ghost drawn into that frame's dirty cells is cleaned too.
     ws_site_rules.append((0x1D3D6, "esp = esp + 8;",
-                          "if (MEM8(DS_BASE + (0x2F1441)) != 0u) { "
+                          "{ static uint32_t _gw_place_grace = 0u; "
+                          "if (MEM8(DS_BASE + (0x2F1441)) != 0u) _gw_place_grace = 16u; "
+                          "if (_gw_place_grace) { _gw_place_grace--; "
                           "for (uint32_t _r = 0u; _r < GW_WS_GRID_ROWS; _r++) for (uint32_t _c = 4u; _c < GW_WS_STRIPS && _c < 36u; _c++) "
-                          "{ const uint32_t _ea = GW_WS_GRID_EA(_r * 20u, _c); if (MEM8(_ea) < 3u) MEM8(_ea) = 3u; } } "
+                          "{ const uint32_t _ea = GW_WS_GRID_EA(_r * 20u, _c); if (MEM8(_ea) < 3u) MEM8(_ea) = 3u; } } } "
                           "esp = esp + 8;"))
     # 0x6B1D0 (pointer-mode animation step) reads frame = [[[0x2F1450]] + 14 * frame]. Entering the options menu
     # while a placement pointer is up leaves [0x2F1450] on an animation whose frame table is already 0, so the
