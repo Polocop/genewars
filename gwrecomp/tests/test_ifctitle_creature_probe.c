@@ -10840,6 +10840,7 @@ static void gw_smk_worker_hook(uint32_t guest_va,uint32_t g_ebp) {
     const int stopping=SDL_AtomicGet(&g_interactive_worker_stop)!=0;
     if(guest_va==0x000AE485u || guest_va==0x000AE5E3u) gw_smk_prof_frame_boundary();
     if(guest_va==0x000AE49Fu || guest_va==0x000AE5FAu) {
+        if(g_cli_play_mode) gw_bootstrap_sound_tick();   /* the game loop is inside the clip: mix here too */
         /* Input poll of the original wait loop. A normal tick applies the input mailbox only at
            its start; the clip loop polls _lbKeyOn itself, so apply it here as well, and keep the
            guest clock on wall time (realtime mode freezes the PIT inside a tick). */
@@ -10931,6 +10932,7 @@ void gw_smk_video_hook(uint32_t guest_va,uint32_t g_ebp) {
     if(GetCurrentThreadId()!=g_smk_main_thread_id) { gw_smk_worker_hook(guest_va,g_ebp); return; }
     if((guest_va==0x000AE485u || guest_va==0x000AE5E3u) && g_smk_active) { gw_tl_add(3,g_smk_frames_presented,0,0,0,0); gw_smk_prof_frame_boundary(); }
     if(guest_va==0x000AE49Fu || guest_va==0x000AE5FAu) {
+        if(g_cli_play_mode) gw_bootstrap_sound_tick();   /* sounds the game starts during a clip (planet zoom: LANDING.WAV) */
         if(g_smk_active) {
             uint64_t host_wait_t=gw_smk_profile_begin(GW_SMPH_HOST_POLL_WAIT);
             g_smk_wait_checks++;
@@ -17603,8 +17605,8 @@ static int gw_sound_between_ticks(gw_recomp_context *c,uint8_t *mem);
 static void gw_bootstrap_sound_tick(void) {
     static unsigned calls,fails;
     gw_recomp_context live;
-    if(fails>=3u || !guest_memory || !gw_recomp_snapshot_active(&live)) return;
-    if(!calls++) gw_vsb16_log("TRACE bootstrap_sound first mix inside the start-up game() loop\n");
+    if(fails>=3u || !guest_memory || !gw_vsb16_enabled() || !gw_recomp_snapshot_active(&live)) return;
+    if(!calls++) gw_vsb16_log("TRACE bootstrap_sound first mix inside a running original loop\n");
     if(!gw_sound_between_ticks(&live,guest_memory) && ++fails>=3u)
         gw_vsb16_log("TRACE bootstrap_sound disabled after 3 mixer failures\n");
 }
