@@ -19022,7 +19022,7 @@ static int ensure_game_derived_inputs(const char *guest_path,const char *data_di
         for(unsigned i=0;i<sizeof parts/sizeof parts[0];i++) for(unsigned k=0;k<parts[i].n;k++) {
             unsigned v=0; sscanf(parts[i].hex+2u*k,"%2x",&v); lm[parts[i].at+k]=(uint8_t)v; }
         const int ok=write_file_atomic(lowmem_path,lm,0x10000u); free(lm);
-        if(!ok) { snprintf(err,errn,"no se pudo escribir %s (\xBFcarpeta de solo lectura?)",lowmem_path); return 0; }
+        if(!ok) { snprintf(err,errn,"no se pudo escribir %s (\xBF" "carpeta de solo lectura?)",lowmem_path); return 0; }
         gw_flag_trace("TRACE first_start made %s%c",lowmem_path,10);
     }
     if(file_exists_a(guest_path)) return 1;
