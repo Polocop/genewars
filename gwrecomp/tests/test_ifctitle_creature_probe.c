@@ -159,6 +159,7 @@ void recomp_gw_partial_0x00092930(void);
 void gw_original_draw_game_level_palette_fade_entry(void);
 void gw_original_setup_controller_entry(void);
 void gw_original_game_frame_timer_tick_entry(void);
+void recomp_gw_partial_0x00035C00(void);   /* original sound manager update (game() calls it at 0x928AA) */
 void gw_partial_0x00092860(void);
 void gw_partial_0x000927E9(void);
 void gw_partial_0x000921F0(void);
@@ -17195,6 +17196,14 @@ static int run_interactive_title_menu(uint8_t *memory,uint32_t wscreen_guest) {
             fprintf(stderr,"interactive title original Update/Draw failed frame=%llu update=%08x draw=%08x\n",
                 (unsigned long long)frames,update_ctx.eip,draw_ctx.eip); return 0;
         }
+        /* the original game() loop calls the sound manager 0x35C00 (eax = 0x347F4C) at 0x928AA in every iteration:
+           it plays the queued sound requests (menu buttons). The host runs the loop's stages one by one here, so
+           it calls that stage as well; without it the requests waited for the mission's game() loop */
+        if(g_cli_play_mode) {
+            gw_recomp_context sound_ctx;
+            if(!invoke(recomp_gw_partial_0x00035C00,&sound_ctx,0x35C00u,memory,0x00347F4Cu,0u))
+                fprintf(stderr,"TRACE interactive title: sound manager 0x35C00 failed eip=%08x\n",sound_ctx.eip);
+        }
         /* the title's sounds (buttons) too: the Miles mixer and the fade timer between frames */
         if(g_cli_play_mode && !gw_sound_between_ticks(&timer_ctx,memory))
             fprintf(stderr,"TRACE interactive title: Miles mixer service failed frame=%llu\n",(unsigned long long)frames);
@@ -22561,6 +22570,13 @@ int main(int argc,char **argv) {
                 continuation_ok=0; break;
             }
             timer_tick_count++;
+            if(ifclevel_manual) {   /* the original loop's sound-manager stage (0x928AA), see run_interactive_title_menu */
+                gw_recomp_context sound_context;
+                if(!invoke(recomp_gw_partial_0x00035C00,&sound_context,0x35C00u,memory,0x00347F4Cu,0u)) {
+                    fprintf(interaction,"tick=%u stage=sound-manager-0x35C00 failed eip=%08x\n",tick,sound_context.eip);
+                    continuation_ok=0; break;
+                }
+            }
             if(ifclevel_manual && gw_vsb16_enabled()) {
                 /* the Miles mixer service between ticks, as in the game loop worker: before IFCMain (title, planet
                    screen) nothing else runs it, so the samples the game starts there were never mixed */
