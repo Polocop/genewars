@@ -2,7 +2,7 @@
 ; build root, and edit it. It is read in play mode (--play) only. Command-line flags win when given explicitly:
 ; --classic / --widescreen / --zoomout, --res, --fullscreen / --windowed, and scripts\play.ps1 -Fps.
 
-; zoomout   : 854x480 at 1.0x on a 1152x640 map canvas, wheel zoom 0.75x..2.0x, Home back to 1.0x
+; zoomout   : 854x480 at 1.0x on a 1152x640 map canvas, wheel zoom 0.87x..2.0x, Home back to 1.0x
 ; widescreen: 854x480, wheel zoom 1.0x..2.0x
 ; classic   : the original 640x480
 mode = zoomout
@@ -36,3 +36,5 @@ launcher = 1
 last_mission = 1
 ; .cue of your own Gene Wars CD image, for the CD music (else GENEWARS_CUE)
 ; cd_cue = C:\path\to\genewars.cue
+; 1 = remove the 1-pixel slivers the original terrain drawing leaves on the planet's horizon (shown frame only)
+clean_horizon = 1

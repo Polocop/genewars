@@ -8155,8 +8155,12 @@ static int g_ws_live_active;            /* tentative definition; the live widesc
    host shows its HUD (x<128, y<480) at 1x and the map as a zoomable window on the canvas. At zoom 1.0 the window is
    the canvas' own top-left 854x480 (x=128..853, y=0..479), so everything the game places in screen coordinates
    (help panels, messages, tooltips) lands exactly where it does on the 854x480 widescreen view; zooming out down to
-   0.75 shows 968x640 from the same corner (the extra area is to the right and below). Under the panel art at
-   x=128..175 the zoomed-out map shows the ring's terrain. */
+   0.87 shows 834x552 of map from the same corner (the extra area is to the right and below). Under the panel art at
+   x=128..175 the zoomed-out map shows the ring's terrain.
+   Why 0.87 and not 0.75: the game's terrain pass leaves the canvas black beyond about x=1056 and below y=559..584
+   (measured on the canvas of missions 5, 14 and 24 with the dirty flags of strips 32..35 set and cleared, the clip
+   window and raster vectors at 1152x640, and the strip loops bounded by the canvas height), a limit inside the
+   projection that is not widened yet. At 0.87 the window (x <= 962, y <= 551) stays inside the drawn terrain. */
 static int g_ws_canvas;
 static uint8_t g_hud_written[480u*48u],g_hud_val[480u*48u],g_hud_have[480u*48u];   /* panel art on x=128..175 */
 static uint32_t g_hud_ws;
@@ -8166,7 +8170,7 @@ static void hud_sentinel_collect(uint8_t *memory);
 #define GW_CANVAS_VX0 128
 #define GW_CANVAS_VY0 0
 #define GW_CANVAS_MAPX0 128
-#define GW_ZOOM_MIN_CANVAS 0.75
+#define GW_ZOOM_MIN_CANVAS 0.87
 static int g_present_w=640,g_present_pitch=640;
 /* Host presentation breakdown (main thread, GW_TICK_PROFILE), reported every 10 s: palette conversion + texture
    upload, render copies (frame + pointer), SDL_RenderPresent, pacing wait. */
@@ -8399,6 +8403,7 @@ static char g_ini_data_dir[600];
 static unsigned g_ini_fps;   /* gwrecomp.ini fps = N (play mode) */
 static char g_ini_path_used[MAX_PATH];
 static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launcher=1,g_ini_last_mission=1;
+static int g_ini_clean_horizon=1;   /* clean_horizon: drop 1-pixel horizon slivers from the presented frame */
 static char g_ini_cd_cue[600];
 /* where the launcher writes: the file that was read, else gwrecomp.ini next to the executable */
 static void gwrecomp_ini_target(char *path,size_t n) {
@@ -8483,6 +8488,7 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"launcher")) g_ini_launcher=atoi(val)!=0;
         else if(!strcmp(key,"last_mission")) { const int v=atoi(val); if(v>=1 && v<=24) g_ini_last_mission=v; }
         else if(!strcmp(key,"cd_cue")) snprintf(g_ini_cd_cue,sizeof g_ini_cd_cue,"%s",val);
+        else if(!strcmp(key,"clean_horizon")) g_ini_clean_horizon=atoi(val)!=0;
         else if(key[0]) fprintf(stderr,"gwrecomp.ini: unknown key '%s'\n",key);
     }
     fclose(f);
@@ -17223,6 +17229,24 @@ static int invoke_original_startup_prefix(gw_recomp_context *c,uint8_t *memory) 
     return ok;
 }
 
+/* clean_horizon (gwrecomp.ini, default 1; play mode, presented copy only): the original terrain rasteriser
+   (0xE41FC..0xE434C) leaves 1-pixel spans of the polygons on the planet's horizon, single pixels with black all
+   round. They are removed from the copy that is shown; guest memory is never changed. Two passes (mark, then
+   clear) so one removal never makes a neighbour isolated. Returns the number of pixels cleared. */
+static unsigned clean_horizon_pixels(uint8_t *buf,uint32_t pitch,uint32_t x0,uint32_t x1,uint32_t h) {
+    static uint32_t *marks; static size_t cap; size_t n=0;
+    if(!buf || x1<=x0+2u || h<3u) return 0u;
+    for(uint32_t y=1u;y+1u<h;y++) {
+        const uint8_t *r=buf+(size_t)y*pitch,*u=r-pitch,*d=r+pitch;
+        for(uint32_t x=x0+1u;x+1u<x1;x++) {
+            if(!r[x] || r[x-1] || r[x+1] || u[x-1] || u[x] || u[x+1] || d[x-1] || d[x] || d[x+1]) continue;
+            if(n==cap) { size_t nc=cap?cap*2u:256u; uint32_t *nm=(uint32_t *)realloc(marks,nc*sizeof *nm); if(!nm) break; marks=nm; cap=nc; }
+            marks[n++]=y*pitch+x;
+        }
+    }
+    for(size_t i=0;i<n;i++) buf[marks[i]]=0u;
+    return (unsigned)n;
+}
 static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen_guest,
                                                 uint64_t generation) {
     const uint32_t world_guest=0x002F4F86u,map_guest=0x00346D70u;
@@ -17264,6 +17288,11 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         hud_sentinel_collect(memory);
         memcpy(g_interactive_published_snapshot.canvas,cv,GW_CANVAS_W*GW_CANVAS_H);
         g_interactive_published_snapshot.canvas_valid=1;
+        if(g_cli_play_mode && g_ini_clean_horizon) {   /* map area only (x >= 176: never the HUD or its panel art) */
+            const unsigned cleared=clean_horizon_pixels(g_interactive_published_snapshot.canvas,GW_CANVAS_W,176u,GW_CANVAS_W,GW_CANVAS_H);
+            if(cleared && (generation%200u)==1u) gw_flag_trace("TRACE clean_horizon cleared=%u gen=%llu%c",cleared,(unsigned long long)generation,10);
+            cv=g_interactive_published_snapshot.canvas;   /* the 854x480 view below is taken from the cleaned copy */
+        }
         for(uint32_t y=0;y<480u;y++) {
             const uint8_t *row=cv+y*GW_CANVAS_W,*win=cv+(GW_CANVAS_VY0+y)*GW_CANVAS_W+GW_CANVAS_VX0-128;
             uint8_t *orow=o+y*864u;
@@ -17284,7 +17313,11 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
             memset(orow+854u,0,10u);
         }
         pitch=864u;
-    } else memcpy(g_interactive_published_snapshot.wscreen,memory+wscreen_guest,frame_bytes);
+    } else {
+        memcpy(g_interactive_published_snapshot.wscreen,memory+wscreen_guest,frame_bytes);
+        if(g_cli_play_mode && g_ini_clean_horizon && *(const uint32_t *)(memory+0x002EF7E8u)==0x0035FE9Au)   /* missions only */
+            (void)clean_horizon_pixels(g_interactive_published_snapshot.wscreen,pitch,176u,pitch==864u?854u:640u,480u);
+    }
     g_interactive_published_snapshot.wscreen_pitch=pitch;
     if(g_ws_requested && (generation%200u)==1u) {
         unsigned nz=0; for(uint32_t y=0;y<480u;y+=4) for(uint32_t x=176u;x<640u;x+=4) nz+=g_interactive_published_snapshot.wscreen[y*pitch+x]!=0u;
@@ -18967,27 +19000,31 @@ static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
 static void gl_draw_display(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
     static const wchar_t *const modes[3]={L"CLÁSICO 4:3",L"PANORÁMICO 854×480",L"ZOOM OUT 1152×640"};
-    gl_row_label(62,L"MODO DE VISTA",L"Zoom: rueda; Inicio = 1x");
+    gl_row_label(60,L"MODO DE VISTA",L"Zoom: rueda; Inicio = 1x");
     int cur=g_ws_canvas?2:g_ws_requested?1:0;
-    int c=gl_choice(228,62,390,24,modes,3,cur,0u);
+    int c=gl_choice(228,60,390,24,modes,3,cur,0u);
     if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
     static const wchar_t *const res[5]={L"AUTO",L"900p",L"1080p",L"1440p",L"2160p"};
     unsigned dis=0u; for(int i=1;i<5;i++) if(GL.desk_w && (gl_res_w[i]>GL.desk_w || gl_res_h[i]>GL.desk_h)) dis|=1u<<i;
-    gl_row_label(116,L"RESOLUCIÓN",L"Tamaño de la ventana");
-    cur=gl_res_index(); c=gl_choice(228,116,390,24,res,5,cur,dis);
+    gl_row_label(108,L"RESOLUCIÓN",L"Tamaño de la ventana");
+    cur=gl_res_index(); c=gl_choice(228,108,390,24,res,5,cur,dis);
     if(c>=0 && c!=cur) { g_cli_res_w=gl_res_w[c]; g_cli_res_h=gl_res_h[c]; (void)gwrecomp_ini_set("resolution",gl_res_ini[c]); }
     static const wchar_t *const fs[2]={L"VENTANA",L"COMPLETA SIN BORDES"};
-    gl_row_label(170,L"PANTALLA",L"Sin bordes = escritorio");
-    c=gl_choice(228,170,390,24,fs,2,g_cli_fullscreen,0u);
+    gl_row_label(156,L"PANTALLA",L"Sin bordes = escritorio");
+    c=gl_choice(228,156,390,24,fs,2,g_cli_fullscreen,0u);
     if(c>=0 && c!=g_cli_fullscreen) { g_cli_fullscreen=c; gwrecomp_ini_set_int("fullscreen",c); }
     static const wchar_t *const fps[2]={L"60 FPS CLÁSICO",L"120 FPS INTERPOLADO"};
-    gl_row_label(224,L"FOTOGRAMAS",L"El ritmo del juego no cambia");
-    cur=g_ini_fps==60u?0:1; c=gl_choice(228,224,390,24,fps,2,cur,0u);
+    gl_row_label(204,L"FOTOGRAMAS",L"El ritmo del juego no cambia");
+    cur=g_ini_fps==60u?0:1; c=gl_choice(228,204,390,24,fps,2,cur,0u);
     if(c>=0 && c!=cur) { g_ini_fps=c?120u:60u; gwrecomp_ini_set_int("fps",(int)g_ini_fps); }
     static const wchar_t *const flt[3]={L"NÍTIDO",L"EPX SUAVE",L"CRT"};
-    gl_row_label(278,L"FILTRO (F7)",L"También con F7 al jugar");
-    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,278,390,24,flt,3,cur,0u);
+    gl_row_label(252,L"FILTRO (F7)",L"También con F7 al jugar");
+    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,252,390,24,flt,3,cur,0u);
     if(c>=0 && c!=cur) { g_filter_mode=c; (void)gwrecomp_ini_set("filter",g_filter_names[c]); }
+    static const wchar_t *const hz[2]={L"ORIGINAL",L"LIMPIO"};
+    gl_row_label(300,L"HORIZONTE",L"Quita píxeles sueltos");
+    c=gl_choice(228,300,390,24,hz,2,g_ini_clean_horizon,0u);
+    if(c>=0 && c!=g_ini_clean_horizon) { g_ini_clean_horizon=c; gwrecomp_ini_set_int("clean_horizon",c); }
 }
 static void gl_draw_controls(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);

@@ -84,7 +84,7 @@ try {
     if ($Level -gt 1) { if ($LoadSave) { throw '-Level starts a new game; it cannot be combined with -LoadSave' }; $argLine += (' --level {0}' -f $Level) }
     if ($Widescreen) { $argLine += ' --widescreen' }   # 854x480 in missions (true widescreen of the original renderer)
     if ($ZoomOut) { $argLine += ' --widescreen --zoomout' }
-    if ($Classic) { $argLine += ' --classic' }   # 640x480 even if gwrecomp.ini says otherwise   # 1152x640 map canvas: wheel zoom down to 0.75 (implies -Widescreen)
+    if ($Classic) { $argLine += ' --classic' }   # 640x480 even if gwrecomp.ini says otherwise   # 1152x640 map canvas: wheel zoom down to 0.87 (implies -Widescreen)
     if ($Resolution) { $argLine += (' --res {0}' -f $Resolution) }   # window size in physical pixels (GPU-scaled; the guest stays 640/854x480)
     if ($Fullscreen) { $argLine += ' --fullscreen' }                 # borderless at the desktop resolution
     if ($Launcher) { $argLine += ' --launcher' }       # the native launcher screen first (settings, mission select, continue)
