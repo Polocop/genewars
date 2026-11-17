@@ -5,15 +5,17 @@
    gwrecomp.exe             the build's bin\gw_demo_sdl2.exe, renamed (the build keeps its own copy)
    *.dll                    every non-Windows DLL the program needs, found by walking the PE imports with objdump
                             through the MSYS2 mingw32 bin folder; the script fails if any import stays unresolved
-   work\                    the runtime inputs of the build (guest image, title start state, install SHA-256 manifest)
+   work\                    only the install SHA-256 manifest; gwrecomp.exe makes the guest image (from the player's
+                            GW.EXE) and the DOS low-memory image on its first start
    gwrecomp.ini             default settings (zoomout, auto, 120 fps, launcher on); gwrecomp.ini.example; README_INSTALL.txt
    licenses\                SDL2's license and the project's third-party notices
    package_manifest.txt     build id, commit, SHA-256 of every file
  Double-click gwrecomp.exe: the launcher opens (with the folder picker for the player's Gene Wars 1.1 folder).
  -Test starts dist\<Name>\gwrecomp.exe with no arguments and a PATH that holds only Windows folders, checks that the
  launcher window opens and stays up for a few seconds, and closes it.
- The folder is for local testing: work\ holds bytes derived from the player's own copy of the game, so the folder
- must not be published as it is.
+ The folder holds no game data files and no image of the game executable; gwrecomp.exe itself is the recompiled
+ (translated) game program. After a run, work\ also holds files made from the player's copy: package from a fresh
+ folder (this script always recreates it), never from one that has been played.
 #>
 param([string]$Build, [ValidatePattern('^[A-Za-z0-9._-]+$')][string]$Name = 'GWRecomp-v1.0-win32', [switch]$Test)
 $ErrorActionPreference = 'Stop'
@@ -88,13 +90,18 @@ foreach ($pe in Get-ChildItem -LiteralPath $out -File | ? { $_.Extension -in '.e
 }
 
 # ---- runtime inputs of the build (read by the program at start) ----
-# (the program also writes some work\*.bin evidence files of its own while it runs; those are not inputs)
-$inputs = 'ifctitle_creature_probe_guest.bin', 'genewars_1_1_install_manifest_creature_probe.tsv', 'ifctitle_startup_lowmem.bin'
+# Only the install SHA-256 manifest (hashes and file names, no game bytes). gwrecomp.exe makes the two other inputs
+# on its first start: work\ifctitle_creature_probe_guest.bin from the player's own GW.EXE and
+# work\ifctitle_startup_lowmem.bin (DOS structures only). The program also writes work\*.bin evidence files of its own
+# while it runs; none of them is shipped.
+$inputs = @('genewars_1_1_install_manifest_creature_probe.tsv')
 foreach ($f in $inputs) {
     $src = Join-Path $br "work\$f"
     if (-not (Test-Path -LiteralPath $src)) { Fail "missing build input $src" }
     Copy-Item -LiteralPath $src -Destination (Join-Path $out "work\$f")
 }
+$extra = @(Get-ChildItem -LiteralPath (Join-Path $out 'work') -Recurse -File | ? { $_.Name -notin $inputs })
+if ($extra) { Fail "unexpected files in work\: $($extra.Name -join ', ')" }
 
 # ---- 3. settings, documentation, licenses ----
 Copy-Item -LiteralPath (Join-Path $repo 'gwrecomp.ini.example') -Destination $out
@@ -153,9 +160,14 @@ DÓNDE QUEDA CADA COSA
   play.stdout.log, play.stderr.log, gw_flags.log   registros de la última sesión
   gwrecomp.ini                 configuración (gwrecomp.ini.example explica cada clave)
 
+PRIMER ARRANQUE
+  La primera vez que entras en el juego, gwrecomp.exe prepara en work\ dos archivos que necesita: los genera a partir
+  de TU GW.EXE (el de la carpeta GENEWARS, comprobado por SHA-256) y de estructuras de DOS propias. Tarda un momento y
+  solo ocurre una vez. Esos archivos salen de tu copia del juego: no los compartas.
+
 AVISO
-  La carpeta work\ contiene datos generados a partir de una copia del juego durante la compilación; esta carpeta es
-  para uso personal y no debe redistribuirse tal cual.
+  gwrecomp.exe es una traducción a código nativo del programa original de Gene Wars; no contiene los archivos de datos
+  del juego (gráficos, sonidos, vídeos, niveles), que se leen siempre de tu propia carpeta GENEWARS.
   Licencias de terceros en licenses\ (SDL2: zlib).
 '@
 [IO.File]::WriteAllText((Join-Path $out 'README_INSTALL.txt'), ($readme -replace "`r?`n", "`r`n"), (New-Object Text.UTF8Encoding $true))

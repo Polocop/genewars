@@ -52,6 +52,7 @@ static int g_interactive_demo_mode;
 static int g_cli_skip_intro;
 static int g_cli_load_save;
 static int g_cli_order_log;   /* --order-log: the GW_ORDER_TRACE lines go to the flags log as "TRACE order ..." */
+static int g_ifclevel_player_closed;   /* play mode: the player closed the window on the mission (IFCLevel) screen */
 static unsigned g_cli_level;  /* --level N (2..24): on the new-game IFCLevel screen, type the original SALMONAXE
                                  code (0x64CB0) and press S N-1 times (IFCLevel::Update 0x17A3C -> LoadHeader) */
 static char g_cli_load_save_path[1024];
@@ -18907,6 +18908,142 @@ static int launcher_run(const char *data_dir,const char *root) {
         g_cli_fullscreen,g_ini_fps,g_filter_mode,(long)g_turbo_level,10);
     return GL.result==1;
 }
+/* ---- First start of a release folder: the two runtime inputs that come from the game are made here ----------------
+   work\ifctitle_creature_probe_guest.bin: the player's own GW.EXE (Gene Wars 1.1, checked by SHA-256) mapped as a flat
+   LE image with its internal fixups applied, exactly what the build's src/le_loader.py load_le(GW.EXE,
+   object_rebases={1:0x1EB000,3:0x1DA000}) writes.
+   work\ifctitle_startup_lowmem.bin: the 64 KB DOS low memory of the build's boot fixture (runtime/guest_boot.py +
+   DosHost): MCB headers, the PSP with the command tail "-k 38928" and the DOS environment block. No game data. */
+#define GW_TARGET_SHA256 "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
+static uint32_t le_u32(const uint8_t *d,size_t o) { return (uint32_t)d[o]|(uint32_t)d[o+1]<<8|(uint32_t)d[o+2]<<16|(uint32_t)d[o+3]<<24; }
+static uint16_t le_u16(const uint8_t *d,size_t o) { return (uint16_t)(d[o]|d[o+1]<<8); }
+static int le_build_image(const uint8_t *d,size_t n,uint8_t **out,size_t *out_n,char *err,size_t errn) {
+    #define LE_FAIL(...) do { snprintf(err,errn,__VA_ARGS__); free(mem); free(page_lin); return 0; } while(0)
+    #define LE_NEED(o,k) do { if((size_t)(o)+(size_t)(k)>n) LE_FAIL("truncated at 0x%lx",(unsigned long)(o)); } while(0)
+    uint8_t *mem=NULL; uint32_t *page_lin=NULL;
+    static const uint32_t rebase[4]={0,0x1EB000u,0,0x1DA000u};   /* by 1-based object id */
+    LE_NEED(0,0x40); if(d[0]!='M'||d[1]!='Z') LE_FAIL("not an MZ executable");
+    const uint32_t h=le_u32(d,0x3C); LE_NEED(h,0x84);
+    if(d[h]!='L'||d[h+1]!='E') LE_FAIL("no LE header");
+    if(d[h+2]||d[h+3]) LE_FAIL("big-endian LE");
+    const uint32_t page_size=le_u32(d,h+0x28),num_pages=le_u32(d,h+0x14),last_page_bytes=le_u32(d,h+0x2C);
+    const uint32_t obj_tab=h+le_u32(d,h+0x40),obj_cnt=le_u32(d,h+0x44),page_map=h+le_u32(d,h+0x48);
+    const uint32_t fix_page=h+le_u32(d,h+0x68),fix_rec=h+le_u32(d,h+0x6C),data_pages=le_u32(d,h+0x80);
+    if(le_u32(d,h+0x74)) LE_FAIL("imported modules");
+    if(!page_size || page_size&(page_size-1) || obj_cnt<1 || obj_cnt>16 || !num_pages || num_pages>65536) LE_FAIL("unexpected LE layout");
+    struct { uint32_t vsize,base,flags,first,count,lin; } ob[16];
+    for(uint32_t i=0;i<obj_cnt;i++) {
+        const size_t o=obj_tab+i*24u; LE_NEED(o,24);
+        ob[i].vsize=le_u32(d,o); ob[i].base=le_u32(d,o+4); ob[i].flags=le_u32(d,o+8);
+        ob[i].first=le_u32(d,o+12); ob[i].count=le_u32(d,o+16);
+        ob[i].lin=ob[i].base+(i+1<4?rebase[i+1]:0u);
+    }
+    uint64_t mem_base=UINT64_MAX,top=0;
+    for(uint32_t i=0;i<obj_cnt;i++) {
+        if(ob[i].lin<mem_base) mem_base=ob[i].lin;
+        if((uint64_t)ob[i].lin+ob[i].vsize>top) top=(uint64_t)ob[i].lin+ob[i].vsize;
+        for(uint32_t j=0;j<obj_cnt;j++) if(i!=j && ob[i].lin<ob[j].lin && (uint64_t)ob[i].lin+ob[i].vsize>ob[j].lin) LE_FAIL("objects overlap");
+    }
+    const uint64_t size=((top+page_size-1)&~(uint64_t)(page_size-1))-mem_base;
+    if(size>0x08000000u) LE_FAIL("image too large");
+    mem=(uint8_t *)calloc((size_t)size,1); page_lin=(uint32_t *)calloc(num_pages+2u,sizeof *page_lin);
+    if(!mem||!page_lin) LE_FAIL("out of memory");
+    uint32_t gp=1;
+    for(uint32_t i=0;i<obj_cnt;i++) for(uint32_t l=0;l<ob[i].count;l++) {
+        const size_t e=page_map+(size_t)(ob[i].first-1u+l)*4u; LE_NEED(e,4);
+        const uint32_t phys=(uint32_t)d[e]<<16|(uint32_t)d[e+1]<<8|d[e+2];
+        if(d[e+3]) LE_FAIL("page flags 0x%x",d[e+3]);
+        const size_t fo=data_pages+(size_t)(phys-1u)*page_size; const uint32_t nb=phys==num_pages?last_page_bytes:page_size;
+        const uint64_t dst=ob[i].lin-mem_base+(uint64_t)l*page_size;
+        LE_NEED(fo,nb); if(dst+nb>size) LE_FAIL("page outside the image");
+        memcpy(mem+dst,d+fo,nb);
+        if(gp<=num_pages) page_lin[gp]=ob[i].lin+l*page_size;
+        gp++;
+    }
+    if(gp-1u!=num_pages) LE_FAIL("object pages %u != LE pages %u",gp-1u,num_pages);
+    for(uint32_t pg=1;pg<=num_pages;pg++) {
+        LE_NEED(fix_page+(size_t)pg*4u,4);
+        size_t o=fix_rec+le_u32(d,fix_page+(size_t)(pg-1u)*4u); const size_t end=fix_rec+le_u32(d,fix_page+(size_t)pg*4u);
+        if(end>n || o>end) LE_FAIL("fixup table out of range");
+        while(o<end) {
+            LE_NEED(o,2); const uint8_t st=d[o],tf=d[o+1]; o+=2; const uint8_t ty=st&0x0Fu;
+            int16_t so[256]; unsigned ns=0;
+            if(st&0x20u) { LE_NEED(o,1); ns=d[o++]; LE_NEED(o,ns*2u); for(unsigned k=0;k<ns;k++) { so[k]=(int16_t)le_u16(d,o); o+=2; } }
+            else { LE_NEED(o,2); so[0]=(int16_t)le_u16(d,o); o+=2; ns=1; }
+            if(tf&0x03u) LE_FAIL("non-internal fixup on page %u",pg);
+            uint32_t on; if(tf&0x40u) { LE_NEED(o,2); on=le_u16(d,o); o+=2; } else { LE_NEED(o,1); on=d[o++]; }
+            uint32_t toff=0;
+            if(ty==0x02) toff=0;
+            else if(ty==0x06) { LE_NEED(o,4); toff=le_u32(d,o); o+=4; }
+            else if(ty==0x03||ty==0x05) { LE_NEED(o,2); toff=le_u16(d,o); o+=2; }
+            else if(tf&0x10u) { LE_NEED(o,4); toff=le_u32(d,o); o+=4; }
+            else { LE_NEED(o,2); toff=le_u16(d,o); o+=2; }
+            if(on<1||on>obj_cnt) LE_FAIL("fixup target object %u",on);
+            const uint32_t tl=ob[on-1].lin+toff; const uint16_t sel=(ob[on-1].flags&4u)?0x000Cu:0x0014u;
+            for(unsigned k=0;k<ns;k++) {
+                const uint32_t sl=page_lin[pg]+(uint32_t)(int32_t)so[k]; const int64_t idx=(int64_t)sl-(int64_t)mem_base;
+                const unsigned w=ty==0x00?1u:(ty==0x05||ty==0x02)?2u:ty==0x06?6u:4u;
+                if(idx<0 || (uint64_t)idx+w>size) LE_FAIL("fixup outside the image");
+                uint8_t *p=mem+idx;
+                switch(ty) {
+                case 0x07: p[0]=(uint8_t)tl; p[1]=(uint8_t)(tl>>8); p[2]=(uint8_t)(tl>>16); p[3]=(uint8_t)(tl>>24); break;
+                case 0x05: p[0]=(uint8_t)tl; p[1]=(uint8_t)(tl>>8); break;
+                case 0x00: p[0]=(uint8_t)tl; break;
+                case 0x08: { const uint32_t r=tl-(sl+4u); p[0]=(uint8_t)r; p[1]=(uint8_t)(r>>8); p[2]=(uint8_t)(r>>16); p[3]=(uint8_t)(r>>24); } break;
+                case 0x02: p[0]=(uint8_t)sel; p[1]=(uint8_t)(sel>>8); break;
+                case 0x03: p[0]=(uint8_t)tl; p[1]=(uint8_t)(tl>>8); p[2]=(uint8_t)sel; p[3]=(uint8_t)(sel>>8); break;
+                case 0x06: p[0]=(uint8_t)tl; p[1]=(uint8_t)(tl>>8); p[2]=(uint8_t)(tl>>16); p[3]=(uint8_t)(tl>>24); p[4]=(uint8_t)sel; p[5]=(uint8_t)(sel>>8); break;
+                default: LE_FAIL("unsupported fixup source type 0x%x",ty);
+                }
+            }
+        }
+    }
+    free(page_lin); *out=mem; *out_n=(size_t)size; return 1;
+    #undef LE_NEED
+    #undef LE_FAIL
+}
+static int write_file_atomic(const char *path,const uint8_t *b,size_t n) {
+    char tmp[MAX_PATH+8]; snprintf(tmp,sizeof tmp,"%s.tmp",path);
+    FILE *f=fopen(tmp,"wb"); if(!f) return 0;
+    const int ok=fwrite(b,1,n,f)==n; if(fclose(f)!=0 || !ok) { DeleteFileA(tmp); return 0; }
+    if(!MoveFileExA(tmp,path,MOVEFILE_REPLACE_EXISTING)) { DeleteFileA(tmp); return 0; }
+    return 1;
+}
+static int file_exists_a(const char *p) { const DWORD a=GetFileAttributesA(p); return a!=INVALID_FILE_ATTRIBUTES && !(a&FILE_ATTRIBUTE_DIRECTORY); }
+/* returns 1 when both inputs exist (made now or before); on failure a message for the player in err */
+static int ensure_game_derived_inputs(const char *guest_path,const char *data_dir,char *err,size_t errn) {
+    static const char *const lowmem_path="work\\ifctitle_startup_lowmem.bin";
+    if(!file_exists_a(lowmem_path)) {
+        static const struct { uint16_t at; uint8_t n; const char *hex; } parts[]={
+            {0x7FF0,4,"4d0008ff"},{0x8000,4,"cd20ff08"},{0x802D,1,"11"},{0x8080,10,"082d6b2033383932380d"},{0x8FF0,4,"4d000806"},
+            {0x9000,85,"434f4d535045433d5a3a5c434f4d4d414e442e434f4d00424c41535445523d4132323020493720443120483520543600"
+                       "504154483d5a3a5c3b793a5c646f7300000100433a5c47454e45574152535c47572e455845"},{0x9060,5,"5a0000f996"}};
+        uint8_t *lm=(uint8_t *)calloc(0x10000u,1); if(!lm) { snprintf(err,errn,"out of memory"); return 0; }
+        for(unsigned i=0;i<sizeof parts/sizeof parts[0];i++) for(unsigned k=0;k<parts[i].n;k++) {
+            unsigned v=0; sscanf(parts[i].hex+2u*k,"%2x",&v); lm[parts[i].at+k]=(uint8_t)v; }
+        const int ok=write_file_atomic(lowmem_path,lm,0x10000u); free(lm);
+        if(!ok) { snprintf(err,errn,"no se pudo escribir %s (\xBFcarpeta de solo lectura?)",lowmem_path); return 0; }
+        gw_flag_trace("TRACE first_start made %s%c",lowmem_path,10);
+    }
+    if(file_exists_a(guest_path)) return 1;
+    if(!data_dir || !data_dir[0] || !strcmp(data_dir,"-")) { snprintf(err,errn,"falta la carpeta de Gene Wars"); return 0; }
+    char exe[700]; snprintf(exe,sizeof exe,"%s\\GW.EXE",data_dir);
+    vfs_manifest_record want; memset(&want,0,sizeof want); snprintf(want.sha256,sizeof want.sha256,"%s",GW_TARGET_SHA256);
+    if(!file_exists_a(exe)) { snprintf(err,errn,"no se encuentra GW.EXE en la carpeta de Gene Wars (%s)",data_dir); return 0; }
+    if(!verify_manifest_file(&want,exe)) { snprintf(err,errn,"GW.EXE no es el de Gene Wars 1.1 que usa esta versi\xF3n (SHA-256 distinto)"); return 0; }
+    FILE *f=fopen(exe,"rb"); if(!f) { snprintf(err,errn,"no se pudo leer GW.EXE"); return 0; }
+    fseek(f,0,SEEK_END); const long n=ftell(f); rewind(f);
+    uint8_t *d=n>0?(uint8_t *)malloc((size_t)n):NULL;
+    const int rd=d && fread(d,1,(size_t)n,f)==(size_t)n; fclose(f);
+    if(!rd) { free(d); snprintf(err,errn,"no se pudo leer GW.EXE"); return 0; }
+    uint8_t *img=NULL; size_t img_n=0; char why[160]="";
+    const int built=le_build_image(d,(size_t)n,&img,&img_n,why,sizeof why); free(d);
+    if(!built) { snprintf(err,errn,"GW.EXE: %s",why); return 0; }
+    const int ok=write_file_atomic(guest_path,img,img_n); free(img);
+    if(!ok) { snprintf(err,errn,"no se pudo escribir %s",guest_path); return 0; }
+    gw_flag_trace("TRACE first_start made %s from %s bytes=%lu%c",guest_path,exe,(unsigned long)img_n,10);
+    return 1;
+}
 /* Started with no arguments (double-click): the build root is the parent of the executable's bin folder. Fill in the
    arguments and the environment that scripts\play.ps1 would pass, and move the console output to log files. */
 static int standalone_setup(int *pargc,char ***pargv,char *root,size_t root_n) {
@@ -18915,12 +19052,13 @@ static int standalone_setup(int *pargc,char ***pargv,char *root,size_t root_n) {
     /* release folder (tools\package_release.ps1): <root>\gwrecomp.exe next to <root>\work; build: <root>\bin\gw_demo_sdl2.exe */
     snprintf(root,root_n,"%s",exe);
     { char *s=strrchr(root,92); if(!s) return 0; *s=0; }
-    snprintf(guest,sizeof guest,"%s\\work\\ifctitle_creature_probe_guest.bin",root);
-    if(GetFileAttributesA(guest)==INVALID_FILE_ATTRIBUTES) { char *s=strrchr(root,92); if(!s) return 0; *s=0; }
-    snprintf(guest,sizeof guest,"%s\\work\\ifctitle_creature_probe_guest.bin",root);
+    /* the install manifest is always shipped; the guest image may still have to be made (first start) */
     snprintf(tsv,sizeof tsv,"%s\\work\\genewars_1_1_install_manifest_creature_probe.tsv",root);
-    if(GetFileAttributesA(guest)==INVALID_FILE_ATTRIBUTES || GetFileAttributesA(tsv)==INVALID_FILE_ATTRIBUTES) {
-        MessageBoxA(NULL,"No se encuentran los datos de la compilaci\xF3n (work\\ifctitle_creature_probe_guest.bin).\n"
+    if(GetFileAttributesA(tsv)==INVALID_FILE_ATTRIBUTES) { char *s=strrchr(root,92); if(!s) return 0; *s=0; }
+    snprintf(tsv,sizeof tsv,"%s\\work\\genewars_1_1_install_manifest_creature_probe.tsv",root);
+    snprintf(guest,sizeof guest,"%s\\work\\ifctitle_creature_probe_guest.bin",root);
+    if(GetFileAttributesA(tsv)==INVALID_FILE_ATTRIBUTES) {
+        MessageBoxA(NULL,"No se encuentran los datos de GWRecomp (work\\genewars_1_1_install_manifest_creature_probe.tsv).\n"
             "Ejecuta el programa desde una carpeta de GWRecomp completa (con su carpeta work).","Gene Wars - GWRecomp",MB_ICONERROR);
         return 0;
     }
@@ -19004,6 +19142,15 @@ int main(int argc,char **argv) {
         fprintf(stderr,"no Gene Wars folder: set data_dir in gwrecomp.ini (or choose it in the launcher)\n");
         if(launcher_wanted==1) MessageBoxA(NULL,"Falta la carpeta de Gene Wars. Abre el lanzador y elige la carpeta GENEWARS.","Gene Wars - GWRecomp",MB_ICONERROR);
         return 2;
+    }
+    if(g_cli_play_mode) {   /* first start of a release folder: make the game-derived inputs from the player's GW.EXE */
+        char why[400]="";
+        if(!ensure_game_derived_inputs(argv[1],argv[2],why,sizeof why)) {
+            fprintf(stderr,"first start: %s\n",why); gw_flag_trace("TRACE first_start failed %s%c",why,10);
+            if(launcher_wanted) { char m[600]; snprintf(m,sizeof m,"No se pudo preparar el juego en el primer arranque:\n%s",why);
+                MessageBoxA(NULL,m,"Gene Wars - GWRecomp",MB_ICONERROR); }
+            return 2;
+        }
     }
     if(g_cli_play_mode && g_ini_cd_cue[0] && !getenv("GW_CD_AUDIO_CUE")) {
         char a[640]; snprintf(a,sizeof a,"GW_CD_AUDIO_CUE=%s",g_ini_cd_cue); (void)_putenv(a); }
@@ -21926,6 +22073,7 @@ int main(int argc,char **argv) {
             if(!continuation_ok || (!g_interactive_demo_mode && events!=(unsigned)(event_code!=0))) { continuation_ok=0; break; }
             if(ifclevel_manual && g_ifclevel_demo_closed) {
                 gw_flag_trace("TRACE ifclevel_manual window_closed frame=%u\n",tick);
+                g_ifclevel_player_closed=g_cli_play_mode;   /* the player quit on the mission screen: not a failure */
                 continuation_ok=0; break;
             }
             if(g_cli_play_mode && !gw_original_game_pre_update(memory)) {
@@ -24414,7 +24562,11 @@ int main(int argc,char **argv) {
             g_snapshot_save_succeeded && g_native_game_loop_host_stopped &&
             post_loader_ticks==g_native_game_loop_expected_turn-post_loader_start_turn;
         /* V26: the legacy predicate, decomposed term by term (same boolean value). */
-        const int v26_t_cont=!continuation_ok;
+        /* play mode: closing the window on the mission (planet) screen stops the continuation on purpose; only that
+           term is waived, every integrity term below still applies */
+        const int v26_player_closed=g_ifclevel_player_closed && !continuation_ok;
+        if(v26_player_closed) fprintf(stderr,"TRACE play_exit player_closed_window_on_mission_screen ticks=%u (continuation term waived)\n",completed);
+        const int v26_t_cont=!continuation_ok && !v26_player_closed;
         const int v26_t_nosnap=(!g_interactive_demo_mode && !snapshot_checkpoint_ok &&
            (!transition_attempted && !phase8_stalled && completed!=max_ticks));
         const int v26_t_comp0=(transition_attempted && completed==0u);
@@ -24456,7 +24608,8 @@ int main(int argc,char **argv) {
                 completed,continuation_ok,final_mcb_valid,output_ok,palette_ok,bmp_ok);
             free(memory); return 121;
         }
-        if(g_native_game_loop_mode_global)
+        if(v26_player_closed) printf("STOP player closed the window on the mission screen (play mode) ticks=%u\n",completed);
+        else if(g_native_game_loop_mode_global)
             printf("PASS native original game() loop turns=%u original_timer_incs=%d currentIFC=%08x pendingIFC=%08x guest_QuitGame_arms=%u host_bounded=%d original_draws=%u SDL/raw/palette evidence saved\n",
                 post_loader_ticks,g_native_game_loop_site_counts[5],final_current,final_pending,
                 g_native_game_loop_quit_set_count,g_native_game_loop_host_stopped,
