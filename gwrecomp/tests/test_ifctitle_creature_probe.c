@@ -18861,8 +18861,11 @@ static void gl_draw(void) {
     {   wchar_t w[620]; gl_wide(GL.data_dir[0]?GL.data_dir:"(no configurada)",w,620);
         /* a long path keeps its end (the GENEWARS folder) and loses its start */
         const wchar_t *p=w; static wchar_t cut[624];
-        while(gl_text_w(GL.f_body,p)>326 && wcslen(p)>8) { p++; swprintf(cut,624,L"…%ls",p); if(gl_text_w(GL.f_body,cut)<=326) { p=cut; break; } }
-        gl_text_fit(GL.f_small,12,362,320,GLC_GREY,L"CARPETA DE GENE WARS"); gl_text_fit(GL.f_body,12,377,326,GL.data_all?GLC_TEXT:GLC_REDHI,p); }
+        if(gl_text_w(GL.f_body,p)>316) {
+            while(wcslen(p)>8) { p++; swprintf(cut,624,L"…%ls",p); if(gl_text_w(GL.f_body,cut)<=316) break; }
+            p=cut;
+        }
+        gl_text_fit(GL.f_small,12,362,316,GLC_GREY,L"CARPETA DE GENE WARS"); gl_text_fit(GL.f_body,12,377,316,GL.data_all?GLC_TEXT:GLC_REDHI,p); }
     static const wchar_t *const sub[4]={L"DATA",L"LEVELS",L"SOUND",L"INTRO"};
     for(int i=0;i<4;i++) gl_text_fit(GL.f_small,346+i*44,366,42,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,sub[i]);
     for(int i=0;i<4;i++) gl_text_fit(GL.f_small,346+i*44,380,42,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,GL.data_ok[i]?L"OK":L"FALTA");
