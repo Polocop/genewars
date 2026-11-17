@@ -3387,12 +3387,13 @@ if partial:
     for site in (0x1D3C6, 0x1D3CB):
         ws_site_rules.append((site, "0x13u", "(GW_WS_STRIPS - 1u)"))
     ws_site_rules.append((0x1D3B1, "DS_BASE + (ecx + 0x376BF7)", "GW_WS_GRID_EA(ecx - esi, esi - 1u)"))
-    # While a building is being placed ([0x2F1441] == 3) the translucent placement ghost covers far more than the
+    # While a building is being placed ([0x2F1441] != 0: 3 and 4 seen for different buildings, 0 with no placement)
+    # the translucent placement ghost covers far more than the
     # 64 x 64 pointer box marked above, and on the wider canvas cells it left were not always restored (ghost
     # remnants). In that mode mark every map cell (columns 4.., x >= 128) with the pointer level so the whole map is
     # restored from the ring and redrawn each frame; the cells age out as usual once the mode ends.
     ws_site_rules.append((0x1D3D6, "esp = esp + 8;",
-                          "if (MEM8(DS_BASE + (0x2F1441)) == 3u) { "
+                          "if (MEM8(DS_BASE + (0x2F1441)) != 0u) { "
                           "for (uint32_t _r = 0u; _r < GW_WS_GRID_ROWS; _r++) for (uint32_t _c = 4u; _c < GW_WS_STRIPS && _c < 36u; _c++) "
                           "{ const uint32_t _ea = GW_WS_GRID_EA(_r * 20u, _c); if (MEM8(_ea) < 3u) MEM8(_ea) = 3u; } } "
                           "esp = esp + 8;"))
