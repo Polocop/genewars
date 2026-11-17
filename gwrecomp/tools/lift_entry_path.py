@@ -3387,6 +3387,22 @@ if partial:
     for site in (0x1D3C6, 0x1D3CB):
         ws_site_rules.append((site, "0x13u", "(GW_WS_STRIPS - 1u)"))
     ws_site_rules.append((0x1D3B1, "DS_BASE + (ecx + 0x376BF7)", "GW_WS_GRID_EA(ecx - esi, esi - 1u)"))
+    # While a building is being placed ([0x2F1441] == 3) the translucent placement ghost covers far more than the
+    # 64 x 64 pointer box marked above, and on the wider canvas cells it left were not always restored (ghost
+    # remnants). In that mode mark every map cell (columns 4.., x >= 128) with the pointer level so the whole map is
+    # restored from the ring and redrawn each frame; the cells age out as usual once the mode ends.
+    ws_site_rules.append((0x1D3D6, "esp = esp + 8;",
+                          "if (MEM8(DS_BASE + (0x2F1441)) == 3u) { "
+                          "for (uint32_t _r = 0u; _r < GW_WS_GRID_ROWS; _r++) for (uint32_t _c = 4u; _c < GW_WS_STRIPS && _c < 36u; _c++) "
+                          "{ const uint32_t _ea = GW_WS_GRID_EA(_r * 20u, _c); if (MEM8(_ea) < 3u) MEM8(_ea) = 3u; } } "
+                          "esp = esp + 8;"))
+    # 0x6B1D0 (pointer-mode animation step) reads frame = [[[0x2F1450]] + 14 * frame]. Entering the options menu
+    # while a placement pointer is up leaves [0x2F1450] on an animation whose frame table is already 0, so the
+    # original reads the real-mode IVT at 0x0000000E (harmless under DOS/4GW, a memory fault here) and hands the
+    # garbage to 0x65440; the menu sets its own pointer right after. With no frame table, skip the pointer change.
+    ws_site_rules.append((0x6B227, "eax = MEM32(DS_BASE + (edx + eax));",
+                          "if (eax == 0u) { recomp_end_memory_access(); goto L_0006B23F; } "
+                          "eax = MEM32(DS_BASE + (edx + eax));"))
     # 0x7C700 clears the map cells of the grid after the ring -> WScreen copy (rows 0..14, columns 4..19, or a
     # memset of the 300 bytes); the cells beyond (columns 20.., rows 15..) live in g_gw_ws_grid_ext: clear them too
     ws_site_rules.append((0x7C75E, "eax = edi;",
