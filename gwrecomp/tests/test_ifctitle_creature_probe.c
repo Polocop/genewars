@@ -15471,7 +15471,9 @@ static void ws_band_copy_impl(void) {
         const uint32_t cols=(width+31u)>>5,rows=height>>5;
         for(uint32_t r=0;r<rows && r<20u;r++) for(uint32_t c=(r<15u?20u:4u);c<cols && c<36u;c++) {
             uint8_t *cell=g+r*36u+c;
-            if(*cell) for(uint32_t y=r*32u;y<r*32u+32u;y++) {
+            /* every extension cell is restored every frame, whatever its level: the 0x7C700 path zeroes the levels
+               before this copy, and a cell skipped then kept whatever was drawn on it (placement-ghost remnants) */
+            for(uint32_t y=r*32u;y<r*32u+32u;y++) {
                 int ry=((int)y+ring_y)%(int)height; if(ry<0) ry+=(int)height;
                 const uint8_t *src=m+ring+(uint32_t)ry*width;
                 uint8_t *dst=m+ws+y*width;
