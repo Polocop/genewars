@@ -10275,8 +10275,18 @@ static int gw_smk_open_window(void) {
     { const char *prev=SDL_GetHint("SDL_QUIT_ON_LAST_WINDOW_CLOSE");
       snprintf(g_smk_prev_quit_hint,sizeof g_smk_prev_quit_hint,"%s",prev?prev:"1"); }
     SDL_SetHint("SDL_QUIT_ON_LAST_WINDOW_CLOSE","0");
-    g_smk_window=SDL_CreateWindow("GeneWars Native Recompilation - Smacker video",
-        SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,1200,900,SDL_WINDOW_SHOWN|SDL_WINDOW_RESIZABLE);
+    /* play mode: the start-up clips (logo, intro) come before the game window exists; their window takes the game
+       window's geometry (gwrecomp.ini / --res / --fullscreen), so a clip fills the same screen as the game and
+       gw_smk_draw_packed scales each frame to it with its aspect kept */
+    int smk_w=1200,smk_h=900; Uint32 smk_flags=SDL_WINDOW_SHOWN|SDL_WINDOW_RESIZABLE;
+    if(g_cli_play_mode) {
+        SDL_Rect desk={0,0,0,0}; (void)SDL_GetDisplayBounds(0,&desk);
+        if(g_cli_res_w) { smk_w=g_cli_res_w; smk_h=g_cli_res_h; } else play_window_default_size(1200,900,&smk_w,&smk_h);
+        if(g_cli_fullscreen || (g_cli_res_w && desk.w>0 && (g_cli_res_w>=desk.w || g_cli_res_h>=desk.h))) smk_flags|=SDL_WINDOW_FULLSCREEN_DESKTOP;
+        smk_flags|=SDL_WINDOW_ALLOW_HIGHDPI;
+    }
+    g_smk_window=SDL_CreateWindow("Gene Wars",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,smk_w,smk_h,smk_flags);
+    gw_smk_trace("TRACE smacker_video window=%dx%d fullscreen=%d%c",smk_w,smk_h,(smk_flags&SDL_WINDOW_FULLSCREEN_DESKTOP)!=0,10);
     const char *drv=SDL_GetCurrentVideoDriver();
     const int headless=drv && strcmp(drv,"dummy")==0;
     g_smk_renderer=g_smk_window?SDL_CreateRenderer(g_smk_window,-1,
@@ -17103,6 +17113,7 @@ static void title_autoclick_new_game(uint8_t *memory,uint64_t dt) {
     if(dt==8u) gw_flag_trace("TRACE load_save title_click UN_JUGADOR logical=%d,%d\n",x,y);
 }
 
+static int gw_sound_between_ticks(gw_recomp_context *c,uint8_t *mem);
 static int run_interactive_title_menu(uint8_t *memory,uint32_t wscreen_guest) {
     if(!memory || !in_guest(0x14u,wscreen_guest,640u*480u,NULL)) return 0;
     if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS|SDL_INIT_TIMER)!=0) {
@@ -17150,6 +17161,9 @@ static int run_interactive_title_menu(uint8_t *memory,uint32_t wscreen_guest) {
             fprintf(stderr,"interactive title original Update/Draw failed frame=%llu update=%08x draw=%08x\n",
                 (unsigned long long)frames,update_ctx.eip,draw_ctx.eip); return 0;
         }
+        /* the title's sounds (buttons) too: the Miles mixer and the fade timer between frames */
+        if(g_cli_play_mode && !gw_sound_between_ticks(&timer_ctx,memory))
+            fprintf(stderr,"TRACE interactive title: Miles mixer service failed frame=%llu\n",(unsigned long long)frames);
         pending=*(uint32_t *)(memory+0x002EF7ECu);
         if(memory[0x002F1464u]&1u) return 2;
         if(pending==0x00360A11u) {
@@ -17521,6 +17535,47 @@ static int gw_vsb16_run_mixer_service(void *user) {
     return ok;
 }
 
+/* The game's sound-fade service 0xA12C0 is a Miles timer callback: when a sample has to fade (in, or out and then
+   stop: the way the game ends its looping effects such as EARTHMOV.WAV or SPACESHP.WAV), it registers it with
+   AIL_register_timer (0xB0D00), sets 20 Hz (AIL_set_timer_frequency 0xB0FC0) and starts it, with [0x376E1A] = 1;
+   the callback releases its own timer when every fade is done ([0x376E1A] = 0). Miles timers run on IRQ0, which
+   is not emulated, so the callback never ran: fade-outs never finished and those loops never ended. The host
+   runs the original callback at 20 Hz of wall time between ticks while the game has it registered, on a private
+   stack like the mixer service. */
+void recomp_gw_partial_0x000A12C0(void);
+static int gw_fade_timer_pump(gw_recomp_context *c,uint8_t *mem) {
+    static uint64_t last; static unsigned runs,fails; static int was_on;
+    const uint64_t now=SDL_GetPerformanceCounter(),f=SDL_GetPerformanceFrequency();
+    const int on=mem[0x00376E1Au]!=0;
+    if(on!=was_on) { gw_vsb16_log(on?"TRACE fade_timer registered (game fade service 0xA12C0 at 20 Hz)\n":"TRACE fade_timer released by the game\n"); was_on=on; last=now; }
+    if(!on || fails>=3u) return 1;
+    unsigned due=(unsigned)((now-last)*20u/f);
+    if(!due) return 1;
+    if(due>4u) { due=4u; last=now; } else last+=(uint64_t)due*f/20u;
+    for(unsigned i=0;i<due && mem[0x00376E1Au];i++) {
+        const uint32_t esp=(c->esp-0x6000u)&~0xFu;
+        if(esp<0x2000u || esp+16u>GUEST_LIMIT) { fails++; return 0; }
+        gw_recomp_context sc=*c;
+        *(uint32_t *)(mem+esp)=RECOMP_RETADDR; *(uint32_t *)(mem+esp+4u)=*(const uint32_t *)(mem+0x00376E14u);
+        sc.esp=esp; sc.eip=0x000A12C0u; sc.cur_func=0x000A12C0u;
+        const gw_recomp_status st=gw_recomp_invoke(recomp_gw_partial_0x000A12C0,&sc);
+        if(st!=GW_RECOMP_OK || sc.memory_fault.pending || sc.segment_fault_pending || sc.interrupt_trap_pending || sc.port_io_trap.pending) {
+            char m[200]; snprintf(m,sizeof m,"TRACE fade_timer callback failed status=%u eip=%08x mem=%u:%08x\n",st,sc.eip,
+                sc.memory_fault.pending,sc.memory_fault.linear); gw_vsb16_log(m); fails++; return 0;
+        }
+        runs++;
+    }
+    return 1;
+}
+/* everything the sound needs between two guest ticks, in every loop (title, planet screen, game) */
+static int gw_sound_between_ticks(gw_recomp_context *c,uint8_t *mem) {
+    if(!gw_vsb16_enabled() || !c || !mem) return 1;
+    gw_vsb16_service_ctx vsx={c,mem,0};
+    gw_vsb16_pump(mem,GUEST_LIMIT,gw_vsb16_run_mixer_service,&vsx);
+    if(vsx.failed) return 0;
+    (void)gw_fade_timer_pump(c,mem);
+    return 1;
+}
 /* ---- Live true widescreen (GW_WIDESCREEN=1 / --widescreen) ---------------------------------------------------
    Runs on the simulation thread between ticks, with the guest parked. While the game IFC (0x35FE9A) is current,
    lbDisplay points at a 864x480 WScreen and the map ring buffer is 864x480 too (both from the game's allocator
@@ -17889,9 +17944,7 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
         const uint64_t tick1=SDL_GetPerformanceCounter();
         InterlockedExchange(&g_v14_in_tick,0);
         if(gw_vsb16_enabled()) {   /* V20: feed the virtual SB16 (runs the original mixer service while the guest is parked) */
-            gw_vsb16_service_ctx vsx={c,memory,0};
-            gw_vsb16_pump(memory,GUEST_LIMIT,gw_vsb16_run_mixer_service,&vsx);
-            if(vsx.failed) {
+            if(!gw_sound_between_ticks(c,memory)) {
                 write_interactive_crash_record("vsb16_mixer_service",c,0u,
                     "original guest Miles mixer callback failed; stopped without changing its re-entrancy guard");
                 SDL_AtomicSet(&g_interactive_worker_status,-1); break;
@@ -22468,9 +22521,7 @@ int main(int argc,char **argv) {
             if(ifclevel_manual && gw_vsb16_enabled()) {
                 /* the Miles mixer service between ticks, as in the game loop worker: before IFCMain (title, planet
                    screen) nothing else runs it, so the samples the game starts there were never mixed */
-                gw_vsb16_service_ctx vsx={&timer_context,memory,0};
-                gw_vsb16_pump(memory,GUEST_LIMIT,gw_vsb16_run_mixer_service,&vsx);
-                if(vsx.failed) { fprintf(interaction,"tick=%u stage=vsb16-mixer-service failed\n",tick); continuation_ok=0; break; }
+                if(!gw_sound_between_ticks(&timer_context,memory)) { fprintf(interaction,"tick=%u stage=vsb16-mixer-service failed\n",tick); continuation_ok=0; break; }
             }
             int mcb_valid=validate_dos_mcb_chain(memory,vfs.dos.dos_segment_end);
             uint32_t current=*(uint32_t *)(memory+0x002EF7E8u),pending=*(uint32_t *)(memory+0x002EF7ECu);
