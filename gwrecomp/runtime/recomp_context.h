@@ -72,6 +72,13 @@ typedef enum gw_recomp_status { GW_RECOMP_OK=0, GW_RECOMP_BUSY=1, GW_RECOMP_INVA
  * wrapper call returns BUSY before touching globals. Normal-return only: faults
  * must be handled by the host's fault boundary. eip stays dispatch-owned. */
 gw_recomp_status gw_recomp_invoke(recomp_func_t function, gw_recomp_context *context);
+/* Interrupt-style call from a host hook while a lifted invocation is running (same thread): the live CPU state
+ * is saved, `function` runs on `context` (its own stack), then the interrupted state, active context, PIT and
+ * pending tail calls are restored and any fault the callee left is cleared (it stays recorded in `context`).
+ * Without an active invocation it is gw_recomp_invoke. */
+gw_recomp_status gw_recomp_invoke_nested(recomp_func_t function, gw_recomp_context *context);
+/* Copy of the running invocation's context with the live register file (0 when none is running). */
+int gw_recomp_snapshot_active(gw_recomp_context *out);
 /* Capture the active lifted CPU state and release the non-reentrant context
  * lock when a host-owned setjmp/longjmp intentionally yields mid-invocation. */
 void gw_recomp_yield_active_context(void);

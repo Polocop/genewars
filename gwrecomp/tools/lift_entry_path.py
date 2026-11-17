@@ -3378,6 +3378,20 @@ if partial:
     ws_site_rules.append((0x7C552, "0x12Cu", "(GW_WS_GRID_ROWS * 20u)"))
     for site, reg in ((0x78702, "edx"), (0x787FA, "edx"), (0x83929, "ecx")):
         ws_site_rules.append((site, f"DS_BASE + ({reg} + 0x376BF7)", f"GW_WS_GRID_LIN({reg} - 1u)"))
+    # 0x1D330 marks the cells under the pointer and whatever is attached to it (a building being placed) with
+    # level 3: rows clamped to 0..14, columns to 0..19, written at 0x376BF7 + row*20 + col + 1 (ecx = row*20 + esi
+    # after both increments). On a wider surface the clamps follow the grid and the cell goes through
+    # GW_WS_GRID_EA, which is the original address for col < 20 and row < 15 (unchanged at 640).
+    for site in (0x1D393, 0x1D398):
+        ws_site_rules.append((site, "0xEu", "(GW_WS_GRID_ROWS - 1u)"))
+    for site in (0x1D3C6, 0x1D3CB):
+        ws_site_rules.append((site, "0x13u", "(GW_WS_STRIPS - 1u)"))
+    ws_site_rules.append((0x1D3B1, "DS_BASE + (ecx + 0x376BF7)", "GW_WS_GRID_EA(ecx - esi, esi - 1u)"))
+    # 0x7C700 clears the map cells of the grid after the ring -> WScreen copy (rows 0..14, columns 4..19, or a
+    # memset of the 300 bytes); the cells beyond (columns 20.., rows 15..) live in g_gw_ws_grid_ext: clear them too
+    ws_site_rules.append((0x7C75E, "eax = edi;",
+        "if (g_gw_ws_grid_ext) { for (uint32_t _r = 0u; _r < GW_WS_GRID_ROWS; _r++) for (uint32_t _c = 0u; _c < 36u; _c++) "
+        "if (_c >= 20u || _r >= 15u) MEM8(g_gw_ws_grid_ext + _r * 36u + _c) = 0u; } eax = edi;"))
     for site in (0x78C7D, 0x78CC6, 0x78D17, 0x78D4B, 0x78D7D):
         ws_site_rules.append((site, "DS_BASE + (eax + 0xA3B)", "GW_WS_BUCKET_EA(eax)"))
     ws_site_rules.append((0x79199, "eax = (ebp + 0xA3B);", "eax = GW_WS_BUCKETS(ebp);"))

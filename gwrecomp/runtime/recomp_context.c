@@ -704,6 +704,38 @@ gw_recomp_status gw_recomp_invoke(recomp_func_t function, gw_recomp_context *con
     return GW_RECOMP_OK;
 }
 
+gw_recomp_status gw_recomp_invoke_nested(recomp_func_t function, gw_recomp_context *context) {
+    if (!function || !context) return GW_RECOMP_INVALID;
+    gw_recomp_context *outer = active_context;
+    if (!outer) return gw_recomp_invoke(function, context);
+    gw_recomp_context saved = *outer;
+    capture_context(&saved);                       /* the interrupted code's live register file */
+    gw_pit8254 *outer_pit = active_pit;
+    const uint32_t outer_tail_va = pending_tail_call_va;
+    const int outer_tail_valid = pending_tail_call_valid;
+    active_context = context;                      /* the PIT stays the interrupted one: one guest clock */
+    pending_tail_call_va = 0u; pending_tail_call_valid = 0;
+    apply_context(context);
+    function();
+    (void)gw_recomp_dispatch_pending_tail_calls();
+    capture_context(context);                      /* faults of the callee are reported here ... */
+    gw_interrupt_clear_trap();                     /* ... and never leak into the interrupted code */
+    recomp_clear_segment_fault();
+    recomp_clear_memory_fault();
+    apply_context(&saved);
+    active_context = outer; active_pit = outer_pit;
+    pending_tail_call_va = outer_tail_va; pending_tail_call_valid = outer_tail_valid;
+    gw_recomp_clear_port_io_trap();                /* refreshes g_gw_instr_fast for the restored context */
+    return GW_RECOMP_OK;
+}
+
+int gw_recomp_snapshot_active(gw_recomp_context *out) {
+    if (!out || !active_context) return 0;
+    *out = *active_context;
+    capture_context(out);
+    return 1;
+}
+
 void gw_recomp_yield_active_context(void) {
     if (!active_context) return;
     capture_context(active_context);

@@ -3027,6 +3027,8 @@ static const char *gw_cached_getenv(const char *name) {
     if(used<16u) { cache[used].name=name; cache[used].value=value; used++; }
     return value;
 }
+static int g_bootstrap_sound;            /* set while the play-mode start-up game() loop runs on the main thread */
+static void gw_bootstrap_sound_tick(void);
 void gw_test_instruction_budget_step(uint32_t guest_va) {
     startup_budget_last_va=guest_va; startup_budget_last_func=g_cur_func;
     if(g_v31_auto_win && guest_va==0x00072460u) g_v31_win_upd++;
@@ -4787,6 +4789,10 @@ void gw_test_instruction_budget_step(uint32_t guest_va) {
            0x928AF. Arm the exit only once that LE instruction has brought the
            game turn to 320; the guest loop then performs its normal cleanup. */
         if(guest_va==0x000928B5u && g_v26_mode && guest_memory) gw_v26_boundary();
+        /* play mode, start-up stretch (planet system, zoom into the planet, team choice, landing): the original
+           game() loop runs here on the main thread before the simulation worker exists, so nothing mixed the
+           sound; each loop iteration now runs the Miles mixer and the fade timer, like an interrupt would */
+        if(guest_va==0x000928B5u && g_bootstrap_sound && guest_memory) gw_bootstrap_sound_tick();
         if(guest_va==0x000928B5u && g_native_game_loop_host_stop_enabled &&
            g_native_loop_stop_armed &&
            /* The original code can advance/reset Turn inside its own tick
@@ -9063,6 +9069,7 @@ static double interactive_duration_limit(void) {
     return end && *end=='\0' && parsed>0.0 && parsed<3600.0?parsed:0.0;
 }
 
+SDL_Window *gw_smk_adopt_window(void);   /* defined with the Smacker window code */
 static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *palette,
                                        const char *capture_path,int upload_texture,
                                        const gw_interactive_visual_snapshot *visual) {
@@ -9109,7 +9116,11 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             fprintf(stderr,"TRACE play_window request=%dx%d fullscreen=%d desktop=%dx%d dpi_scale=%.2f\n",
                 initial_w,initial_h,g_cli_fullscreen,desk.w,desk.h,play_window_dpi_scale());
         }
-        g_ifclevel_demo_window=SDL_CreateWindow(g_terrain_modern_backend?
+        /* play mode: the start-up clips' window (same geometry) becomes the game window, so nothing closes and
+           reopens between the intro and the title */
+        g_ifclevel_demo_window=gw_smk_adopt_window();
+        if(g_ifclevel_demo_window) SDL_SetWindowTitle(g_ifclevel_demo_window,"Gene Wars");
+        else g_ifclevel_demo_window=SDL_CreateWindow(g_terrain_modern_backend?
             "GeneWars - Experimental Live Terrain (map clicks disabled)":
             "GeneWars Native Recompilation - Interactive Demo",
             SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,initial_w,initial_h,window_flags);
@@ -10300,6 +10311,27 @@ static int gw_smk_open_window(void) {
     return 1;
 }
 
+/* play mode: a start-up clip that ends keeps its window (blanked) for the next clip and for the game, which
+   adopts it (gw_smk_adopt_window): the player sees one window from the first clip to the title, as in the
+   original, instead of a window closing and another opening between clips */
+static void gw_smk_end_clip_window(void) {
+    if(g_cli_play_mode && g_smk_owns_window && g_smk_window && g_smk_renderer) {
+        SDL_PumpEvents(); SDL_FlushEvents(SDL_WINDOWEVENT,SDL_SYSWMEVENT);   /* the last frame stays on screen */
+        return;
+    }
+    gw_smk_close_window();
+}
+SDL_Window *gw_smk_adopt_window(void) {
+    if(!g_cli_play_mode || !g_smk_owns_window || !g_smk_window) return NULL;
+    SDL_Window *w=g_smk_window;
+    if(g_smk_texture) { SDL_DestroyTexture(g_smk_texture); g_smk_texture=NULL; }
+    g_smk_tex_w=g_smk_tex_h=0;
+    if(g_smk_renderer) SDL_DestroyRenderer(g_smk_renderer);
+    g_smk_renderer=NULL; g_smk_window=NULL; g_smk_owns_window=0;
+    SDL_SetHint("SDL_QUIT_ON_LAST_WINDOW_CLOSE",g_smk_prev_quit_hint[0]?g_smk_prev_quit_hint:"1");
+    gw_smk_trace("TRACE smacker_video window adopted by the game%c",10);
+    return w;
+}
 static void gw_smk_close_window(void) {
     if(g_smk_texture) { SDL_DestroyTexture(g_smk_texture); g_smk_texture=NULL; }
     g_smk_tex_w=g_smk_tex_h=0;
@@ -10929,7 +10961,7 @@ void gw_smk_video_hook(uint32_t guest_va,uint32_t g_ebp) {
             smka_stop("end");
             g_smk_active=0; gw_recomp_pit_host_hold(0); timeEndPeriod(1u);
             g_fadeclip_valid=(g_fadeclip_idx!=NULL && g_fadeclip_w && g_fadeclip_h);
-            gw_smk_close_window();
+            gw_smk_end_clip_window();
             /* The key that ended the clip is consumed by it: clear the held flags and the key events still queued,
                so the same ESC does not open the Options menu on the screen that follows the clip. */
             guest_memory[0x00376AF1u]=0u; guest_memory[0x00376B0Cu]=0u; guest_memory[0x00376B29u]=0u;
@@ -17519,7 +17551,7 @@ static int gw_vsb16_run_mixer_service(void *user) {
     gw_recomp_context sc=*x->c;
     *(uint32_t *)(x->mem+esp)=RECOMP_RETADDR; *(uint32_t *)(x->mem+esp+4u)=dig;
     sc.esp=esp; sc.eip=0x000CA560u; sc.cur_func=0x000CA560u;
-    const gw_recomp_status status=gw_recomp_invoke(recomp_gw_partial_0x000CA560,&sc);
+    const gw_recomp_status status=gw_recomp_invoke_nested(recomp_gw_partial_0x000CA560,&sc);
     const int ok=status==GW_RECOMP_OK && !sc.memory_fault.pending && !sc.segment_fault_pending &&
                  !sc.interrupt_trap_pending && !sc.port_io_trap.pending;
     if(!ok) {
@@ -17558,7 +17590,7 @@ static int gw_fade_timer_pump(gw_recomp_context *c,uint8_t *mem) {
         gw_recomp_context sc=*c;
         *(uint32_t *)(mem+esp)=RECOMP_RETADDR; *(uint32_t *)(mem+esp+4u)=*(const uint32_t *)(mem+0x00376E14u);
         sc.esp=esp; sc.eip=0x000A12C0u; sc.cur_func=0x000A12C0u;
-        const gw_recomp_status st=gw_recomp_invoke(recomp_gw_partial_0x000A12C0,&sc);
+        const gw_recomp_status st=gw_recomp_invoke_nested(recomp_gw_partial_0x000A12C0,&sc);
         if(st!=GW_RECOMP_OK || sc.memory_fault.pending || sc.segment_fault_pending || sc.interrupt_trap_pending || sc.port_io_trap.pending) {
             char m[200]; snprintf(m,sizeof m,"TRACE fade_timer callback failed status=%u eip=%08x mem=%u:%08x\n",st,sc.eip,
                 sc.memory_fault.pending,sc.memory_fault.linear); gw_vsb16_log(m); fails++; return 0;
@@ -17566,6 +17598,15 @@ static int gw_fade_timer_pump(gw_recomp_context *c,uint8_t *mem) {
         runs++;
     }
     return 1;
+}
+static int gw_sound_between_ticks(gw_recomp_context *c,uint8_t *mem);
+static void gw_bootstrap_sound_tick(void) {
+    static unsigned calls,fails;
+    gw_recomp_context live;
+    if(fails>=3u || !guest_memory || !gw_recomp_snapshot_active(&live)) return;
+    if(!calls++) gw_vsb16_log("TRACE bootstrap_sound first mix inside the start-up game() loop\n");
+    if(!gw_sound_between_ticks(&live,guest_memory) && ++fails>=3u)
+        gw_vsb16_log("TRACE bootstrap_sound disabled after 3 mixer failures\n");
 }
 /* everything the sound needs between two guest ticks, in every loop (title, planet screen, game) */
 static int gw_sound_between_ticks(gw_recomp_context *c,uint8_t *mem) {
@@ -23505,6 +23546,7 @@ int main(int argc,char **argv) {
                         }
                     }
                     gw_live_wscreen_capture_begin(memory);
+                    g_bootstrap_sound=g_cli_play_mode && g_interactive_demo_mode && gw_vsb16_enabled();
                     native_loop_ok=gw_recomp_invoke(gw_partial_0x00092860,
                         &native_loop_context)==GW_RECOMP_OK &&
                         !native_loop_context.memory_fault.pending &&
@@ -23516,6 +23558,7 @@ int main(int argc,char **argv) {
                         g_native_loop_stop_eip==0x000928B5u;
                     native_loop_context.eip=g_native_loop_stop_eip;
                 }
+                g_bootstrap_sound=0;   /* the worker mixes from here on, between its ticks */
                 if(g_v26_mode && g_v26_stop_reason!=1) g_snapshot_save_path=NULL; /* V26: save only on PASS */
                 if(native_loop_ok && g_snapshot_save_path &&
                    !native_snapshot_save(g_snapshot_save_path,memory,&vfs.dos,
