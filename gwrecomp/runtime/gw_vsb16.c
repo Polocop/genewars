@@ -64,6 +64,54 @@ static void observe(const uint8_t *m, uint32_t sz) {
     }
 }
 
+/* enhanced_audio (play mode): pitch variation for sound effects and a "speech playing" flag for the CD-DA ducking.
+ * A sound effect's HSAMPLE playback rate (+0x3C, written by AIL_set_sample_playback_rate 0xCB6E0 and read by the
+ * original mixer on every pass) is multiplied by a random factor in [0.955, 1.045] once per start; when the game
+ * writes a new rate the factor is applied to that one. Speech (slot id 99 = 0x63, the id the game's positional code
+ * treats as speech, 11025 Hz from the SPEECH .SPE banks) and unnamed slots keep their rate exactly; Smacker audio and
+ * the CD-DA never go through these slots. Only sample state is touched, never game state. */
+static int g_enh;
+static struct { uint32_t hs, written, base; uint16_t id; uint16_t factor_q12; int active; } g_pv[64];
+static uint32_t g_rng = 0x9E3779B9u;
+static int g_speech_playing;
+void gw_vsb16_set_enhanced(int on) { g_enh = on; }
+int gw_vsb16_speech_playing(void) { return g_speech_playing; }
+static uint32_t rng_next(void) { g_rng ^= g_rng << 13; g_rng ^= g_rng >> 17; g_rng ^= g_rng << 5; return g_rng; }
+static void wr32(uint8_t *m, uint32_t sz, uint32_t at, uint32_t v) { if (m && range_ok(sz, at, 4u)) { m[at] = (uint8_t)v; m[at + 1] = (uint8_t)(v >> 8); m[at + 2] = (uint8_t)(v >> 16); m[at + 3] = (uint8_t)(v >> 24); } }
+static void enhance(uint8_t *m, uint32_t sz) {
+    if (!(0x37A6C8u < sz) || !m[0x37A6C8u]) return;
+    if (g_rng == 0x9E3779B9u) g_rng ^= (uint32_t)SDL_GetPerformanceCounter() | 1u;
+    uint32_t n = rd16(m, sz, 0x2E54E4u); if (n > 64) n = 64;
+    const uint32_t tbl = rd32(m, sz, 0x37A6CCu);
+    int speech = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const uint32_t s = 0x37A3A4u + i * 0x19u, h = rd32(m, sz, s);
+        if (!h || !range_ok(sz, h, 0x48u)) { g_pv[i].active = 0; continue; }
+        const uint32_t st = rd32(m, sz, h + 4u); const uint16_t id = rd16(m, sz, s + 0x12u);
+        if (st != 4u) { g_pv[i].active = 0; continue; }
+        if (id == 99u) speech = 1;
+        const uint32_t rate = rd32(m, sz, h + 0x3Cu);
+        if (!g_pv[i].active || g_pv[i].hs != h || g_pv[i].id != id) {           /* a new start in this slot */
+            char name[20] = ""; const uint32_t table_bytes = (id + 1u) * 32u;
+            if (id && tbl && range_ok(sz, tbl, table_bytes)) { memcpy(name, m + tbl + id * 32u, 16); name[16] = 0; }
+            const int sfx = id != 0u && id != 99u && name[0];
+            g_pv[i].active = 1; g_pv[i].hs = h; g_pv[i].id = id; g_pv[i].base = rate; g_pv[i].written = rate;
+            g_pv[i].factor_q12 = sfx ? (uint16_t)(4096u - 184u + rng_next() % 369u) : 4096u;   /* 0.955..1.045 */
+            if (g_pv[i].factor_q12 != 4096u) {
+                g_pv[i].written = (uint32_t)(((uint64_t)rate * g_pv[i].factor_q12 + 2048u) >> 12);
+                wr32(m, sz, h + 0x3Cu, g_pv[i].written);
+            }
+            vlog("TRACE vsb16 enhanced start slot=%u id=%u name='%s' %s base_rate=%u rate=%u ratio=%.3f\n", i, id, name,
+                 id == 99u ? "speech" : sfx ? "sfx" : "other", rate, g_pv[i].written, (double)g_pv[i].factor_q12 / 4096.0);
+        } else if (rate != g_pv[i].written && g_pv[i].factor_q12 != 4096u) {       /* the game set a new rate */
+            g_pv[i].base = rate;
+            g_pv[i].written = (uint32_t)(((uint64_t)rate * g_pv[i].factor_q12 + 2048u) >> 12);
+            wr32(m, sz, h + 0x3Cu, g_pv[i].written);
+        }
+    }
+    if (speech != g_speech_playing) { g_speech_playing = speech; vlog("TRACE vsb16 enhanced speech_playing=%d\n", speech); }
+}
+
 void gw_vsb16_configure(int enabled) { g.enabled = enabled; g.st.enabled = enabled; }
 int gw_vsb16_enabled(void) { return g.enabled; }
 const gw_vsb16_stats *gw_vsb16_get_stats(void) { return &g.st; }
@@ -218,6 +266,7 @@ void gw_vsb16_pump(uint8_t *m, uint32_t sz, int (*service)(void *), void *user) 
     if (!m) return;
     if (g.enabled) { static unsigned tick; if ((++tick % 400u) == 1u) { const uint32_t d = rd32(m, sz, 0x37A6DCu); if (d && d + 0x70u < sz) { char hx[500]; int o = 0; for (uint32_t k = 0; k < 0x6Cu; k += 4) o += snprintf(hx + o, sizeof hx - o, "%08x ", rd32(m, sz, d + k)); vlog("TRACE vsb16 digdump[%u] reent=%08x %s\n", tick, rd32(m, sz, 0x2E6654u), hx); } } }
     if (g.enabled) observe(m, sz);
+    if (g.enabled && g_enh) enhance(m, sz);
     if (!g.enabled || g.pump_disabled || !g.dev || !service || !g.drv_base) return;
     const uint32_t base = g.drv_base;
     for (int it = 0; it < 16; it++) {

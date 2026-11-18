@@ -55,6 +55,14 @@ typedef struct gw_cdda_state {
 } gw_cdda_state;
 
 static gw_cdda_state g_cdda;
+/* enhanced_audio: smaller queue (about 0.3 s instead of 1 s) so the music gain follows the speech flag in time, and the
+   ducking gain: 1.0 -> 0.70 while speech plays, ramped over about 300 ms each way (per stereo frame). */
+static volatile int g_cdda_enh,g_cdda_duck;
+static float g_cdda_gain=1.0f;
+void gw_cdda_set_enhanced(int on) { g_cdda_enh=on; }
+void gw_cdda_set_duck(int on) {
+    if(on!=g_cdda_duck) { g_cdda_duck=on; fprintf(stderr,"TRACE CDDA duck=%d\n",on); }
+}
 
 static int gw_cdda_parse_msf(const char *text, uint32_t *frames) {
     unsigned minutes=0,seconds=0,subframes=0;
@@ -343,7 +351,7 @@ void gw_cdda_pump(void) {
         g_cdda.pending_paused=0;
     }
     SDL_LockMutex(g_cdda.mutex);
-    if(!g_cdda.playing || g_cdda.paused || SDL_GetQueuedAudioSize(g_cdda.device)>=GW_CDDA_QUEUE_TARGET_BYTES) {
+    if(!g_cdda.playing || g_cdda.paused || SDL_GetQueuedAudioSize(g_cdda.device)>=(g_cdda_enh?GW_CDDA_RATE*4u*3u/10u:GW_CDDA_QUEUE_TARGET_BYTES)) {
         static int first_idle_logged=0;
         if(!first_idle_logged) {
             first_idle_logged=1;
@@ -353,11 +361,11 @@ void gw_cdda_pump(void) {
         }
         SDL_UnlockMutex(g_cdda.mutex); return;
     }
-    if(SDL_GetQueuedAudioSize(g_cdda.device)>=GW_CDDA_QUEUE_LOW_BYTES) {
+    if(SDL_GetQueuedAudioSize(g_cdda.device)>=(g_cdda_enh?GW_CDDA_RATE*4u*15u/100u:GW_CDDA_QUEUE_LOW_BYTES)) {
         SDL_UnlockMutex(g_cdda.mutex); return;
     }
     unsigned chunks=0u;
-    while(chunks<4u && SDL_GetQueuedAudioSize(g_cdda.device)<GW_CDDA_QUEUE_TARGET_BYTES) {
+    while(chunks<(g_cdda_enh?8u:4u) && SDL_GetQueuedAudioSize(g_cdda.device)<(g_cdda_enh?GW_CDDA_RATE*4u*3u/10u:GW_CDDA_QUEUE_TARGET_BYTES)) {
         if(g_cdda.next_lba>=g_cdda.end_lba) {
             if(g_cdda.repeat) g_cdda.next_lba=g_cdda.start_lba;
             else { g_cdda.playing=0; break; }
@@ -366,6 +374,7 @@ void gw_cdda_pump(void) {
         if(!track || !track->audio) { g_cdda.playing=0; break; }
         uint32_t track_end=track->lba_start+track->sectors;
         uint32_t sectors=(uint32_t)(sizeof raw/GW_CDDA_SECTOR_BYTES);
+        if(g_cdda_enh && sectors>8u) sectors=8u;   /* 0.11 s per chunk */
         if(track_end-g_cdda.next_lba<sectors) sectors=track_end-g_cdda.next_lba;
         if(g_cdda.end_lba-g_cdda.next_lba<sectors) sectors=g_cdda.end_lba-g_cdda.next_lba;
         if(!sectors) { g_cdda.playing=0; break; }
@@ -397,8 +406,14 @@ void gw_cdda_pump(void) {
             const int16_t left=(int16_t)((uint16_t)raw[i+1u]<<8|raw[i]);
             const int16_t right=(int16_t)((uint16_t)raw[i+3u]<<8|raw[i+2u]);
             /* MSCDEX channels route input L to output L/R, then input R to L/R. */
-            const int32_t mixed_left=((int32_t)left*v0+(int32_t)right*v2)/255;
-            const int32_t mixed_right=((int32_t)left*v1+(int32_t)right*v3)/255;
+            int32_t mixed_left=((int32_t)left*v0+(int32_t)right*v2)/255;
+            int32_t mixed_right=((int32_t)left*v1+(int32_t)right*v3)/255;
+            if(g_cdda_enh) {   /* ducking: ramp 0.30 of gain over 0.3 s of frames */
+                const float target=g_cdda_duck?0.70f:1.0f,step=0.30f/(0.3f*(float)GW_CDDA_RATE);
+                if(g_cdda_gain>target) { g_cdda_gain-=step; if(g_cdda_gain<target) g_cdda_gain=target; }
+                else if(g_cdda_gain<target) { g_cdda_gain+=step; if(g_cdda_gain>target) g_cdda_gain=target; }
+                mixed_left=(int32_t)((float)mixed_left*g_cdda_gain); mixed_right=(int32_t)((float)mixed_right*g_cdda_gain);
+            }
             const uint16_t out_left=(uint16_t)gw_cdda_saturate(mixed_left);
             const uint16_t out_right=(uint16_t)gw_cdda_saturate(mixed_right);
             out[i]=(uint8_t)out_left; out[i+1u]=(uint8_t)(out_left>>8);

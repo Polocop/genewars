@@ -3412,6 +3412,16 @@ if partial:
     # while a placement pointer is up leaves [0x2F1450] on an animation whose frame table is already 0, so the
     # original reads the real-mode IVT at 0x0000000E (harmless under DOS/4GW, a memory fault here) and hands the
     # garbage to 0x65440; the menu sets its own pointer right after. With no frame table, skip the pointer change.
+    # enhanced_audio: positional sound in world units of the iso screen axis. 0x35AE0 (pan): |dx-dy| <= 0x200 centre,
+    # >= 0x1000 hard left/right, linear in between ((|d|*64 - 0x8000) / 0xE00). 0x362ED (playing sound update) and
+    # 0x36816 (queueing): full volume up to 0xC00, silent from 0x1A00, linear over 0xE00. Tuned for the 512 px of map
+    # of the 640 screen; every threshold goes through GW_AUDIO_SCALE (x g_gw_audio_scale_q8/256, 256 = original),
+    # which the host sets from the visible map width in play mode with enhanced_audio = 1.
+    for site, old in ((0x35BA2, "0x200u"), (0x35BAD, "0x1000u"), (0x35BD4, "0xE00u"),
+                      (0x362ED, "0x1A00u"), (0x362F4, "0xC00u"), (0x36304, "0xE00u"), (0x36309, "0xC00u"), (0x3630E, "0xE00u"),
+                      (0x36816, "0x1A00u"), (0x3681D, "0xC00u"), (0x3682A, "0xE00u"), (0x3682F, "0xC00u"), (0x36834, "0xE00u")):
+        ws_site_rules.append((site, old, f"GW_AUDIO_SCALE({old})"))
+    ws_site_rules.append((0x35BCE, "(-0x8000)", "(-(int32_t)GW_AUDIO_SCALE(0x8000u))"))
     ws_site_rules.append((0x6B227, "eax = MEM32(DS_BASE + (edx + eax));",
                           "if (eax == 0u) { recomp_end_memory_access(); goto L_0006B23F; } "
                           "eax = MEM32(DS_BASE + (edx + eax));"))
@@ -3574,6 +3584,8 @@ if partial:
             "void (*g_gw_ws_after_map)(void) = 0;\n"
             "void (*g_gw_ws_info_begin)(uint32_t) = 0;\n"
             "void (*g_gw_ws_info_end)(void) = 0;\n"
+            "uint32_t g_gw_audio_scale_q8 = 256u;   /* enhanced_audio: positional sound radius x/256 (host, play mode) */\n"
+            "#define GW_AUDIO_SCALE(v) ((uint32_t)(((uint64_t)(v) * g_gw_audio_scale_q8) >> 8))\n"
             "#define GW_WS_STRIP_FLAG(base_reg, index) (((uint32_t)(index) < 20u || !g_gw_ws_strip_ext) ? \\\n"
             "    (uint32_t)(DS_BASE + ((base_reg) + 0x11BDu)) : (uint32_t)(g_gw_ws_strip_ext + ((uint32_t)(index) - 20u)))\n"
             "#define GW_WS_STRIPS ((MEM32(DS_BASE + (0x376A78)) + 31u) >> 5)\n"

@@ -33,5 +33,8 @@ int  gw_vsb16_driver_call(uint8_t *mem, uint32_t mem_size, uint32_t drv_base, ui
  * (AIL timer callback registered by the library); it must return 1 on success. */
 void gw_vsb16_pump(uint8_t *mem, uint32_t mem_size, int (*service)(void *user), void *user);
 void gw_vsb16_close(void);
+/* enhanced_audio (play mode only): +-4.5 % pitch on sound effects (never speech, id 99); speech flag for ducking. */
+void gw_vsb16_set_enhanced(int on);
+int  gw_vsb16_speech_playing(void);
 const gw_vsb16_stats *gw_vsb16_get_stats(void);
 #endif

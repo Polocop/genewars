@@ -41,3 +41,6 @@ clean_horizon = 1
 ; 1 = animated water ripples and caustics on the sea and soft highlights on GOOP, in missions only (presented frame
 ;     only: the game itself is unchanged); not shown with the EPX filter
 water_effects = 1
+; 1 = enhanced audio: positional sound panning/distance fitted to the visible map (854 / zoom-out), +-4.5 % random
+;     pitch on sound effects (never on speech, videos or CD music), CD music lowered 30 % while a voice speaks
+enhanced_audio = 1

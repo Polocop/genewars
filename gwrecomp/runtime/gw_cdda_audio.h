@@ -14,5 +14,8 @@ void gw_cdda_resume(void);
 void gw_cdda_stop(void);
 void gw_cdda_pump(void);
 void gw_cdda_shutdown(void);
+/* enhanced_audio (play mode): shorter queue and music ducking (-30 %, ~300 ms ramps) while speech plays. */
+void gw_cdda_set_enhanced(int on);
+void gw_cdda_set_duck(int on);
 
 #endif

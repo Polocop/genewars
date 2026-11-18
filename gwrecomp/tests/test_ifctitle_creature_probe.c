@@ -8460,6 +8460,7 @@ static char g_ini_path_used[MAX_PATH];
 static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launcher=1,g_ini_last_mission=1;
 static int g_ini_clean_horizon=1;   /* clean_horizon: drop 1-pixel horizon slivers from the presented frame */
 static int g_ini_water_effects=1;   /* water_effects: animated water ripples/caustics and GOOP highlights (presented frame only) */
+static int g_ini_enhanced_audio=1;  /* enhanced_audio: positional sound fitted to the view, SFX pitch variation, CD-DA ducking */
 static char g_ini_cd_cue[600];
 /* where the launcher writes: the file that was read, else gwrecomp.ini next to the executable */
 static void gwrecomp_ini_target(char *path,size_t n) {
@@ -8546,6 +8547,7 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"cd_cue")) snprintf(g_ini_cd_cue,sizeof g_ini_cd_cue,"%s",val);
         else if(!strcmp(key,"clean_horizon")) g_ini_clean_horizon=atoi(val)!=0;
         else if(!strcmp(key,"water_effects")) g_ini_water_effects=atoi(val)!=0;
+        else if(!strcmp(key,"enhanced_audio")) g_ini_enhanced_audio=atoi(val)!=0;
         else if(key[0]) fprintf(stderr,"gwrecomp.ini: unknown key '%s'\n",key);
     }
     fclose(f);
@@ -9121,6 +9123,26 @@ static double interactive_duration_limit(void) {
 }
 
 SDL_Window *gw_smk_adopt_window(void);   /* defined with the Smacker window code */
+/* ---- enhanced_audio (gwrecomp.ini, default 1; play mode only, never in batch/replay runs) ----------------------------
+   Called from the presentation loop: switches the Miles pitch variation and the CD-DA ducking on, forwards the speech
+   flag, and sets the positional sound radius (lifter GW_AUDIO_SCALE) to the visible map width: 512 px of map on the
+   640 screen is the original 256/256; 854 shows 726 px, the zoomed-out canvas 726/zoom px. */
+extern uint32_t g_gw_audio_scale_q8;
+static void enhanced_audio_tick(void) {
+    const int on=g_cli_play_mode && g_ini_enhanced_audio;
+    gw_vsb16_set_enhanced(on); gw_cdda_set_enhanced(on);
+    gw_cdda_set_duck(on && gw_vsb16_speech_playing());
+    uint32_t q=256u;
+    if(on) {
+        const double z=g_zoom>0.1?g_zoom:1.0,vis=(double)(g_present_w-128)/z;
+        double s=256.0*vis/512.0; if(s<192.0) s=192.0; if(s>512.0) s=512.0;
+        q=(uint32_t)(s+0.5);
+    }
+    if(q!=g_gw_audio_scale_q8) {
+        gw_flag_trace("TRACE enhanced_audio scale_q8=%u (visible map %d px, zoom %.2f)%c",q,(int)((g_present_w-128)/(g_zoom>0.1?g_zoom:1.0)),g_zoom,10);
+        g_gw_audio_scale_q8=q;
+    }
+}
 /* ---- water_effects (gwrecomp.ini, launcher PANTALLA): presentation-only water ripples/caustics and GOOP highlights
    Runs on the host's copy of the published frame, never on guest memory. Only ground pixels are touched: a pixel is
    ground when it equals the map ring (MapDisplay's terrain buffer, no Things) at its ring position, so units,
@@ -10030,7 +10052,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
     }
     const uint64_t render_present_start=SDL_GetPerformanceCounter(); if(g_interactive_perf_frequency) g_hostprof_copy_ms+=(double)(render_present_start-hp_copy0)*1000.0/(double)g_interactive_perf_frequency;
     SDL_RenderPresent(g_ifclevel_demo_renderer);
-    if(g_interactive_demo_mode) gw_cdda_pump();
+    if(g_interactive_demo_mode) { enhanced_audio_tick(); gw_cdda_pump(); }
     if(g_interactive_demo_mode) {
         const uint64_t render_present_end=SDL_GetPerformanceCounter();
         g_hostprof_present_ms+=(double)(render_present_end-render_present_start)*1000.0/(double)(g_interactive_perf_frequency?g_interactive_perf_frequency:1u);
@@ -18728,6 +18750,7 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
         (void)inject_interactive_stress_key(g_interactive_frame_count);
         (void)poll_sdl_into_lbdisplay(NULL);
         inject_loadsave(g_interactive_frame_count);
+        enhanced_audio_tick();
         gw_cdda_pump();
         if(g_interactive_camera_probe_mode==1) {
             /* Pin the original device cursor at the map center so OS pointer
