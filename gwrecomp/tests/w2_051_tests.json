@@ -1,0 +1,26 @@
+[
+  {
+    "argv": ["python", "tests\\test_native_dos_vectors.py"],
+    "suite": "native-dos-vectors"
+  },
+  {
+    "argv": ["python", "tests\\test_native_dos_streams.py"],
+    "suite": "native-dos-streams"
+  },
+  {
+    "argv": ["python", "tests\\test_native_dos_descriptors.py"],
+    "suite": "native-dos-descriptors"
+  },
+  {
+    "argv": ["python", "tests\\test_native_dpmi_alloc.py"],
+    "suite": "native-dpmi-linear"
+  },
+  {
+    "argv": ["python", "tests\\test_native_dpmi_dos_alloc.py"],
+    "suite": "native-dpmi-dos"
+  },
+  {
+    "argv": ["python", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"],
+    "suite": "python-runtime-regression"
+  }
+]

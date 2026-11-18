@@ -1,0 +1,19 @@
+{
+  "id": "W2-040",
+  "title": "Model DOS/4GW startup PIT command and channel ports",
+  "description": "Continue the -k startup path past DOS AH=35h. The next observed I/O is byte OUT 0x36 to port 0x43 at guest 0x001C8C8E. Add a deterministic 8253/8254 PIT host model for command/data writes and reads, integrate it into Unicorn's port hooks without swallowing unrelated ports, test control-word and channel latch behavior, then replay the original-byte probe to the next gate.",
+  "priority": 100,
+  "roles": ["WORK2"],
+  "deps": ["W2-039"],
+  "acceptance": [
+    "The observed 0x43 <- 0x36 write is recorded and applied to channel 0 state",
+    "Subsequent channel data reads/writes have deterministic, unit-tested behavior",
+    "Unsupported unrelated port access remains traceable and stops execution",
+    "Original-byte -k passes PIT setup and records the next exact gate",
+    "No UI or gameplay state is claimed without visual/input evidence"
+  ],
+  "tests": [],
+  "files": ["runtime/host_devices.py", "tools/probes/unicorn_int21.py", "tests/", "evidence/", "reports/"],
+  "evidence": [],
+  "derive": []
+}

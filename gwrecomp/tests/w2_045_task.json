@@ -1,0 +1,19 @@
+{
+  "id": "W2-045",
+  "title": "Add bounded native DPMI AX=0100 DOS-memory allocation",
+  "description": "Python/Unicorn now models measured DPMI AX=0100, but the native C gw_dos_services callback still traps it. Add an explicitly configured conventional-memory paragraph arena and selector allocator to the native callback; AX=0100 must return AX real-mode segment and DX registered selector, back only configured ranges below 0xA000, and return DOS error 8/BX largest block or DPMI 8011 on descriptor exhaustion. Add a 32-bit C harness covering success registers, descriptor base/range, invalid zero size, unconfigured/exhausted arenas and protected-memory exclusion. Do not choose default arena bounds without WORK1-021 evidence.",
+  "priority": 100,
+  "roles": ["WORK2"],
+  "deps": ["W2-041"],
+  "acceptance": [
+    "Native C callback handles INT 31h AX=0100 only after explicit safe arena configuration",
+    "Success registers match DPMI: AX=segment, DX=selector, CF=0",
+    "The selector resolves to the allocated linear base and exact paragraph limit",
+    "No configured arena can overlap VGA/ROM memory at or above segment A000",
+    "The 32-bit native harness passes invalid, unavailable and descriptor-limit cases"
+  ],
+  "tests": [],
+  "files": ["runtime/gw_dos_services.c", "runtime/gw_dos_services.h", "tests/test_native_dpmi_dos_alloc.c", "tests/test_native_dpmi_dos_alloc.py", "evidence/", "reports/"],
+  "evidence": ["evidence/empty_config_overlay_work2.json"],
+  "derive": []
+}

@@ -1,0 +1,23 @@
+{
+  "id": "W2-052",
+  "title": "Implement measured DOS AH=48h/AH=49h conventional-memory allocation lifecycle",
+  "description": "WORK3-031 original-byte replay advances through INT 2Fh AX=1500 and 129 DPMI AX=0501 allocations, then stops at DOS INT 21h AH=48h at 0x001c3d21 with BX=1 paragraph. The Python DosHost has an MCB free-block model but no DOS AH=48/AH=49 dispatch. Implement paragraph allocation from the existing PSP-owned MCB chain, returning AX=segment on success or AX=8/BX=largest block/CF on insufficient memory; track only AH=48-owned blocks for AH=49 free and coalesce MCBs. Preserve DPMI AX=0100's selectors and the bounded DOS/4GW layout.",
+  "priority": 120,
+  "roles": ["WORK2"],
+  "dependencies": [],
+  "acceptance": [
+    "Original-byte AH=48h request at 0x001c3d21, BX=1 is served from a PSP-owned free MCB with AX=returned data segment and CF clear",
+    "Insufficient memory reports AX=8, BX=largest available paragraph count, CF set; zero/invalid requests do not fabricate success",
+    "AH=49h frees only tracked AH=48h allocations, rejects invalid segments with AX=9/CF set, and coalesces adjacent MCBs",
+    "DPMI AX=0100 allocation/free/resize, PSP/environment ownership, and DOS resize behavior remain coherent",
+    "Original-byte -k replay passes AH=48h and records the next exact service or fault; no MENU claim without root evidence"
+  ],
+  "tests": [
+    {"argv": ["python", "tests\\probe_dos_ah48_work2.py"], "suite": "original-byte-ah48"},
+    {"argv": ["python", "tests\\test_dos_ah48_work2.py"], "suite": "original-byte-ah48-assertions"},
+    {"argv": ["python", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services", "tests.test_guest_boot"], "suite": "runtime"}
+  ],
+  "files": ["runtime/dos_services.py", "tools/probes/unicorn_int21.py", "tests/", "evidence/", "reports/"],
+  "evidence": ["evidence/startup_continuation_work3.json", "reports/coordination/startup_continuation_work3.md"],
+  "derive": []
+}

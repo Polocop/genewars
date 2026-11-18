@@ -1,0 +1,985 @@
+diff --git a/runtime/recomp32/recomp_types.h b/runtime/recomp32/recomp_types.h
+index d1eb50e..720f734 100644
+--- a/runtime/recomp32/recomp_types.h
++++ b/runtime/recomp32/recomp_types.h
+@@ -43,9 +43,16 @@ extern uint32_t g_ebx, g_esi, g_edi, g_ebp;
+  * like __ftol receive their argument on the FPU stack from the caller, and the
+  * control word persists across calls. A per-function local stack would make every
+  * cross-call FPU value read as 0. */
+-extern double   g_st[8];
+-extern int      g_fp_top;
+-extern uint16_t g_fpu_cw;
++extern double   g_st[8];
++extern int      g_fp_top;
++extern uint16_t g_fpu_cw;
++/* Implemented by GWRecomp's virtual x87 image adapter. */
++void recomp_fnsave_image(uint8_t *destination, double stack[8], int *top, uint16_t *control_word, int64_t exact_i64[8]);
++void recomp_fwait(void);
++/* Implemented by the embedding runtime. Unhandled INTs trap and return from
++ * the lifted function; handled services may update the live global registers. */
++typedef enum gw_interrupt_result { GW_INTERRUPT_TRAPPED = 0, GW_INTERRUPT_HANDLED = 1 } gw_interrupt_result;
++gw_interrupt_result gw_interrupt_dispatch(uint8_t vector, uint32_t instruction_va);
+ 
+ /* The arithmetic flags a function RETURNS with. The lazy flag state is local
+  * to each lifted function, but assembly and the CRT return results in flags:
+@@ -64,8 +71,69 @@ RECOMP_WEAK uint32_t g_flag_k, g_flag_a, g_flag_b, g_flag_cf;
+ #define RECOMP_FLAGS_OUT() (g_flag_k = _flag_k, g_flag_a = _flag_a, g_flag_b = _flag_b, g_flag_cf = _cf)
+ #define RECOMP_FLAGS_IN()  (_flag_k = g_flag_k, _flag_a = g_flag_a, _flag_b = g_flag_b, _cf = g_flag_cf)
+ 
+-/* Segment registers (flat mode Win32 - effectively unused) */
+-extern uint16_t g_seg_cs, g_seg_ds, g_seg_es, g_seg_fs, g_seg_gs, g_seg_ss;
++/* Segment selectors and bases are runtime state for DOS/4GW and flat hosts. */
++extern uint16_t g_seg_cs, g_seg_ds, g_seg_es, g_seg_fs, g_seg_gs, g_seg_ss;
++extern uint32_t g_cs_base, g_ds_base, g_es_base, g_ss_base;
++typedef enum recomp_segment_id { RECOMP_SEG_CS=0, RECOMP_SEG_DS=1, RECOMP_SEG_ES=2,
++    RECOMP_SEG_FS=3, RECOMP_SEG_GS=4, RECOMP_SEG_SS=5 } recomp_segment_id;
++typedef int (*recomp_segment_resolver_fn)(uint16_t selector, uint32_t *base, void *user);
++typedef struct recomp_segment_fault { uint8_t pending, segment; uint16_t selector; uint32_t instruction_va; } recomp_segment_fault;
++typedef struct recomp_memory_fault {
++    uint8_t pending, segment;
++    uint16_t selector;
++    uint32_t offset, width, linear, instruction_va;
++} recomp_memory_fault;
++enum { RECOMP_MEM_ACCESS_UNKNOWN=0, RECOMP_MEM_ACCESS_READ=1,
++       RECOMP_MEM_ACCESS_WRITE=2, RECOMP_MEM_ACCESS_READWRITE=3 };
++enum { RECOMP_MEM_BACKING_UNKNOWN=0, RECOMP_MEM_BACKING_COMMITTED=1,
++       RECOMP_MEM_BACKING_UNCOMMITTED=2 };
++typedef struct recomp_memory_diagnostic {
++    uint8_t valid, access, segment, backing, register_snapshot_valid, reserved8[3];
++    uint16_t selector, reserved;
++    uint32_t guest_eip, instruction_va, instruction_id, segment_base, offset, linear, width;
++    uintptr_t host_address;
++    uint32_t eax, ebx, ecx, edx, esi, edi, ebp, esp;
++    uint32_t dpmi_req_eax, dpmi_req_ebx, dpmi_req_ecx, dpmi_req_edx;
++    uint32_t dpmi_res_eax, dpmi_res_ebx, dpmi_res_ecx, dpmi_res_edx, dpmi_carry;
++    char mnemonic[16];
++} recomp_memory_diagnostic;
++typedef int (*recomp_segment_range_fn)(uint16_t selector, uint32_t offset,
++                                       uint32_t width, void *user);
++typedef int (*recomp_memory_backing_fn)(uintptr_t host_address, uint32_t linear,
++                                        uint32_t width, uint8_t access, void *user);
++void recomp_set_segment_resolver(recomp_segment_resolver_fn resolver, void *user);
++int recomp_write_segment(recomp_segment_id segment, uint16_t selector, uint32_t instruction_va);
++void recomp_clear_segment_fault(void);
++recomp_segment_fault recomp_get_segment_fault(void);
++void recomp_set_segment_range_validator(recomp_segment_range_fn validator, void *user);
++void recomp_set_memory_bounds(uint32_t begin, uint32_t size);
++void recomp_memory_diag_enable(int enabled);
++int recomp_memory_diag_enabled(void);
++void recomp_memory_diag_set_guest_range(uint32_t begin, uint32_t end);
++void recomp_memory_diag_set_guest_eip(uint32_t guest_eip);
++void recomp_memory_diag_note_guest_instruction(uint32_t guest_eip,
++    uint32_t eax, uint32_t ebx, uint32_t ecx, uint32_t edx,
++    uint32_t esi, uint32_t edi, uint32_t ebp, uint32_t esp);
++void recomp_memory_diag_set_backing_validator(recomp_memory_backing_fn validator, void *user);
++void recomp_memory_diag_set_dpmi_state(uint32_t req_eax, uint32_t req_ebx,
++    uint32_t req_ecx, uint32_t req_edx, uint32_t res_eax, uint32_t res_ebx,
++    uint32_t res_ecx, uint32_t res_edx, uint32_t carry);
++void recomp_memory_diag_note_instruction(uint32_t instruction_va, uint32_t instruction_id,
++    const char *mnemonic, recomp_segment_id segment, uint8_t access,
++    uint32_t eax, uint32_t ebx, uint32_t ecx, uint32_t edx,
++    uint32_t esi, uint32_t edi, uint32_t ebp, uint32_t esp);
++recomp_memory_diagnostic recomp_memory_diag_last_access(void);
++void recomp_begin_memory_access(recomp_segment_id segment, uint32_t width, uint32_t instruction_va);
++void recomp_begin_memory_access_ex(recomp_segment_id segment, uint32_t width,
++    uint32_t instruction_va, uint8_t access, uint32_t instruction_id,
++    const char *mnemonic);
++void recomp_end_memory_access(void);
++uintptr_t recomp_checked_mem_addr(uint32_t segmented_linear, uint32_t width);
++uintptr_t recomp_checked_segment_addr(recomp_segment_id segment, uint32_t offset,
++                                       uint64_t width, uint32_t instruction_va);
++int recomp_memory_fault_pending(void);
++void recomp_clear_memory_fault(void);
++recomp_memory_fault recomp_get_memory_fault(void);
+ 
+ /* Function pointer type for recompiled functions */
+ typedef void (*recomp_func_t)(void);
+@@ -161,28 +229,35 @@ extern const uint32_t recomp_dispatch_count;
+ 
+ extern ptrdiff_t g_mem_base;
+ 
+-#ifdef RECOMP_FLAT_MEMORY
++#ifdef RECOMP_FLAT_MEMORY
+ /* Guest VAs ARE host addresses (a 32-bit host mapping each module at its own
+  * base): nothing to add, and no global to reload on every access. */
+-#define ADDR(va)     ((uintptr_t)(uint32_t)(va))
+-#else
+-#define ADDR(va)     ((uintptr_t)(uint32_t)(va) + g_mem_base)
+-#endif
++#define ADDR(va)     recomp_checked_mem_addr((uint32_t)(va),0u)
++#else
++#define ADDR(va)     recomp_checked_mem_addr((uint32_t)(va),0u)
++#endif
+ 
+ /* Thread-relative segment bases. In Win32, fs: points at the TIB/TEB; gs is
+  * unused on x86. The lifter emits fs:/gs: accesses as FS_BASE/GS_BASE + addr,
+  * so the runtime points g_fs_base at a simulated TIB (VA). cs/ds/es/ss are flat. */
+-extern uint32_t g_fs_base;
+-extern uint32_t g_gs_base;
+-#define FS_BASE  g_fs_base
+-#define GS_BASE  g_gs_base
+-
+-#define MEM8(addr)   (*(volatile uint8_t  *)ADDR(addr))
+-#define MEM16(addr)  (*(volatile uint16_t *)ADDR(addr))
+-#define MEM32(addr)  (*(volatile uint32_t *)ADDR(addr))
+-#define MEM64(addr)  (*(volatile uint64_t *)ADDR(addr))
+-#define MEMF(addr)   (*(volatile float    *)ADDR(addr))
+-#define MEMD(addr)   (*(volatile double   *)ADDR(addr))
++extern uint32_t g_fs_base;
++extern uint32_t g_gs_base;
++#define CS_BASE  g_cs_base
++#define DS_BASE  g_ds_base
++#define ES_BASE  g_es_base
++#define FS_BASE  g_fs_base
++#define GS_BASE  g_gs_base
++#define SS_BASE  g_ss_base
++
++#define MEM8(addr)   (*(volatile uint8_t  *)recomp_checked_mem_addr((uint32_t)(addr),1u))
++#define MEM16(addr)  (*(volatile uint16_t *)recomp_checked_mem_addr((uint32_t)(addr),2u))
++#define MEM32(addr)  (*(volatile uint32_t *)recomp_checked_mem_addr((uint32_t)(addr),4u))
++#define MEM64(addr)  (*(volatile uint64_t *)recomp_checked_mem_addr((uint32_t)(addr),8u))
++#define MEMF(addr)   (*(volatile float    *)recomp_checked_mem_addr((uint32_t)(addr),4u))
++#define MEMD(addr)   (*(volatile double   *)recomp_checked_mem_addr((uint32_t)(addr),8u))
++#define MEMSEG8(seg,off,va)   (*(volatile uint8_t  *)recomp_checked_segment_addr((seg),(uint32_t)(off),1u,(va)))
++#define MEMSEG16(seg,off,va)  (*(volatile uint16_t *)recomp_checked_segment_addr((seg),(uint32_t)(off),2u,(va)))
++#define MEMSEG32(seg,off,va)  (*(volatile uint32_t *)recomp_checked_segment_addr((seg),(uint32_t)(off),4u,(va)))
+ 
+ /* Set 32-bit values in memory (for rep stosd) */
+ static inline void MEMSET32(void* dst, uint32_t val, uint32_t count) {
+diff --git a/tools/disasm/disasm32.py b/tools/disasm/disasm32.py
+index 5ff70b7..38dd715 100644
+--- a/tools/disasm/disasm32.py
++++ b/tools/disasm/disasm32.py
+@@ -88,6 +88,7 @@ class Instruction:
+     op_str: str
+     bytes: bytes
+     operands: list = None  # Capstone operand list
++    id: int = 0  # Capstone instruction ID retained for runtime diagnostics
+ 
+     @property
+     def is_call(self) -> bool:
+@@ -436,6 +437,7 @@ class Disassembler:
+                 op_str=insn.op_str,
+                 bytes=bytes(insn.bytes),
+                 operands=list(insn.operands) if insn.operands else [],
++                id=insn.id,
+             )
+ 
+     def jump_table_targets(self, insn, limit: int = 256) -> list:
+diff --git a/tools/lift/difftest.py b/tools/lift/difftest.py
+index 35f166d..84e179b 100644
+--- a/tools/lift/difftest.py
++++ b/tools/lift/difftest.py
+@@ -286,6 +286,13 @@ CASES = [
+     Case('shl.carry-out', bytes.fromhex('c1e004'), {'eax': 0x10000000}, undef=('OF', 'AF')),
+     Case('shr.1', bytes.fromhex('d1e8'), {'eax': 0x11}, undef=('AF',)),
+     Case('sar', bytes.fromhex('c1f805'), {'eax': 0x80000000}, undef=('OF', 'AF')),
++    # Narrow SAR operands must be sign-extended before C integer promotion.
++    # These are the exact signed frame-origin values that InitMyAnimBank
++    # halves for GeneWars: -16 -> -8 and -62 -> -31.
++    Case('sar.ax.negative-frame-x', bytes.fromhex('66d1f8'),
++         {'eax': 0x0000FFF0}, undef=('OF', 'AF')),
++    Case('sar.di.negative-frame-y', bytes.fromhex('66d1ff'),
++         {'edi': 0x0000FFC2}, undef=('OF', 'AF')),
+     # A shift of zero writes no flags at all, and the guard on the shift's flag
+     # publication now says exactly that.
+     Case('shift.by-zero', bytes.fromhex('f9c1e000'), {'eax': 0}, undef=('OF', 'AF')),
+@@ -769,9 +776,40 @@ int      g_fp_top;
+    -- still diverge, and those are marked `known` on the case. */
+ uint16_t g_fpu_cw = 0x027F;
+ uint16_t g_seg_cs, g_seg_ds, g_seg_es, g_seg_fs, g_seg_gs, g_seg_ss;
++uint32_t g_cs_base, g_ds_base, g_es_base, g_ss_base;
+ uint32_t g_fs_base, g_gs_base, g_cur_func;
+ ptrdiff_t g_mem_base;
+ void recomp_dump_trace(const char *why) { (void)why; }
++/* The differential runner evaluates an isolated instruction sequence, so
++   the per-instruction runtime guard is a no-op in this synthetic harness. */
++int gw_recomp_guest_instruction(unsigned int guest_va) {
++    (void)guest_va; return 1;
++}
++int recomp_memory_diag_enabled(void) { return 0; }
++void recomp_begin_memory_access_ex(recomp_segment_id segment, uint32_t width,
++    uint32_t instruction_va, uint8_t access, uint32_t instruction_id,
++    const char *mnemonic) {
++    (void)segment; (void)width; (void)instruction_va; (void)access;
++    (void)instruction_id; (void)mnemonic;
++}
++void recomp_end_memory_access(void) {}
++uintptr_t recomp_checked_mem_addr(uint32_t segmented_linear, uint32_t width) {
++    (void)width; return (uintptr_t)(g_mem_base + (ptrdiff_t)segmented_linear);
++}
++uintptr_t recomp_checked_segment_addr(recomp_segment_id segment, uint32_t offset,
++    uint64_t width, uint32_t instruction_va) {
++    uint32_t base=0; (void)width; (void)instruction_va;
++    switch(segment) {
++    case RECOMP_SEG_CS: base=g_cs_base; break;
++    case RECOMP_SEG_DS: base=g_ds_base; break;
++    case RECOMP_SEG_ES: base=g_es_base; break;
++    case RECOMP_SEG_FS: base=g_fs_base; break;
++    case RECOMP_SEG_GS: base=g_gs_base; break;
++    case RECOMP_SEG_SS: base=g_ss_base; break;
++    }
++    return (uintptr_t)(g_mem_base + (ptrdiff_t)base + (ptrdiff_t)offset);
++}
++int recomp_memory_fault_pending(void) { return 0; }
+ 
+ #define WIN_BASE 0x%08Xu
+ #define WIN_SIZE 0x%08Xu
+diff --git a/tools/lift/lift32.py b/tools/lift/lift32.py
+index a6c3515..dfc4fe5 100644
+--- a/tools/lift/lift32.py
++++ b/tools/lift/lift32.py
+@@ -225,6 +225,10 @@ FUNCTION_LOCALS = (
+     'uint32_t _flag_k = FK_NONE;',
+     'uint32_t _flag_a = 0, _flag_b = 0;',
+     'uint32_t _itail_tgt = 0;',
++    'extern int gw_recomp_guest_instruction(unsigned int guest_va);',
++    'extern int gw_recomp_port_io(unsigned int operation, unsigned int port, '
++    'unsigned int width, unsigned int value, unsigned int guest_va, '
++    'unsigned int *value_out);',
+ )
+ 
+ 
+@@ -265,8 +269,12 @@ class Lifter:
+         self.patch_sites = patch_sites or set()
+         self._patched_imm = None
+         self._patched_disp = None   # (placeholder, expr) for a patched disp32
++        self._current_insn_va = 0
+         self._labels = None        # block starts of the function being lifted
+         self._jump_targets = None  # arms its switch tables dispatch to
++        # Optional exact target sets for functions containing multiple
++        # computed switches. Each entry is keyed by original instruction VA.
++        self.jump_targets_by_site = {}
+         self._flag_state = None  # (setter_mnemonic, operands_str)
+         self._flag_seq = 0       # bumped whenever the flags are written
+         self._fp_depth = 0  # FPU stack depth tracking
+@@ -336,19 +344,38 @@ class Lifter:
+                 return f"SET_LO8({REG_NAMES_8L[r]}, {value})"
+             if r in REG_NAMES_8H:
+                 return f"SET_HI8({REG_NAMES_8H[r]}, {value})"
+-            # Segment registers and FPU ST(i) - use as comment
++            # FPU ST(i)
+             if X86_REG_ST0 <= r <= X86_REG_ST0 + 7:
+                 return f"_st[{r - X86_REG_ST0}] = {value}"
+-            # Segment registers - no-op in flat mode
+-            if r in (11, 17, 28, 29, 30, 49):
+-                return f"(void)({value}) /* seg reg write */"
++            if r in _SEG_REGS:
++                segment = {X86_REG_CS:'CS', X86_REG_DS:'DS', X86_REG_ES:'ES',
++                           X86_REG_FS:'FS', X86_REG_GS:'GS', X86_REG_SS:'SS'}[r]
++                return (f"recomp_write_segment(RECOMP_SEG_{segment}, (uint16_t)({value}), "
++                        f"0x{self._current_insn_va:08X}u)")
+             return f"(void)({value}) /* unknown reg {r} */"
+         elif op.type == X86_OP_MEM:
+             return self._fmt_mem_write(op.mem, op.size, value)
+         return f"??? = {value}"
+ 
+-    def _fmt_mem_addr(self, mem) -> str:
+-        """Format the effective address calculation for a memory operand."""
++    def _memory_segment_name(self, mem) -> str:
++        seg = getattr(mem, 'segment', 0)
++        if seg in _SEG_REGS:
++            return {X86_REG_CS:'CS', X86_REG_DS:'DS', X86_REG_ES:'ES',
++                    X86_REG_FS:'FS', X86_REG_GS:'GS', X86_REG_SS:'SS'}[seg]
++        return 'SS' if mem.base in (X86_REG_EBP, X86_REG_ESP) else 'DS'
++
++    def _string_source_segment_name(self, insn) -> str:
++        overrides = {0x2E:'CS',0x36:'SS',0x3E:'DS',0x26:'ES',0x64:'FS',0x65:'GS'}
++        prefixes = {0xF0,0xF2,0xF3,0x66,0x67,*overrides.keys()}
++        for byte in (insn.bytes or b''):
++            if byte in overrides:
++                return overrides[byte]
++            if byte not in prefixes:
++                break
++        return 'DS'
++
++    def _fmt_ea_offset(self, mem) -> str:
++        """Format the x86 effective-address offset, without a segment base."""
+         parts = []
+         if mem.base != 0:
+             parts.append(reg_name(mem.base))
+@@ -370,17 +397,14 @@ class Lifter:
+                 parts.append(f"(-0x{-mem.disp:X})")
+         if not parts:
+             parts.append("0")
+-        addr = ' + '.join(parts)
+-        # Segment override: fs/gs are thread-relative (TIB/TEB) and must NOT be
+-        # treated as flat. Route them through a runtime base so e.g. `fs:[0]`
+-        # (the SEH chain head) reads the simulated TIB instead of VA 0.
+-        # cs/ds/es/ss are flat in Win32 and need no base.
+-        seg = getattr(mem, 'segment', 0)
+-        if seg == X86_REG_FS:
+-            return f"FS_BASE + ({addr})"
+-        if seg == X86_REG_GS:
+-            return f"GS_BASE + ({addr})"
+-        return addr
++        return '(' + ' + '.join(parts) + ')'
++
++    def _fmt_mem_addr(self, mem) -> str:
++        """Format the linear address of a memory operand, including its segment base."""
++        # Segment bases are runtime descriptor state on DOS/4GW. Explicit
++        # overrides take precedence; implicit EBP/ESP operands default to SS.
++        segment = self._memory_segment_name(mem)
++        return f"{segment}_BASE + {self._fmt_ea_offset(mem)}"
+ 
+     def _fmt_mem_read(self, mem, size: int) -> str:
+         """Format a memory read."""
+@@ -409,8 +433,8 @@ class Lifter:
+         return f"MEM32({addr}) = {value}"
+ 
+     def _fmt_lea(self, mem) -> str:
+-        """Format LEA (just the address calculation, no memory access)."""
+-        return self._fmt_mem_addr(mem)
++        """Format LEA's effective-address offset; LEA ignores segment bases."""
++        return self._fmt_ea_offset(mem)
+ 
+     @staticmethod
+     def _string_cmp_base(insn, m):
+@@ -499,8 +523,18 @@ class Lifter:
+         which also retires the `shift.by-zero` divergence the harness carried.
+         """
+         aligned = res if width >= 32 else f"((uint32_t)({res}) << {32 - width})"
+-        return (f"if ({count}) {{ _flag_a = recomp_flags_pack({aligned}, _cf, 0, 0); "
+-                f"_flag_b = 0; _flag_k = FK_EFLAGS; }}")
++        lines = [f"if ({count}) {{ _flag_a = recomp_flags_pack({aligned}, _cf, 0, 0);"]
++        if width < 32:
++            # `recomp_flags_pack` computes PF from the low byte of its
++            # argument. Narrow results are left-aligned so SF/ZF land at the
++            # x86 positions, which means that byte is zero for SAR AX/BX and
++            # PF is incorrectly forced to even. Restore PF from the original
++            # result's low byte before publishing the concrete EFLAGS word.
++            lines.append(
++                f"  _flag_a = (_flag_a & ~4u) | (RECOMP_PF({aligned}, {32-width}) << 2);"
++            )
++        lines.append("  _flag_b = 0; _flag_k = FK_EFLAGS; }")
++        return " ".join(lines)
+ 
+     def _flag_capture(self, a, b, width=32):
+         """Snapshot flag operands into temps and record the flag state to use them.
+@@ -715,8 +749,59 @@ class Lifter:
+     def lift_instruction(self, insn) -> list:
+         """Lift one instruction, recording the runtime flag kind if it wrote flags."""
+         seq0 = self._flag_seq
++        self._current_insn_va = insn.address
+         self._insn_flag_width = 32    # only this instruction's _flag_capture narrows it
++        # LEA's memory-shaped operand is only an address expression. It does
++        # not read or write guest memory and must not receive an access guard.
++        mem_ops = ([] if insn.mnemonic.split()[-1] == 'lea' else
++                   [op for op in (insn.operands or []) if op.type == X86_OP_MEM])
++        segment = self._memory_segment_name(mem_ops[0].mem) if mem_ops else None
++        width = mem_ops[0].size if mem_ops else 0
++        access_bits = 0
++        for op in mem_ops:
++            access_bits |= int(getattr(op, 'access', 0) or 0)
++        access_kind = ("RECOMP_MEM_ACCESS_READWRITE" if access_bits & 1 and access_bits & 2 else
++                       "RECOMP_MEM_ACCESS_READ" if access_bits & 1 else
++                       "RECOMP_MEM_ACCESS_WRITE" if access_bits & 2 else
++                       "RECOMP_MEM_ACCESS_UNKNOWN")
++        string_op = insn.mnemonic.split()[-1] in ('movsb','movsw','movsd','stosb','stosw','stosd',
++                                                   'lodsb','lodsw','lodsd','cmpsb','cmpsw','cmpsd',
++                                                   'scasb','scasw','scasd',
++                                                   'insb','insw','insd','outsb','outsw','outsd')
++        # String instructions implement their own architectural DS/override
++        # and ES accesses. A generic first-operand guard can pre-fault the
++        # wrong segment (Capstone lists ES destination first for MOVS/STOS).
++        if string_op:
++            segment, width = None, 0
++        if segment is None and insn.mnemonic.split()[-1] == 'xlatb':
++            segment, width = 'DS', 1
++            access_kind = 'RECOMP_MEM_ACCESS_READ'
++        if segment is None and insn.mnemonic in ('push','pushf','pushfd','pusha','pushad','pop','popf','popfd','popa','popad'):
++            segment, width = 'SS', (2 if 0x66 in (insn.bytes or b'') else 4)
++            access_kind = ('RECOMP_MEM_ACCESS_READ' if insn.mnemonic.startswith('pop') else
++                           'RECOMP_MEM_ACCESS_WRITE')
++        if segment is None and insn.mnemonic.startswith('ret'):
++            segment, width, access_kind = 'SS', 4, 'RECOMP_MEM_ACCESS_READ'
++        if segment is None and insn.mnemonic in ('call','enter'):
++            segment, width, access_kind = 'SS', 4, 'RECOMP_MEM_ACCESS_WRITE'
++        if string_op:
++            access_kind = 'RECOMP_MEM_ACCESS_READWRITE'
++        prefix = ([f"recomp_begin_memory_access_ex(RECOMP_SEG_{segment}, {width}u, 0x{insn.address:08X}u, {access_kind}, {insn.id}u, \"{insn.mnemonic}\");"]
++                  if segment is not None else [])
+         lines = self._lift_instruction(insn)
++        if prefix:
++            lines = prefix + lines
++        # The Runtime owns the bound per-instance devices and advances their
++        # deterministic guest-time model once for each executed guest
++        # instruction. A false return means the callback latched a guest trap.
++        # Guest EIP is recorded by the existing per-instruction runtime gate;
++        # avoid adding generated statements to the large entry closure.
++        note_segment = segment or 'DS'
++        lines.insert(0, f"if (!gw_recomp_guest_instruction(0x{insn.address:08X}u)) return;")
++        if prefix or string_op:
++            lines.append("if (recomp_memory_fault_pending()) { RECOMP_FLAGS_OUT(); return; }")
++        if prefix:
++            lines.append("recomp_end_memory_access();")
+         if self._flag_seq != seq0 and self._flag_state is not None:
+             fk = FLAG_KIND.get(self._flag_state[0], 'FK_CMP')
+             if self._insn_flag_width < 32:
+@@ -763,7 +848,11 @@ class Lifter:
+         if m == 'mov':
+             if len(ops) == 2:
+                 val = self._fmt_read(ops[1])
+-                lines.append(f"{self._fmt_write(ops[0], val)}; {comment}")
++                dst = self._fmt_write(ops[0], val)
++                if ops[0].type == X86_OP_REG and ops[0].reg in _SEG_REGS:
++                    lines.append(f"if (!{dst}) return; {comment}")
++                else:
++                    lines.append(f"{dst}; {comment}")
+ 
+         elif m == 'movzx':
+             if len(ops) == 2:
+@@ -823,7 +912,14 @@ class Lifter:
+                 if _stack_bits(insn, ops[0]) == 16:
+                     # _fmt_write keeps a 16-bit destination's upper half, for a
+                     # register (SET_LO16) and for memory (MEM16) alike.
+-                    lines.append(f"{self._fmt_write(ops[0], 'POP16_VAL(esp)')}; {comment}")
++                    dst = self._fmt_write(ops[0], 'POP16_VAL(esp)')
++                    if ops[0].type == X86_OP_REG and ops[0].reg in _SEG_REGS:
++                        lines.append(f"{{ uint16_t _seg_value = POP16_VAL(esp); if (!{self._fmt_write(ops[0], '_seg_value')}) return; }} {comment}")
++                    else:
++                        lines.append(f"{dst}; {comment}")
++                elif ops[0].type == X86_OP_REG and ops[0].reg in _SEG_REGS:
++                    dst = self._fmt_write(ops[0], '_seg_value')
++                    lines.append(f"{{ uint32_t _seg_value = POP32_VAL(esp); if (!{dst}) return; }} {comment}")
+                 else:
+                     lines.append(f"POP32(esp, {self._fmt_read(ops[0])}); {comment}")
+                     # For pop to register, need assignment form
+@@ -837,13 +933,22 @@ class Lifter:
+         elif m in ('popad', 'popal'):      # Capstone spells POPAD as 'popal' in 32-bit
+             lines.append(f"POPAD(); {comment}")
+ 
+-        elif m == 'pushfd':
++        elif m in ('pushf', 'pushfd'):
+             # Pushing a constant 0 was observable: the CRT's CPU detection
+             # toggles a bit in the saved EFLAGS and reads it back to decide
+             # whether CPUID exists, and a word that never changes answers
+             # every such probe the same wrong way. The lazy tuple holds
+             # everything the arithmetic flags derive from, so hand it over.
+-            lines.append(f"PUSH32(esp, recomp_eflags(_flag_k, _flag_a, _flag_b, _cf, _df)); {comment}")
++            # In 32-bit code Capstone calls PUSHFD `pushfd`, and calls the
++            # operand-size-overridden 16-bit form `pushf`. The latter still
++            # pushes two bytes, so a following POP AX must see those same
++            # bytes without a fabricated zero dword on the stack.
++            flags = "recomp_eflags(_flag_k, _flag_a, _flag_b, _cf, _df)"
++            operand_bits = 16 if 0x66 in bytes(insn.bytes)[:-1] else 32
++            if m == 'pushf' or operand_bits == 16:
++                lines.append(f"PUSH16(esp, (uint16_t)({flags})); {comment}")
++            else:
++                lines.append(f"PUSH32(esp, {flags}); {comment}")
+ 
+         elif m == 'popfd':
+             lines.append(f"{{ uint32_t _fl = POP32_VAL(esp); {comment}")
+@@ -949,14 +1054,34 @@ class Lifter:
+             self._flag_state = None
+ 
+         elif m == 'imul':
+-            if len(ops) == 2:
+-                a = self._fmt_read(ops[0])
+-                b = self._fmt_read(ops[1])
+-                lines.append(f"{self._fmt_write(ops[0], f'(uint32_t)((int32_t){a} * (int32_t){b})')}; {comment}")
+-            elif len(ops) == 3:
+-                b = self._fmt_read(ops[1])
+-                c = self._fmt_read(ops[2])
+-                lines.append(f"{self._fmt_write(ops[0], f'(uint32_t)((int32_t){b} * (int32_t){c})')}; {comment}")
++            if len(ops) in (2, 3):
++                # Two/three-operand IMUL sign-extends each source at the
++                # destination width and defines CF/OF when the full product
++                # does not fit.  Casting a zero-extended AX/AL straight to
++                # int32 both loses signedness and the old emitter published
++                # no overflow flags for a following JO/JNO/SETcc.
++                dst = ops[0]
++                w = op_bits(dst)
++                if w not in (8, 16, 32):
++                    raise ValueError(f"unsupported IMUL destination width: {w}")
++                if len(ops) == 2:
++                    src_a, src_b = self._fmt_read(ops[0]), self._fmt_read(ops[1])
++                else:
++                    src_a, src_b = self._fmt_read(ops[1]), self._fmt_read(ops[2])
++                signed_type = {8: 'int8_t', 16: 'int16_t', 32: 'int32_t'}[w]
++                product_type = 'int64_t' if w == 32 else 'int32_t'
++                result_type = {8: 'uint8_t', 16: 'uint16_t', 32: 'uint32_t'}[w]
++                ov_test = f"_product != ({signed_type})_result"
++                lines.append(
++                    f"{{ {product_type} _product = ({product_type})({signed_type})({src_a}) * "
++                    f"({signed_type})({src_b}); {comment}"
++                )
++                lines.append(f"  {result_type} _result = ({result_type})_product;")
++                lines.append(f"  {self._fmt_write(dst, '_result')};")
++                lines.append(f"  uint32_t _overflow = {ov_test};")
++                lines.append("  _flag_k = FK_EFLAGS; _flag_a = _overflow ? 0x801u : 0u; "
++                             "_flag_b = 0; _cf = _overflow; }")
++                self._flag_state = ('eflags', '_flag_a, _flag_b')
+ 
+         elif m in ('div', 'idiv'):
+             if len(ops) == 1:
+@@ -976,26 +1101,42 @@ class Lifter:
+                 w = ops[0].size
+                 if w == 1 and m == 'div':
+                     lines.append(f"{{ uint32_t _n = LO16(eax), _d = (uint8_t)({divisor}); {comment}")
+-                    lines.append("  SET_LO16(eax, _d ? ((_n % _d) << 8) | ((_n / _d) & 0xFFu) : 0u); }")
++                    lines.append("  uint32_t _q = _d ? _n / _d : 0x100u; "
++                                 "uint32_t _r = _d ? _n % _d : 0u; "
++                                 "SET_LO16(eax, (_d && _q <= 0xFFu) ? ((_r << 8) | _q) : 0u); }")
+                 elif w == 1:
+                     lines.append(f"{{ int32_t _n = (int16_t)LO16(eax), _d = (int8_t)({divisor}); {comment}")
+-                    lines.append("  SET_LO16(eax, _d ? (((uint32_t)(_n % _d) & 0xFFu) << 8)"
+-                                 " | ((uint32_t)(_n / _d) & 0xFFu) : 0u); }")
++                    lines.append("  int32_t _q = _d ? _n / _d : 0x100; "
++                                 "int32_t _r = _d ? _n % _d : 0; "
++                                 "SET_LO16(eax, (_d && _q >= -128 && _q <= 127) ? "
++                                 "((((uint32_t)_r & 0xFFu) << 8) | ((uint32_t)_q & 0xFFu)) : 0u); }")
+                 elif w == 2 and m == 'div':
+                     lines.append(f"{{ uint32_t _n = (LO16(edx) << 16) | LO16(eax), _d = (uint16_t)({divisor}); {comment}")
+-                    lines.append("  SET_LO16(eax, _d ? _n / _d : 0u); SET_LO16(edx, _d ? _n % _d : 0u); }")
++                    lines.append("  uint64_t _q = _d ? (uint64_t)_n / _d : 0x10000ull; "
++                                 "uint32_t _r = _d ? _n % _d : 0u; "
++                                 "SET_LO16(eax, (_d && _q <= 0xFFFFu) ? (uint32_t)_q : 0u); "
++                                 "SET_LO16(edx, (_d && _q <= 0xFFFFu) ? _r : 0u); }")
+                 elif w == 2:
+                     lines.append(f"{{ int32_t _n = (int32_t)((LO16(edx) << 16) | LO16(eax)), _d = (int16_t)({divisor}); {comment}")
+-                    lines.append("  int _ok = _d && !(_d == -1 && _n == INT32_MIN);")
+-                    lines.append("  SET_LO16(eax, _ok ? (uint32_t)(_n / _d) : 0u); SET_LO16(edx, _ok ? (uint32_t)(_n % _d) : 0u); }")
++                    lines.append("  int64_t _q = _d ? (int64_t)_n / _d : 0x10000ll; "
++                                 "int32_t _r = _d ? _n % _d : 0; "
++                                 "int _ok = _d && _q >= -32768 && _q <= 32767; "
++                                 "SET_LO16(eax, _ok ? (uint32_t)_q : 0u); "
++                                 "SET_LO16(edx, _ok ? (uint32_t)_r : 0u); }")
+                 elif m == 'div':
+                     lines.append(f"{{ uint64_t _dividend = ((uint64_t)edx << 32) | eax; uint32_t _dv = (uint32_t){divisor}; {comment}")
+-                    lines.append(f"  if (_dv) {{ eax = (uint32_t)(_dividend / _dv); edx = (uint32_t)(_dividend % _dv); }}")
++                    lines.append("  uint64_t _q = _dv ? _dividend / _dv : 0x100000000ull; "
++                                 "uint32_t _r = _dv ? (uint32_t)(_dividend % _dv) : 0u; "
++                                 "if (_dv && _q <= 0xFFFFFFFFull) { eax = (uint32_t)_q; edx = _r; }")
+                     lines.append(f"  else {{ eax = 0; edx = 0; }} }}")
+                 else:
+-                    lines.append(f"{{ int64_t _dividend = ((int64_t)(int32_t)edx << 32) | eax; int32_t _dv = (int32_t){divisor}; {comment}")
+-                    lines.append(f"  if (_dv && !(_dv == -1 && _dividend == INT64_MIN)) {{ eax = (uint32_t)((int32_t)(_dividend / _dv)); edx = (uint32_t)((int32_t)(_dividend % _dv)); }}")
+-                    lines.append(f"  else {{ eax = 0; edx = 0; }} }}")
++                    lines.append(f"{{ int64_t _dividend = (int64_t)(((uint64_t)edx << 32) | (uint64_t)eax); int32_t _dv = (int32_t){divisor}; {comment}")
++                    lines.append("  int _ok = _dv && !(_dv == -1 && _dividend == INT64_MIN); "
++                                 "int64_t _q = _ok ? _dividend / _dv : 0x100000000ll; "
++                                 "int64_t _r = _ok ? _dividend % _dv : 0; "
++                                 "_ok = _ok && _q >= INT32_MIN && _q <= INT32_MAX; "
++                                 "if (_ok) { eax = (uint32_t)_q; edx = (uint32_t)_r; } "
++                                 "else { eax = 0; edx = 0; } }")
+ 
+         # --- Logical ---
+         elif m == 'and':
+@@ -1063,11 +1204,20 @@ class Lifter:
+                 a = self._fmt_read(ops[0])
+                 b, bn = self._shift_count(ops[1])
+                 w = op_bits(ops[0])
+-                res = f"((uint32_t)((int32_t){a} >> {b}))"
++                # The source operand must be sign-extended at its own width
++                # before promotion to C's int.  In particular, LO16() is a
++                # uint16_t; casting 0xFFF0 directly to int32_t yields +65520,
++                # so `sar bx,1` was incorrectly emitted as 0x7FF8 instead of
++                # 0xFFF8.  Keep the shift width explicit for byte/word forms.
++                signed_type = {8: 'int8_t', 16: 'int16_t', 32: 'int32_t'}.get(w)
++                if signed_type is None:
++                    raise ValueError(f"unsupported SAR operand width: {w}")
++                signed_a = f"(({signed_type})({a}))"
++                res = f"((uint32_t)({signed_a} >> {b}))"
+                 # sar must publish CF for a following rcr (the clip's `sar;rcr` lerp).
+                 lines.append(f"if ({b}) _cf = {self._shift_out_cf(a, b, bn, w, 'arith')}; {comment}")
+                 lines.append(self._shift_flags(res, b, w))
+-                lines.append(f"{self._fmt_write(ops[0], f'(uint32_t)((int32_t){a} >> {b})')};")
++                lines.append(f"{self._fmt_write(ops[0], f'(uint32_t)({signed_a} >> {b})')};")
+                 self._flag_state = None
+ 
+         # shld/shrd: double-precision shift (64-bit window across dst:src). Used pervasively
+@@ -1198,6 +1348,28 @@ class Lifter:
+                 lines.append("_cf = 0;")
+                 self._flag_state = ('test', "_flag_a, _flag_b")
+ 
++        elif m in ('bsf', 'bsr'):
++            if len(ops) == 2 and ops[0].type == X86_OP_REG:
++                dst = self._fmt_read(ops[0])
++                src = self._fmt_read(ops[1])
++                width = op_bits(ops[1])
++                mask = '0xFFFFu' if width == 16 else '0xFFFFFFFFu'
++                # BSF/BSR only define ZF.  Keep the destination unchanged when
++                # the source is zero; the other arithmetic flags are undefined
++                # by x86, so expose them deterministically as zero in FK_EFLAGS.
++                if m == 'bsr':
++                    search = 'while (_bsr_v >>= 1) ++_bsr_i;'
++                else:
++                    search = 'while (!(_bsr_v & 1u)) { _bsr_v >>= 1; ++_bsr_i; }'
++                lines.append(
++                    f"{{ uint32_t _bsr_src = ({src}) & {mask}, _bsr_v = _bsr_src, _bsr_i = 0; "
++                    f"if (_bsr_src) {{ {search} {self._fmt_write(ops[0], '_bsr_i')}; }} "
++                    f"_flag_a = _bsr_src ? 0u : 0x40u; _flag_b = 0; "
++                    f"_cf = 0; _flag_k = FK_EFLAGS; }} {comment}"
++                )
++                self._flag_state = ('eflags', '_flag_a, _flag_b')
++                self._flag_seq += 1
++
+         elif m in ('bt', 'bts', 'btr', 'btc'):
+             # A memory operand with a REGISTER bit offset addresses a bit
+             # string, not one dword: the dword is at ea + 4*(offset >> 5)
+@@ -1314,6 +1486,8 @@ class Lifter:
+             esz = {'movsb': 1, 'movsw': 2, 'movsd': 4,
+                    'stosb': 1, 'stosw': 2, 'stosd': 4,
+                    'lodsb': 1, 'lodsw': 2, 'lodsd': 4}[base]
++            src_segment = self._string_source_segment_name(insn)
++            va = f"0x{insn.address:08X}u"
+             if base.startswith('movs'):
+                 if rep:
+                     # DF decides the direction, and the rep forms used to ignore
+@@ -1324,47 +1498,62 @@ class Lifter:
+                     # path for an overlapping blit, and it smashed the object
+                     # sitting after its destination.
+                     #
+-                    # memmove, not memcpy: overlap is the whole reason the
+-                    # backward form exists.
++                    # REP MOVS is an element-by-element operation.  memmove
++                    # is not equivalent when overlapping ranges run opposite
++                    # to DF (notably the LZ back-references in GeneWars' RNC
++                    # decoder): each write must feed later reads.  Keep the
++                    # bulk path only for non-overlapping ranges and model an
++                    # overlapping copy in architectural element order.
+                     lines.append(
+-                        f"{{ uint32_t _n = ecx, _b = _n * {esz}u; {comment}"
+-                        f" if (_df > 0) {{ memmove((void*)ADDR(edi),"
+-                        f" (void*)ADDR(esi), _b); esi += _b; edi += _b; }}"
+-                        f" else {{ memmove((void*)ADDR(edi - _b + {esz}u),"
+-                        f" (void*)ADDR(esi - _b + {esz}u), _b);"
+-                        f" esi -= _b; edi -= _b; }} ecx = 0; }}")
++                        f"{{ uint32_t _n = ecx; uint64_t _b64 = (uint64_t)_n * {esz}u; {comment}"
++                        f" if (_n) {{ uint32_t _so = (_df > 0) ? esi : (uint32_t)((uint64_t)esi - _b64 + {esz}u);"
++                        f" uint32_t _do = (_df > 0) ? edi : (uint32_t)((uint64_t)edi - _b64 + {esz}u);"
++                        f" if (recomp_memory_diag_enabled()) recomp_begin_memory_access_ex(RECOMP_SEG_{src_segment}, (uint32_t)_b64, {va}, RECOMP_MEM_ACCESS_READ, 0u, \"rep movs\");"
++                        f" uintptr_t _sp = recomp_checked_segment_addr(RECOMP_SEG_{src_segment}, _so, _b64, {va});"
++                        f" if (recomp_memory_diag_enabled()) recomp_end_memory_access();"
++                        f" uintptr_t _dp = 0; if (!recomp_memory_fault_pending()) {{"
++                        f" if (recomp_memory_diag_enabled()) recomp_begin_memory_access_ex(RECOMP_SEG_ES, (uint32_t)_b64, {va}, RECOMP_MEM_ACCESS_WRITE, 0u, \"rep movs\");"
++                        f" _dp = recomp_checked_segment_addr(RECOMP_SEG_ES, _do, _b64, {va});"
++                        f" if (recomp_memory_diag_enabled()) recomp_end_memory_access(); }}"
++                        f" if (!recomp_memory_fault_pending()) {{"
++                        f" if (_dp + (uintptr_t)_b64 <= _sp || _sp + (uintptr_t)_b64 <= _dp) {{ memcpy((void*)_dp, (void*)_sp, (size_t)_b64); }}"
++                        f" else if (_df > 0) {{ for (uint64_t _i=0; _i<_b64; _i+={esz}u) {{ uint8_t _v[{esz}u]; memcpy(_v,(void*)(_sp+(uintptr_t)_i),{esz}u); memcpy((void*)(_dp+(uintptr_t)_i),_v,{esz}u); }} }}"
++                        f" else {{ for (uint64_t _i=_b64; _i>0; _i-={esz}u) {{ uint8_t _v[{esz}u]; memcpy(_v,(void*)(_sp+(uintptr_t)(_i-{esz}u)),{esz}u); memcpy((void*)(_dp+(uintptr_t)(_i-{esz}u)),_v,{esz}u); }} }}"
++                        f" if (_df > 0) {{ esi += (uint32_t)_b64; edi += (uint32_t)_b64; }}"
++                        f" else {{ esi -= (uint32_t)_b64; edi -= (uint32_t)_b64; }} ecx = 0; }} }} }}")
+                 elif esz == 1:
+-                    lines.append(f"MEM8(edi) = MEM8(esi); esi += _df; edi += _df; {comment}")
++                    lines.append(f"{{ uint8_t _v=MEMSEG8(RECOMP_SEG_{src_segment},esi,{va}); if(!recomp_memory_fault_pending()) {{ MEMSEG8(RECOMP_SEG_ES,edi,{va})=_v; esi+=_df; edi+=_df; }} }} {comment}")
+                 elif esz == 2:
+-                    lines.append(f"MEM16(edi) = MEM16(esi); esi += _df * 2; edi += _df * 2; {comment}")
++                    lines.append(f"{{ uint16_t _v=MEMSEG16(RECOMP_SEG_{src_segment},esi,{va}); if(!recomp_memory_fault_pending()) {{ MEMSEG16(RECOMP_SEG_ES,edi,{va})=_v; esi+=_df*2; edi+=_df*2; }} }} {comment}")
+                 else:
+-                    lines.append(f"MEM32(edi) = MEM32(esi); esi += _df * 4; edi += _df * 4; {comment}")
++                    lines.append(f"{{ uint32_t _v=MEMSEG32(RECOMP_SEG_{src_segment},esi,{va}); if(!recomp_memory_fault_pending()) {{ MEMSEG32(RECOMP_SEG_ES,edi,{va})=_v; esi+=_df*4; edi+=_df*4; }} }} {comment}")
+             elif base.startswith('stos'):
+                 if rep:
+                     # Same direction-flag story as movs. The fill value is
+                     # uniform, so only the start address and the pointer update
+                     # change -- but they change by the whole span.
+-                    fill = {1: "memset((void*)ADDR(%s), LO8(eax), _n)",
+-                            2: "MEMSET16((void*)ADDR(%s), (uint16_t)LO16(eax), _n)",
+-                            4: "MEMSET32((void*)ADDR(%s), eax, _n)"}[esz]
+                     lines.append(
+-                        f"{{ uint32_t _n = ecx, _b = _n * {esz}u; {comment}"
+-                        f" if (_df > 0) {{ {fill % 'edi'}; edi += _b; }}"
+-                        f" else {{ {fill % f'edi - _b + {esz}u'}; edi -= _b; }}"
+-                        f" ecx = 0; }}")
++                        f"{{ uint32_t _n = ecx; uint64_t _b64 = (uint64_t)_n * {esz}u; {comment}"
++                        f" if (_n) {{ uint32_t _do = (_df > 0) ? edi : (uint32_t)((uint64_t)edi - _b64 + {esz}u);"
++                        f" uintptr_t _dp = recomp_checked_segment_addr(RECOMP_SEG_ES, _do, _b64, {va});"
++                        f" if (!recomp_memory_fault_pending()) {{"
++                        f" if ({esz}u == 1u) memset((void*)_dp, LO8(eax), (size_t)_b64);"
++                        f" else if ({esz}u == 2u) {{ uint16_t _v=(uint16_t)LO16(eax); for(uint64_t _i=0;_i<_b64;_i+=2) memcpy((void*)(_dp+(uintptr_t)_i),&_v,2); }}"
++                        f" else {{ uint32_t _v=eax; for(uint64_t _i=0;_i<_b64;_i+=4) memcpy((void*)(_dp+(uintptr_t)_i),&_v,4); }}"
++                        f" if (_df > 0) edi += (uint32_t)_b64; else edi -= (uint32_t)_b64; ecx = 0; }} }} }}")
+                 elif esz == 1:
+-                    lines.append(f"MEM8(edi) = LO8(eax); edi += _df; {comment}")
++                    lines.append(f"{{ MEMSEG8(RECOMP_SEG_ES, edi, {va}) = LO8(eax); if(!recomp_memory_fault_pending()) edi += _df; }} {comment}")
+                 elif esz == 2:
+-                    lines.append(f"MEM16(edi) = (uint16_t)LO16(eax); edi += _df * 2; {comment}")
++                    lines.append(f"{{ MEMSEG16(RECOMP_SEG_ES, edi, {va}) = (uint16_t)LO16(eax); if(!recomp_memory_fault_pending()) edi += _df * 2; }} {comment}")
+                 else:
+-                    lines.append(f"MEM32(edi) = eax; edi += _df * 4; {comment}")
++                    lines.append(f"{{ MEMSEG32(RECOMP_SEG_ES, edi, {va}) = eax; if(!recomp_memory_fault_pending()) edi += _df * 4; }} {comment}")
+             else:  # lodsb/lodsw/lodsd
+                 if esz == 1:
+-                    lines.append(f"SET_LO8(eax, MEM8(esi)); esi += _df; {comment}")
++                    lines.append(f"{{ uint8_t _v=MEMSEG8(RECOMP_SEG_{src_segment}, esi, {va}); if(!recomp_memory_fault_pending()) {{ SET_LO8(eax,_v); esi += _df; }} }} {comment}")
+                 elif esz == 2:
+-                    lines.append(f"SET_LO16(eax, MEM16(esi)); esi += _df * 2; {comment}")
++                    lines.append(f"{{ uint16_t _v=MEMSEG16(RECOMP_SEG_{src_segment}, esi, {va}); if(!recomp_memory_fault_pending()) {{ SET_LO16(eax,_v); esi += _df * 2; }} }} {comment}")
+                 else:
+-                    lines.append(f"eax = MEM32(esi); esi += _df * 4; {comment}")
++                    lines.append(f"{{ uint32_t _v=MEMSEG32(RECOMP_SEG_{src_segment}, esi, {va}); if(!recomp_memory_fault_pending()) {{ eax=_v; esi += _df * 4; }} }} {comment}")
+ 
+         # --- String compare and scan: cmps/scas, every width, with or without
+         # a rep prefix.
+@@ -1386,14 +1575,21 @@ class Lifter:
+             parts = m.split()
+             rep = parts[0] if len(parts) > 1 else ''
+             size = {'b': 1, 'w': 2, 'd': 4}[base[-1]]
+-            mem = {1: 'MEM8', 2: 'MEM16', 4: 'MEM32'}[size]
+             step = '_df' if size == 1 else f'(_df * {size})'
++            bits = size * 8
++            src_segment = self._string_source_segment_name(insn)
++            va = f"0x{insn.address:08X}u"
+             if base.startswith('cmps'):
+-                load = (f"_a = {mem}(esi); _b = {mem}(edi); "
+-                        f"esi += {step}; edi += {step};")
++                load_pair = (f"_a = MEMSEG{bits}(RECOMP_SEG_{src_segment},esi,{va}); "
++                             f"if(recomp_memory_fault_pending()) break; "
++                             f"_b = MEMSEG{bits}(RECOMP_SEG_ES,edi,{va}); "
++                             f"if(recomp_memory_fault_pending()) break; ")
++                advance = f"esi += {step}; edi += {step};"
+             else:
+                 acc = {1: 'LO8(eax)', 2: 'LO16(eax)', 4: 'eax'}[size]
+-                load = f"_a = {acc}; _b = {mem}(edi); edi += {step};"
++                load_pair = (f"_a = {acc}; _b = MEMSEG{bits}(RECOMP_SEG_ES,edi,{va}); "
++                             f"if(recomp_memory_fault_pending()) break; ")
++                advance = f"edi += {step};"
+             if rep in ('rep', 'repe', 'repz'):
+                 stop = '_a != _b'          # repeat while equal
+             elif rep in ('repne', 'repnz'):
+@@ -1406,19 +1602,25 @@ class Lifter:
+             # string then compared "greater", and std::map<string> lookups
+             # returned the first node for any key.
+             if stop is None:
+-                lines.append(f"{{ uint32_t _a, _b; {load} "
++                load_once = load_pair.replace("if(recomp_memory_fault_pending()) break; ", "")
++                lines.append(f"{{ uint32_t _a, _b; {load_once} "
++                             f"if(!recomp_memory_fault_pending()) {{ {advance} "
+                              f"_flag_a = _a; _flag_b = _b; "
+-                             f"_cf = (uint32_t)CMP_B(_a, _b); }} {comment}")
++                             f"_cf = (uint32_t)CMP_B(_a, _b); }} }} {comment}")
+                 self._flag_state = ('cmp', "_flag_a, _flag_b")
+             else:
+                 # With ECX = 0 nothing is compared and the flags are left as
+                 # they were -- kind and all -- so the next jcc cannot assume a
+                 # compare wrote them; it evaluates the lazy state instead.
+                 # strstr falls out of its search loop on exactly that.
++                # Commit compare flags after each fully successful iteration.
++                # A fault on the next source/destination access must preserve
++                # the last completed iteration's lazy flags and REP registers.
+                 lines.append(f"if (ecx) {{ uint32_t _a = 0, _b = 0; "
+-                             f"while (ecx) {{ {load} ecx--; if ({stop}) break; }} "
++                             f"while (ecx) {{ {load_pair} {advance} ecx--; "
+                              f"_flag_a = _a; _flag_b = _b; "
+-                             f"_cf = (uint32_t)CMP_B(_a, _b); _flag_k = FK_CMP; }} {comment}")
++                             f"_cf = (uint32_t)CMP_B(_a, _b); _flag_k = FK_CMP; "
++                             f"if ({stop}) break; }} }} {comment}")
+                 self._flag_state = None
+             self._flag_seq += 1
+ 
+@@ -1452,15 +1654,22 @@ class Lifter:
+             self._flag_state = None
+ 
+         elif m == 'ret' or m == 'retn':
+-            # Pop the return address that RECOMP_CALL/ICALL pushed (esp += 4), plus
+-            # any stdcall callee-cleanup bytes (ret N -> esp += 4 + N). Without the
+-            # +4 the simulated ESP drifts down 4 bytes per call and eventually the
+-            # 0xDEAD0000 dummy return address gets read as a function argument.
++            # Normal translated calls push RECOMP_RETADDR and return through the
++            # native C call stack. Some extender thunks instead RET to a real guest
++            # address (for example the LE image's INT-vector table); that target
++            # must be dispatched as a guest tail transfer rather than discarded.
++            # Preserve the normal sentinel path, and honor all other guest targets.
+             if ops and ops[0].type == X86_OP_IMM:
+                 n = ops[0].imm
+-                lines.append(f"RECOMP_FLAGS_OUT(); esp += {4 + n}; return; {comment}")
++                lines.append(f"RECOMP_FLAGS_OUT(); {{ uint32_t _recomp_ret_va = MEM32(SS_BASE + (esp)); "
++                             f"esp += {4 + n}; RECOMP_REGS_OUT(); "
++                             f"if (_recomp_ret_va != RECOMP_RETADDR) "
++                             f"RECOMP_ITAIL(_recomp_ret_va); }} return; {comment}")
+             else:
+-                lines.append(f"RECOMP_FLAGS_OUT(); esp += 4; return; {comment}")
++                lines.append(f"RECOMP_FLAGS_OUT(); {{ uint32_t _recomp_ret_va = MEM32(SS_BASE + (esp)); "
++                             f"esp += 4; RECOMP_REGS_OUT(); "
++                             f"if (_recomp_ret_va != RECOMP_RETADDR) "
++                             f"RECOMP_ITAIL(_recomp_ret_va); }} return; {comment}")
+ 
+         elif m == 'retf':
+             lines.append(f"return; /* far return */ {comment}")
+@@ -1814,11 +2023,14 @@ class Lifter:
+         elif m == 'fnclex' or m == 'fclex':
+             lines.append(f"/* fclex: no exception state modelled */ {comment}")
+ 
+-        elif m == 'fnsave' or m == 'fsave' or m == 'frstor':
+-            # The register file is ours, not a 108-byte x87 image; a save/restore
+-            # pair round-trips through memory we never interpret, so as long as
+-            # both sides are no-ops the stack is exactly where it was.
+-            lines.append(f"/* {m}: FPU state is not a memory image here */ {comment}")
++        elif m in ('fnsave', 'fsave'):
++            if ops and ops[0].type == X86_OP_MEM:
++                addr = self._fmt_mem_addr(ops[0].mem)
++                lines.append(f"recomp_fnsave_image((uint8_t*)ADDR({addr}), _st, &_fp_top, &_fpu_cw, g_st_i64); {comment}")
++            else:
++                lines.append(f"/* UNIMPLEMENTED: {m} requires a memory operand */ {comment}")
++        elif m == 'frstor':
++            lines.append(f"/* UNIMPLEMENTED: frstor requires an x87 image loader */ {comment}")
+ 
+         elif m == 'fld1':
+             lines.append(f"fp_push(1.0); {comment}")
+@@ -1876,6 +2088,20 @@ class Lifter:
+             # unreachable fallthrough would run the next block's code.
+             lines.append(f"/* int3 breakpoint */ return; {comment}")
+ 
++        elif m == 'int' or m.startswith('int '):
++            # Interrupts transfer control to a host service layer. Publish the
++            # function-local register/flag state before calling it; an
++            # unhandled vector records a precise guest trap and returns from
++            # the lifted function instead of silently continuing.
++            if ops and ops[0].type == X86_OP_IMM:
++                vector = int(ops[0].imm) & 0xFF
++                lines.append(f"{{ RECOMP_REGS_OUT(); RECOMP_FLAGS_OUT(); {comment}")
++                lines.append(f"gw_interrupt_result _gw_int_result = gw_interrupt_dispatch(0x{vector:02X}u, 0x{insn.address:08X}u);")
++                lines.append("RECOMP_REGS_IN(); RECOMP_FLAGS_IN();")
++                lines.append("if (_gw_int_result != GW_INTERRUPT_HANDLED) return; }")
++            else:
++                lines.append(f"/* invalid INT operand */ return; {comment}")
++
+         elif m == 'cdq':
+             lines.append(f"edx = ((int32_t)eax < 0) ? 0xFFFFFFFFu : 0; {comment}")
+ 
+@@ -1947,18 +2173,57 @@ class Lifter:
+             self._flag_seq += 1
+ 
+         elif m in ('les', 'lds', 'lfs', 'lgs', 'lss'):
+-            # Flat model: the offset is the whole address; the selector is kept
+-            # only so code that saves and restores it round-trips.
++            # Read the far pointer first, validate its selector through the
++            # descriptor bridge, then commit the offset. A bad selector exits
++            # through the guest fault bridge without a raw segment assignment.
+             if len(ops) >= 2 and ops[1].type == X86_OP_MEM:
+                 addr = self._fmt_mem_addr(ops[1].mem)
+-                lines.append(f"{self._fmt_write(ops[0], f'MEM32({addr})')}; "
+-                             f"_seg_{m[1:]} = MEM16({addr} + 4); {comment}")
+-
+-        elif m == 'out' or m == 'outsb' or m == 'outsd' or m == 'in':
+-            lines.append(f"/* {m}: no port I/O under Win32 */ {comment}")
++                segment = m[1:].upper()
++                dst = self._fmt_write(ops[0], '_far_offset')
++                lines.append(f"{{ uint32_t _far_offset = MEM32({addr}); "
++                             f"uint16_t _far_selector = MEM16({addr} + 4); "
++                             f"if (!recomp_write_segment(RECOMP_SEG_{segment}, _far_selector, 0x{self._current_insn_va:08X}u)) return; "
++                             f"{dst}; }} {comment}")
++
++        elif m in ('in', 'out'):
++            if len(ops) == 2:
++                dst_or_src, port_op = ops if m == 'in' else (ops[1], ops[0])
++                width = dst_or_src.size
++                if (width in (1, 2, 4) and
++                        (port_op.type == X86_OP_IMM or
++                         (port_op.type == X86_OP_REG and port_op.reg == X86_REG_DX))):
++                    port = self._fmt_read(port_op)
++                    if m == 'in':
++                        lines.append(
++                            f"{{ uint32_t _port_io_value = 0; "
++                            f"if (!gw_recomp_port_io(0u, (uint16_t)({port}), {width}u, "
++                            f"0u, 0x{insn.address:08X}u, &_port_io_value)) return; "
++                            f"{self._fmt_write(dst_or_src, '_port_io_value')}; }} {comment}")
++                    else:
++                        value = self._fmt_read(dst_or_src)
++                        lines.append(
++                            f"if (!gw_recomp_port_io(1u, (uint16_t)({port}), {width}u, "
++                            f"(uint32_t)({value}), 0x{insn.address:08X}u, 0)) return; {comment}")
++                    continue_port_io = True
++                else:
++                    continue_port_io = False
++            else:
++                continue_port_io = False
++            if not continue_port_io:
++                lines.append(
++                    f"if (!gw_recomp_port_io(4u, 0u, 0u, 0u, "
++                    f"0x{insn.address:08X}u, 0)) return; {comment}")
++
++        elif m in ('insb', 'insw', 'insd', 'outsb', 'outsw', 'outsd'):
++            width = {'insb': 1, 'insw': 2, 'insd': 4,
++                     'outsb': 1, 'outsw': 2, 'outsd': 4}[m]
++            operation = 2 if m.startswith('ins') else 3
++            lines.append(
++                f"if (!gw_recomp_port_io({operation}u, (uint16_t)LO16(edx), {width}u, "
++                f"0u, 0x{insn.address:08X}u, 0)) return; {comment}")
+ 
+         elif m == 'wait' or m == 'fwait':
+-            lines.append(f"/* fwait */ {comment}")
++            lines.append(f"recomp_fwait(); {comment}")
+ 
+         elif m == 'fnstcw' or m == 'fstcw':
+             if ops and ops[0].type == X86_OP_MEM:
+@@ -1971,7 +2236,13 @@ class Lifter:
+                 lines.append(f"_fpu_cw = MEM16({addr}); {comment}")
+ 
+         elif m == 'fninit' or m == 'finit':
+-            lines.append(f"/* finit */ {comment}")
++            # FNINIT initializes the guest x87 state. The prior no-op left the
++            # runtime's default 0x027F control word in place, so Watcom's
++            # __sys_init_387_emulator misdetected a missing coprocessor and
++            # entered its DOS-extender INT 21h hook path. Our virtual x87
++            # models stack depth, values (including the exact-i64 shadow),
++            # and the control word; reset all three parts here.
++            lines.append(f"memset(_st, 0, sizeof(_st)); g_fp_top = 0; g_fpu_cw = 0x037Fu; memset(g_st_i64, 0, sizeof(g_st_i64)); {comment}")
+ 
+         elif m in MMX_BINOPS:
+             expr = MMX_BINOPS[m].format(a=self._mm_read(ops[0]), b=self._mm_read(ops[1]))
+@@ -2073,7 +2344,9 @@ class Lifter:
+         # Only the arms this function's switches actually dispatch to. Listing
+         # every label instead is correct but quadratic: one 500-function file
+         # went from 5 MB to 20 MB and crashed the compiler outright.
+-        arms = sorted((self._jump_targets or set()) & (self._labels or set()))
++        site_targets = self.jump_targets_by_site.get(self._current_insn_va)
++        arms = sorted((site_targets if site_targets is not None else
++                       self._jump_targets or set()) & (self._labels or set()))
+         if not arms:
+             return [f"RECOMP_ITAIL({expr}); return; {comment}"]
+         lines = [f"{{ uint32_t _jt = {expr}; {comment}", "switch (_jt) {"]
+@@ -2129,7 +2402,7 @@ class Lifter:
+ 
+         prev_end = None
+         prev_was_jcc = False
+-        for addr in sorted_addrs:
++        for block_index, addr in enumerate(sorted_addrs):
+             block = func.blocks[addr]
+             carry = (prev_was_jcc and prev_end == addr and addr not in targeted)
+             if not carry:
+@@ -2140,6 +2413,24 @@ class Lifter:
+             prev_end = (last.address + last.size) if last else None
+             block_lines = self.lift_basic_block(block)
+             lines.extend(block_lines)
++            # CFG recovery can produce overlapping blocks when x86 control
++            # flow enters bytes that another decode path treats as an
++            # instruction immediate (for example Watcom's strstr_ at
++            # 0xAA0C8/0xAA0CA).  Blocks are emitted by start address, so the
++            # next textual block is not necessarily this block's fallthrough.
++            # Without an explicit edge, C executes that alternate decode
++            # after the linear path and can repeat stack/segment operations.
++            # Preserve architectural fallthrough by jumping to the address
++            # after the final instruction whenever that label exists but is
++            # not the next emitted block. Conditional/unconditional branches
++            # and returns already emit their own control transfer.
++            next_addr = (sorted_addrs[block_index + 1]
++                         if block_index + 1 < len(sorted_addrs) else None)
++            if (last and not last.is_ret and not last.is_uncond_jump and
++                    last.mnemonic not in ('int3', 'hlt')):
++                fallthrough = last.end_address
++                if fallthrough in self._labels and next_addr != fallthrough:
++                    lines.append(f"    goto L_{fallthrough:08X}; /* CFG fallthrough */")
+             lines.append("")
+ 
+         lines.append("}")
+diff --git a/tools/lift/lift32_cpu.py b/tools/lift/lift32_cpu.py
+index 978fc5c..9ab519b 100644
+--- a/tools/lift/lift32_cpu.py
++++ b/tools/lift/lift32_cpu.py
+@@ -981,8 +981,10 @@ class Lifter:
+                 return ["SET16(c->eax, (uint16_t)c->fpu_sw);"]
+             return [self.wr(insn, ops[0], "(uint16_t)c->fpu_sw")]
+         if m == "fnstcw":
+-            return [self.wr(insn, ops[0], "0x027Fu")]   # default control word
+-        if m in ("fldcw", "fwait", "wait", "fnclex", "fclex", "fninit"):
++            return [self.wr(insn, ops[0], "c->fpu_cw")]
++        if m in ("fninit", "finit"):
++            return ["memset(c->st, 0, sizeof(c->st)); c->fpu_top = 0; c->fpu_sw = 0; c->fpu_cw = 0x037Fu;"]
++        if m in ("fldcw", "fwait", "wait", "fnclex", "fclex"):
+             return [f"/* {m} ignored */"]
+         if m in ("fldenv", "fnstenv"):
+             return [f"/* {m} ignored (no FP exceptions modelled) */"]

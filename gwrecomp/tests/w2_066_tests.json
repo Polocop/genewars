@@ -1,0 +1,7 @@
+[
+  {"argv":["python","-m","unittest",
+    "tests.test_mscdex_audio_work2","tests.test_mscdex_read_long_work2","tests.test_dos_cdrom_image_work2",
+    "tests.test_mscdex_ioctl_sub04_work2","tests.test_mscdex_ioctl_sub0c_work2",
+    "tests.test_mscdex_ioctl_tracks_work2","tests.test_mscdex_ioctl_input_work2","tests.test_fault_context_work2","tests.test_host_devices"],
+   "suite":"MSCDEX CDDA, sectors, IOCTL, fault context and host devices"}
+]

@@ -1,0 +1,15 @@
+{
+  "schema": "gwrecomp-dos-environment/v1",
+  "description": "DOS environment block handed to the game at startup in the reference capture: DOSBox-X defaults plus a BLASTER variable, then the executable path. Contains no game data.",
+  "target_sha256": "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f",
+  "strings": [
+    "COMSPEC=Z:\\COMMAND.COM",
+    "BLASTER=A220 I7 D1 H5 T6",
+    "PATH=Z:\\;y:\\dos"
+  ],
+  "dos_count": 1,
+  "executable_path": "C:\\GENEWARS\\GW.EXE",
+  "size_bytes": 86,
+  "sha256": "65c4d22c258efbf93a93cfcaa8d9d8c489e510cb2be76530646c36e0250ee895",
+  "environment_hex": "434f4d535045433d5a3a5c434f4d4d414e442e434f4d00424c41535445523d4132323020493720443120483520543600504154483d5a3a5c3b793a5c646f7300000100433a5c47454e45574152535c47572e45584500"
+}

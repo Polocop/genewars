@@ -1,0 +1,10 @@
+[
+  {
+    "argv": ["python", "tests\\test_native_dpmi_dos_alloc.py"],
+    "suite": "general"
+  },
+  {
+    "argv": ["python", "-m", "unittest", "tests.test_native_dpmi_alloc", "tests.test_native_dos_descriptors", "tests.test_native_dos_callback", "tests.test_dos_services", "tests.test_unicorn_services"],
+    "suite": "general"
+  }
+]

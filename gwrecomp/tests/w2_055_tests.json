@@ -1,0 +1,4 @@
+[
+ {"argv": [".venv\\Scripts\\python.exe", "tests\\test_mscdex_packet_work2.py"], "suite": "fresh MSCDEX request packet capture"},
+ {"argv": [".venv\\Scripts\\python.exe", "-m", "unittest", "tests.test_mscdex_response_work2", "tests.test_dos_services"], "suite": "MSCDEX/DOS regression"}
+]

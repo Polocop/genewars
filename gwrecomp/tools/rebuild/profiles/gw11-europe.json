@@ -1,0 +1,146 @@
+{
+  "schema": "gwrecomp-version-profile/1",
+  "id": "gw11-europe",
+  "description": "Gene Wars 1.1 (retail Europe CD installed, plus the 1.1 patch files) as used for the reference build. A profile lists what the build verifies; an installation that differs needs its own explicit, verified profile - the checks are never relaxed.",
+  "target_executable_sha256": "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f",
+  "install_files": [
+    {
+      "path": "CONFIG.INI",
+      "sha256": "e7a4728ff07332c2f04320fda202ac5521818a47453e670f9f2842767ef36798",
+      "role": "local-config",
+      "note": "written by the game installer (language and drive choices); absent from the disc"
+    },
+    {
+      "path": "DATA/FILEEN.DAT",
+      "sha256": "98902c34587768832b1c40ddbccf8db8f2982f875c3ea8631170f15347a6cf40",
+      "role": "retail-disc",
+      "note": "byte-identical to the file of the same path on the retail Europe disc"
+    },
+    {
+      "path": "DATA/FILESCR.ANB",
+      "sha256": "33c9c1f394a249209ff20319490393afa844d46dec84455cf43aca5ff24cf957",
+      "role": "retail-disc",
+      "note": "byte-identical to the file of the same path on the retail Europe disc"
+    },
+    {
+      "path": "DATA/FILESCR.GLA",
+      "sha256": "a312c491d16681660ea42f719c6da39d4b9500b8efed72b68b00b2d5c5b6267b",
+      "role": "retail-disc",
+      "note": "byte-identical to the file of the same path on the retail Europe disc"
+    },
+    {
+      "path": "DATA/FILESCR.PAL",
+      "sha256": "997a3711fbed107cc0025fd30f15760345139dcdccc842c6433ce8fb2b29a5ec",
+      "role": "retail-disc",
+      "note": "byte-identical to the file of the same path on the retail Europe disc"
+    },
+    {
+      "path": "DATA/FONT2.DAT",
+      "sha256": "2f3d275f88f2ff6671562a819cbc7a791b16ad4510a4020f3b6078c917f60dba",
+      "role": "retail-disc",
+      "note": "byte-identical to the file of the same path on the retail Europe disc"
+    },
+    {
+      "path": "DATA/FONT2.TAB",
+      "sha256": "f54057e1b19cc1711a1596b6459cfdfb359a170f5ed739df71fd852befba4bab",
+      "role": "retail-disc",
+      "note": "byte-identical to the file of the same path on the retail Europe disc"
+    },
+    {
+      "path": "DATA/IFTITLE.ANB",
+      "sha256": "c7d2dfc5d774c69337436249ec74e4d0fa6ae1d06bd5ae785f9f73ee2ac0f707",
+      "role": "retail-disc",
+      "note": "byte-identical to the file of the same path on the retail Europe disc"
+    },
+    {
+      "path": "DATA/MAIN.GLA",
+      "sha256": "c5e12a5b4325c8302cab0fb3ba3aaa654e2e044131763298815766d8a6f47a58",
+      "role": "retail-disc",
+      "note": "byte-identical to the file of the same path on the retail Europe disc"
+    },
+    {
+      "path": "DATA/TEXT.DAT",
+      "sha256": "17fd1cc1eb502e629765ae7a18251750592871dcb7c76f95ad9a610858808c47",
+      "role": "patch-1.1",
+      "note": "differs from all six per-language TEXT.DAT files on the retail disc; dated with the 1.1 files"
+    },
+    {
+      "path": "DATA/TITLESCR.DAT",
+      "sha256": "2548b024fede333b49fc4011541939fc8ce294cb95b48cdb41ed7d0cec54a0b9",
+      "role": "retail-disc",
+      "note": "byte-identical to the file of the same path on the retail Europe disc"
+    },
+    {
+      "path": "DATA/TITLESCR.PAL",
+      "sha256": "d5ec91e731c2ff7e8d74dbbde6a3fe0410ec602ff0da52eb1e6f6bb1a44307c7",
+      "role": "retail-disc",
+      "note": "byte-identical to the file of the same path on the retail Europe disc"
+    },
+    {
+      "path": "GW.EXE",
+      "sha256": "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f",
+      "role": "patch-1.1",
+      "note": "executable of the 1.1 patch (differs from the retail disc's GW.EXE, which is the 1.0 build)"
+    },
+    {
+      "path": "INTRO/BIOINTRO.SMK",
+      "sha256": "fcd3dcddb1ace394b882f240f8cec3625a57d471be5cd66f1db75e543688a4ef",
+      "role": "retail-disc",
+      "note": "byte-identical to the file of the same path on the retail Europe disc"
+    },
+    {
+      "path": "SAVE/SAVE0.SAV",
+      "sha256": "a174d375b625e1f0016eefade2e639b9366ff68608d3af62f51d971363a0a95e",
+      "role": "local-fixture",
+      "note": "regression profile only: a save created by the maintainers (absent from the disc). It is NOT required: a fresh installation with an empty SAVE directory is the supported 'no-saves' profile. If SAVE contains anything else, the build refuses it.",
+      "optional": true
+    }
+  ],
+  "disc": {
+    "cue_sha256": "1d417e3aed625d4f054b51054a1211562a19cd4f712b08e7846613517228a5b5",
+    "note": "The cue sheet text depends on how the image was ripped (file names, line endings). The CD content is identified by the per-track SHA-256 values below plus the derived MSCDEX layout asserted by the build; the build accepts a cue whose tracks hash to these values.",
+    "tracks": [
+      {
+        "name": "Track 1",
+        "size": 238909104,
+        "sha256": "137e44fcfe55ea774c1089f1d24ca4a5a89028fe2bf62470b5a9fc024780048c",
+        "mode": "MODE1/2352"
+      },
+      {
+        "name": "Track 2",
+        "size": 96436704,
+        "sha256": "60ebd450739536e7ecff933f2890c78f7fe659be7c0b27524d7363225e275ae1",
+        "mode": "AUDIO"
+      },
+      {
+        "name": "Track 3",
+        "size": 104602848,
+        "sha256": "4f8abea74c15685d252860be58d6cf89339fddb1d8f8ad2b9ad7a4da854a8162",
+        "mode": "AUDIO"
+      },
+      {
+        "name": "Track 4",
+        "size": 140155680,
+        "sha256": "460f02784a6d5b38e09840ab2670d49dd261ded72b9d2a24dc492da498c95f45",
+        "mode": "AUDIO"
+      },
+      {
+        "name": "Track 5",
+        "size": 50843184,
+        "sha256": "7598e4836a84e0d6f52c9ceaaf302769f0ead20cdeec4a04e8ec9ac77625a883",
+        "mode": "AUDIO"
+      }
+    ],
+    "mscdex_disc_info": [
+      1,
+      5,
+      60,
+      38,
+      59
+    ]
+  },
+  "save_profiles": {
+    "no-saves": "SAVE is empty or absent (fresh installation); the replays expect the original OPTIONS plug-in to probe SAVE0.SAV, receive DOS file-not-found and read no save",
+    "reference-save": "SAVE holds exactly the reference SAVE0.SAV (SHA-256 in the install_files entry); the replays expect the original plug-in to read it"
+  }
+}

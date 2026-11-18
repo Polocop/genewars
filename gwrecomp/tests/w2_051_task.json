@@ -1,0 +1,21 @@
+{
+  "id": "W2-051",
+  "title": "Implement native DOS INT 21h AH=35h/AH=25h vector services",
+  "description": "The Python DOS host models DOS Get/Set Interrupt Vector, but the native C callback traps both services. Add native per-host storage for 256 DOS vectors. AH=35h returns the stored segment:offset in ES:BX; AH=25h stores DS:DX under AL. Unknown vectors start at 0000:0000. Preserve upper register halves and carry semantics consistently with the existing Python service contract; keep unrelated vectors and per-host state isolated.",
+  "priority": 98,
+  "roles": ["WORK2"],
+  "dependencies": [],
+  "acceptance": [
+    "Native AH=35h returns the configured ES:BX and zero for an unassigned vector",
+    "Native AH=25h stores DS:DX only for AL-selected vector and round-trips through AH=35h",
+    "Upper register halves, unrelated vectors, per-host separation, and CF-clear success are tested",
+    "Unknown DOS services remain trapped and native DPMI/stream plus Python DOS suites pass"
+  ],
+  "tests": [
+    {"argv": ["python", "tests\\test_native_dos_vectors.py"], "suite": "native-dos-vectors"},
+    {"argv": ["python", "-m", "unittest", "tests.test_dos_services", "tests.test_unicorn_services"], "suite": "python-runtime-regression"}
+  ],
+  "files": ["runtime/gw_dos_services.c", "runtime/gw_dos_services.h", "tests/test_native_dos_vectors.c", "tests/test_native_dos_vectors.py", "evidence/", "reports/"],
+  "evidence": [],
+  "derive": []
+}

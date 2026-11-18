@@ -1,0 +1,9 @@
+{
+ "schema": "gwrecomp-expected-levelB/1",
+ "note": "Hashes of the build outputs produced by the maintainers' machine in public mode (no symbol map, no-saves profile). base_c_sha256 and closure_c_sha256 depend only on the lifter and its inputs; deterministic_exe_sha256 additionally depends on the compiler/linker versions in toolchain.lock.json. Contains hashes only.",
+ "base_c_sha256": "7a4bb447d94d66bf253ebeb0bb5f28fa0c235d5833f3a387a84a9994d0640ef8",
+ "closure_c_sha256": "1a62d6c30006f04d277ec115015588a77219b16c1c640d24edbffa43cd1b5b29",
+ "objects": 16,
+ "deterministic_exe_sha256": "6bbc5de6079a37e33bb3d69e8048fe5f068f965a291e3b87d81e0e4746767dc5",
+ "toolchain": "Python 3.13.0, gcc 16.2.0, clang 19.1.5"
+}

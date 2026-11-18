@@ -1,0 +1,2 @@
+# keep pinned patches byte-exact
+gwrecomp/tools/rebuild/patches/*.patch -text

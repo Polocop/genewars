@@ -1,0 +1,18 @@
+{
+  "id": "W1-020",
+  "title": "Correct initial PSP MCB ownership for DOS/4GW conventional allocation",
+  "description": "The runtime reaches DPMI INT 31h AX=0100 with BX=0x1000 paragraphs at 0x001D23A7, but current synthetic DosHost state assigns the PSP block from segment 0x1000 to 0xA000 (0x9000 paragraphs), leaving zero DOS free paragraphs. WORK2 is implementing the measured DPMI service faithfully and cannot satisfy this request without a free block. Audit the seed/layout derivation against captured DOS/4GW startup and define an evidence-backed PSP MCB top/free-block arrangement that leaves the target's measured 64 KiB DOS allocation available without overlapping PSP, environment, extender memory or VGA/ROM regions; update the recompiler boot layout only if supported by target evidence.",
+  "priority": 100,
+  "roles": ["WORK1"],
+  "deps": ["W2-016", "W2-041"],
+  "acceptance": [
+    "Original-byte -k request and current MCB/PSP seed values are recorded",
+    "Any revised PSP/free-memory boundary has independent source or original-runtime evidence",
+    "No allocation overlaps PSP, environment, LE image or reserved VGA/ROM ranges",
+    "Core boot-seed regression tests pass and PROJECT_STATE remains evidence-grounded"
+  ],
+  "tests": [],
+  "files": ["runtime/guest_boot.py", "runtime/dos_services.py", "tests/", "evidence/", "reports/"],
+  "evidence": ["evidence/empty_config_overlay_work2.json"],
+  "derive": []
+}

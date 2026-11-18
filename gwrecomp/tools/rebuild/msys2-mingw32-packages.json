@@ -1,0 +1,190 @@
+{
+  "schema": "gwrecomp-msys2-mingw32-packages/1",
+  "note": "MSYS2 retired its i686 (mingw32) environment: the package database no longer lists these packages, so `pacman -S <name>` fails, but the exact package files remain on the MSYS2 mirror. These are the exact versions of the reference toolchain (gcc 16.2.0, SDL2 2.32.10, binutils 2.47, crt 14.0.0) and their dependencies, installed with `pacman -U` from verified downloads.",
+  "packages": [
+    {
+      "name": "mingw-w64-i686-SDL2",
+      "version": "2.32.10-1",
+      "file": "mingw-w64-i686-SDL2-2.32.10-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-SDL2-2.32.10-1-any.pkg.tar.zst",
+      "sha256": "81b39469a581fd4b1bd1d88785fbb02d5a46c9ef85343a620c8ae2f877ac6c42",
+      "size": 1523477
+    },
+    {
+      "name": "mingw-w64-i686-binutils",
+      "version": "2.47-3",
+      "file": "mingw-w64-i686-binutils-2.47-3-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-binutils-2.47-3-any.pkg.tar.zst",
+      "sha256": "f33f96e50eb2ac19b3511cd4ab1cd519c9efafa396d490d003210227e4f12451",
+      "size": 6561471
+    },
+    {
+      "name": "mingw-w64-i686-cc-libs",
+      "version": "16.2.0-4",
+      "file": "mingw-w64-i686-cc-libs-16.2.0-4-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-cc-libs-16.2.0-4-any.pkg.tar.zst",
+      "sha256": "0e8ba00279cf93c022c916816b378a836812b2c86688df720108fd3c332b5ce6",
+      "size": 2356
+    },
+    {
+      "name": "mingw-w64-i686-crt",
+      "version": "14.0.0.r426.g4564ee4b5-1",
+      "file": "mingw-w64-i686-crt-14.0.0.r426.g4564ee4b5-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-crt-14.0.0.r426.g4564ee4b5-1-any.pkg.tar.zst",
+      "sha256": "982490435a8b31f30e9a6c8ad11ce11f6183a6a0008f284850def26632bf0d29",
+      "size": 3355400
+    },
+    {
+      "name": "mingw-w64-i686-gcc",
+      "version": "16.2.0-4",
+      "file": "mingw-w64-i686-gcc-16.2.0-4-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-gcc-16.2.0-4-any.pkg.tar.zst",
+      "sha256": "048bb935f812c2e3d14f569fac08434d07874bfbff9bce913e17e593ecf91738",
+      "size": 51070729
+    },
+    {
+      "name": "mingw-w64-i686-gettext-runtime",
+      "version": "1.0-1",
+      "file": "mingw-w64-i686-gettext-runtime-1.0-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-gettext-runtime-1.0-1-any.pkg.tar.zst",
+      "sha256": "b096eb69be4710c74e1a568f8a6fc05acdaf5fd1cccdf3ba10b62bc74df1dde3",
+      "size": 427778
+    },
+    {
+      "name": "mingw-w64-i686-gmp",
+      "version": "6.3.0-2",
+      "file": "mingw-w64-i686-gmp-6.3.0-2-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-gmp-6.3.0-2-any.pkg.tar.zst",
+      "sha256": "cb23f87b33c20ae2de9638145a56bffdddf01a2afce2cb6dc43753d4e27bc448",
+      "size": 556034
+    },
+    {
+      "name": "mingw-w64-i686-headers",
+      "version": "14.0.0.r426.g4564ee4b5-1",
+      "file": "mingw-w64-i686-headers-14.0.0.r426.g4564ee4b5-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-headers-14.0.0.r426.g4564ee4b5-1-any.pkg.tar.zst",
+      "sha256": "25c8939031a016de3e97e7e13d6999ed764530ad0452cf6fa803f5cbe5cd1109",
+      "size": 6890697
+    },
+    {
+      "name": "mingw-w64-i686-isl",
+      "version": "0.28-1",
+      "file": "mingw-w64-i686-isl-0.28-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-isl-0.28-1-any.pkg.tar.zst",
+      "sha256": "df526ad433d959e5910e0f49f0343c61c992d5e8a7b28e27ca2bd8ffdf07304c",
+      "size": 1623830
+    },
+    {
+      "name": "mingw-w64-i686-libatomic",
+      "version": "16.2.0-4",
+      "file": "mingw-w64-i686-libatomic-16.2.0-4-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-libatomic-16.2.0-4-any.pkg.tar.zst",
+      "sha256": "ed452016f94d1090962cd19a49199334ef457ac60c44e295a18ba725a83b33c3",
+      "size": 25848
+    },
+    {
+      "name": "mingw-w64-i686-libgcc",
+      "version": "16.2.0-4",
+      "file": "mingw-w64-i686-libgcc-16.2.0-4-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-libgcc-16.2.0-4-any.pkg.tar.zst",
+      "sha256": "09fb7b5a39557d01517c392bbcec01f9dbd1079289a87befd6363f4ddc4957af",
+      "size": 100788
+    },
+    {
+      "name": "mingw-w64-i686-libiconv",
+      "version": "1.19-1",
+      "file": "mingw-w64-i686-libiconv-1.19-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-libiconv-1.19-1-any.pkg.tar.zst",
+      "sha256": "12307416cfe45b6fbe1fb29c28594590bb59883856edf41b043d0daf684e4668",
+      "size": 749421
+    },
+    {
+      "name": "mingw-w64-i686-libquadmath",
+      "version": "16.2.0-4",
+      "file": "mingw-w64-i686-libquadmath-16.2.0-4-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-libquadmath-16.2.0-4-any.pkg.tar.zst",
+      "sha256": "bf04f4ccb8966b7999c8d2a1c477e8bde3e649b2a7733b28e7eecea5b6bc497b",
+      "size": 186947
+    },
+    {
+      "name": "mingw-w64-i686-libstdc++",
+      "version": "16.2.0-4",
+      "file": "mingw-w64-i686-libstdc++-16.2.0-4-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-libstdc++-16.2.0-4-any.pkg.tar.zst",
+      "sha256": "c1469c1abe5bd49fd2ef737dbfd90f1a3a75527e732eee5c760f73f20e0a38f5",
+      "size": 862037
+    },
+    {
+      "name": "mingw-w64-i686-libwinpthread",
+      "version": "14.0.0.r426.g4564ee4b5-1",
+      "file": "mingw-w64-i686-libwinpthread-14.0.0.r426.g4564ee4b5-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-libwinpthread-14.0.0.r426.g4564ee4b5-1-any.pkg.tar.zst",
+      "sha256": "f057aff99ce2008e00f25ed579da849e9bb7affccf4a3b5757499c8306a5f94c",
+      "size": 39636
+    },
+    {
+      "name": "mingw-w64-i686-mpc",
+      "version": "1.4.1-1",
+      "file": "mingw-w64-i686-mpc-1.4.1-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-mpc-1.4.1-1-any.pkg.tar.zst",
+      "sha256": "200e0a7612c2b667507a03d08b51f45e12db8bfc076fd5185f7c58f2c8a9acde",
+      "size": 144139
+    },
+    {
+      "name": "mingw-w64-i686-mpfr",
+      "version": "4.2.2-3",
+      "file": "mingw-w64-i686-mpfr-4.2.2-3-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-mpfr-4.2.2-3-any.pkg.tar.zst",
+      "sha256": "87cd116c4e4deb2fe89b713c58e6c123c0b415ffff97d13ab2465bbca316c33c",
+      "size": 587470
+    },
+    {
+      "name": "mingw-w64-i686-tzdata",
+      "version": "2026e-1",
+      "file": "mingw-w64-i686-tzdata-2026e-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-tzdata-2026e-1-any.pkg.tar.zst",
+      "sha256": "8d80c7c262b982af54bb61471b5544cba361d761fe760d94f24eed8481d3d9d8",
+      "size": 226067
+    },
+    {
+      "name": "mingw-w64-i686-vulkan-loader",
+      "version": "1~1.4.357.0-1",
+      "file": "mingw-w64-i686-vulkan-loader-1~1.4.357.0-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-vulkan-loader-1~1.4.357.0-1-any.pkg.tar.zst",
+      "sha256": "2799de5c1e316dc76925fba6a2b5c99f508ede1273a5ecd73625c2b29fe2232c",
+      "size": 214712
+    },
+    {
+      "name": "mingw-w64-i686-windows-default-manifest",
+      "version": "20260815-1",
+      "file": "mingw-w64-i686-windows-default-manifest-20260815-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-windows-default-manifest-20260815-1-any.pkg.tar.zst",
+      "sha256": "286f32e4f875136121ae156710e0a0c22c6a698b7e1e346201fc99a8b761e44c",
+      "size": 2656
+    },
+    {
+      "name": "mingw-w64-i686-winpthreads",
+      "version": "14.0.0.r426.g4564ee4b5-1",
+      "file": "mingw-w64-i686-winpthreads-14.0.0.r426.g4564ee4b5-1-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-winpthreads-14.0.0.r426.g4564ee4b5-1-any.pkg.tar.zst",
+      "sha256": "c0be3db84a5a6731f3c4134b3f1b994466a89afda53e9dee8aa138b8671209dd",
+      "size": 48942
+    },
+    {
+      "name": "mingw-w64-i686-zlib",
+      "version": "1.3.2-2",
+      "file": "mingw-w64-i686-zlib-1.3.2-2-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-zlib-1.3.2-2-any.pkg.tar.zst",
+      "sha256": "03d1f7030adc892eb1ee8434f7201847093ff69b8ad9ff77a650d6dfae72083a",
+      "size": 110366
+    },
+    {
+      "name": "mingw-w64-i686-zstd",
+      "version": "1.5.7-2",
+      "file": "mingw-w64-i686-zstd-1.5.7-2-any.pkg.tar.zst",
+      "url": "https://mirror.msys2.org/mingw/i686/mingw-w64-i686-zstd-1.5.7-2-any.pkg.tar.zst",
+      "sha256": "e31d4194702b12f83b7b27b03fe4a68a5c2edc63dc4bd4689ab9d5a7bd8e5fff",
+      "size": 692343
+    }
+  ]
+}

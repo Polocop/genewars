@@ -1,0 +1,6 @@
+[
+  {
+    "argv": ["python", "-m", "unittest", "tests.test_dos_services"],
+    "suite": "general"
+  }
+]

@@ -1,0 +1,78 @@
+{
+  "schema": "gwrecomp-required-inputs/1",
+  "note": "Names and SHA-256 only. You must supply these files from your own legitimate copy of Gene Wars 1.1 (Europe release); they are never distributed. Paths are relative to GENEWARS_INSTALL_DIR.",
+  "install_files": [
+    {
+      "path": "CONFIG.INI",
+      "sha256": "e7a4728ff07332c2f04320fda202ac5521818a47453e670f9f2842767ef36798"
+    },
+    {
+      "path": "DATA/FILEEN.DAT",
+      "sha256": "98902c34587768832b1c40ddbccf8db8f2982f875c3ea8631170f15347a6cf40"
+    },
+    {
+      "path": "DATA/FILESCR.ANB",
+      "sha256": "33c9c1f394a249209ff20319490393afa844d46dec84455cf43aca5ff24cf957"
+    },
+    {
+      "path": "DATA/FILESCR.GLA",
+      "sha256": "a312c491d16681660ea42f719c6da39d4b9500b8efed72b68b00b2d5c5b6267b"
+    },
+    {
+      "path": "DATA/FILESCR.PAL",
+      "sha256": "997a3711fbed107cc0025fd30f15760345139dcdccc842c6433ce8fb2b29a5ec"
+    },
+    {
+      "path": "DATA/FONT2.DAT",
+      "sha256": "2f3d275f88f2ff6671562a819cbc7a791b16ad4510a4020f3b6078c917f60dba"
+    },
+    {
+      "path": "DATA/FONT2.TAB",
+      "sha256": "f54057e1b19cc1711a1596b6459cfdfb359a170f5ed739df71fd852befba4bab"
+    },
+    {
+      "path": "DATA/IFTITLE.ANB",
+      "sha256": "c7d2dfc5d774c69337436249ec74e4d0fa6ae1d06bd5ae785f9f73ee2ac0f707"
+    },
+    {
+      "path": "DATA/MAIN.GLA",
+      "sha256": "c5e12a5b4325c8302cab0fb3ba3aaa654e2e044131763298815766d8a6f47a58"
+    },
+    {
+      "path": "DATA/TEXT.DAT",
+      "sha256": "17fd1cc1eb502e629765ae7a18251750592871dcb7c76f95ad9a610858808c47"
+    },
+    {
+      "path": "DATA/TITLESCR.DAT",
+      "sha256": "2548b024fede333b49fc4011541939fc8ce294cb95b48cdb41ed7d0cec54a0b9"
+    },
+    {
+      "path": "DATA/TITLESCR.PAL",
+      "sha256": "d5ec91e731c2ff7e8d74dbbde6a3fe0410ec602ff0da52eb1e6f6bb1a44307c7"
+    },
+    {
+      "path": "GW.EXE",
+      "sha256": "2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f"
+    },
+    {
+      "path": "INTRO/BIOINTRO.SMK",
+      "sha256": "fcd3dcddb1ace394b882f240f8cec3625a57d471be5cd66f1db75e543688a4ef"
+    },
+    {
+      "path": "SAVE/SAVE0.SAV",
+      "sha256": "a174d375b625e1f0016eefade2e639b9366ff68608d3af62f51d971363a0a95e",
+      "optional": true
+    }
+  ],
+  "cue": {
+    "env": "GENEWARS_CUE",
+    "sha256": "1d417e3aed625d4f054b51054a1211562a19cd4f712b08e7846613517228a5b5",
+    "note": "CUE sheet of the CD image; the harness derives CD-DA track layout from it and checks this exact digest"
+  },
+  "map": {
+    "env": "GENEWARS_MAP",
+    "sha256": "30e06c203154904740c4ff3f1fcc4971fb6c0ef10ace2f4f9dc63367d45b99b3",
+    "note": "OPTIONAL private reference map (Watcom-format map with disassembler-generated names). Not needed to build: boundaries come from explicit roots and closure traversal and identifiers are address-based. If supplied it enables extra cross-checks (symbol identity at known addresses). Not part of the game install and not distributable.",
+    "optional": true
+  }
+}

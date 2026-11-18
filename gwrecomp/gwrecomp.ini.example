@@ -1,0 +1,46 @@
+; gwrecomp.ini (optional): copy this file to gwrecomp.ini next to gw_demo_sdl2.exe (<build root>\bin) or into the
+; build root, and edit it. It is read in play mode (--play) only. Command-line flags win when given explicitly:
+; --classic / --widescreen / --zoomout, --res, --fullscreen / --windowed, and scripts\play.ps1 -Fps.
+
+; zoomout   : 854x480 at 1.0x on a 1152x640 map canvas, wheel zoom 0.87x..2.0x, Home back to 1.0x
+; widescreen: 854x480, wheel zoom 1.0x..2.0x
+; classic   : the original 640x480
+mode = zoomout
+
+; window size in physical pixels: 2160p, 1440p, 1080p, 900p or WxH (the game still renders 640/854 x 480;
+; the output is GPU-scaled). auto or empty: the default window.
+resolution = 2160p
+
+; 1 = borderless fullscreen at the desktop resolution
+fullscreen = 0
+
+; presentation rate (30..240); the simulation keeps the game's own tick rate
+fps = 120
+
+; your own Gene Wars 1.1 GENEWARS folder; used when GENEWARS_INSTALL_DIR / gwrecomp.local.json do not set one
+; data_dir = C:\path\to\GENEWARS
+
+; ---- also written by the launcher (gw_demo_sdl2.exe started with no arguments, or play.ps1 -Launcher) ----
+; display filter, same as F7 in game (F7 updates this line): sharp, epx or crt
+filter = sharp
+; start value of the F8 turbo: 1, 2 or 4
+turbo = 1
+; 1 = WASD / arrow keys scroll the map; 1 = middle-button drag scrolls the map
+camera_keys = 1
+middle_drag = 1
+; 1 = skip the start-up videos
+skip_intro = 0
+; 1 = show the launcher when the program starts without arguments (--launcher always shows it, --fast-launch never)
+launcher = 1
+; mission selected in the launcher's mission list (1..24)
+last_mission = 1
+; .cue of your own Gene Wars CD image, for the CD music (else GENEWARS_CUE)
+; cd_cue = C:\path\to\genewars.cue
+; 1 = remove the 1-pixel slivers the original terrain drawing leaves on the planet's horizon (shown frame only)
+clean_horizon = 1
+; 1 = animated water ripples and caustics on the sea and soft highlights on GOOP, in missions only (presented frame
+;     only: the game itself is unchanged); not shown with the EPX filter
+water_effects = 1
+; 1 = enhanced audio: positional sound panning/distance fitted to the visible map (854 / zoom-out), +-4.5 % random
+;     pitch on sound effects (never on speech, videos or CD music), CD music lowered 30 % while a voice speaks
+enhanced_audio = 1

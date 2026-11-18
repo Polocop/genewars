@@ -1,0 +1,105 @@
+*** Begin Patch
+*** Update File: runtime/gw_dos_services.h
+@@
+ typedef struct gw_dos_services {
+     uint8_t major;
+     uint8_t minor;
+     uint16_t reserved;
++    struct gw_dos_descriptor *descriptors;
++    uint32_t descriptor_count;
++    uint32_t descriptor_capacity;
+ } gw_dos_services;
++
++typedef struct gw_dos_descriptor {
++    uint16_t selector;
++    uint16_t reserved;
++    uint32_t base;
++    uint32_t limit;
++} gw_dos_descriptor;
+@@
+ void gw_dos_services_init(gw_dos_services *services);
++/* Bind a selector to a guest linear base and inclusive byte limit. */
++int gw_dos_descriptor_bind(gw_dos_services *services, uint16_t selector,
++                           uint32_t base, uint32_t limit);
++void gw_dos_descriptor_clear(gw_dos_services *services);
++int gw_dos_descriptor_base(uint16_t selector, uint32_t *base, void *user);
+ gw_interrupt_result gw_dos_services_callback(uint8_t vector,
+*** End Patch
+*** Begin Patch
+*** Update File: runtime/gw_dos_services.c
+@@
+ #include "gw_dos_services.h"
+ #include "gw_interrupts.h"
++#include "gw_segments.h"
++#include <stdlib.h>
++
++int gw_dos_descriptor_bind(gw_dos_services *services, uint16_t selector,
++                           uint32_t base, uint32_t limit) {
++    if (!services || selector == 0 || limit == 0 || base > UINT32_MAX - limit)
++        return 0;
++    for (uint32_t i = 0; i < services->descriptor_count; ++i) {
++        if (services->descriptors[i].selector == selector) {
++            services->descriptors[i].base = base;
++            services->descriptors[i].limit = limit;
++            return 1;
++        }
++    }
++    if (services->descriptor_count == services->descriptor_capacity) {
++        uint32_t next = services->descriptor_capacity ? services->descriptor_capacity * 2u : 8u;
++        if (next < services->descriptor_capacity || next > UINT16_MAX) return 0;
++        gw_dos_descriptor *items = (gw_dos_descriptor *)realloc(
++            services->descriptors, (size_t)next * sizeof(*items));
++        if (!items) return 0;
++        services->descriptors = items;
++        services->descriptor_capacity = next;
++    }
++    gw_dos_descriptor *item = &services->descriptors[services->descriptor_count++];
++    item->selector = selector;
++    item->reserved = 0;
++    item->base = base;
++    item->limit = limit;
++    return 1;
++}
++
++void gw_dos_descriptor_clear(gw_dos_services *services) {
++    if (!services) return;
++    free(services->descriptors);
++    services->descriptors = 0;
++    services->descriptor_count = services->descriptor_capacity = 0;
++}
++
++int gw_dos_descriptor_base(uint16_t selector, uint32_t *base, void *user) {
++    gw_dos_services *services = (gw_dos_services *)user;
++    if (!services || !base || selector == 0) return 0;
++    if (selector == g_seg_cs) { *base = g_cs_base; return 1; }
++    if (selector == g_seg_ds) { *base = g_ds_base; return 1; }
++    if (selector == g_seg_es) { *base = g_es_base; return 1; }
++    if (selector == g_seg_ss) { *base = g_ss_base; return 1; }
++    if (selector == g_seg_fs) { *base = g_fs_base; return 1; }
++    if (selector == g_seg_gs) { *base = g_gs_base; return 1; }
++    for (uint32_t i = 0; i < services->descriptor_count; ++i) {
++        if (services->descriptors[i].selector == selector) {
++            *base = services->descriptors[i].base;
++            return 1;
++        }
++    }
++    return 0;
++}
+@@
+-        uint32_t base;
+-        if (selector == 0) goto invalid_selector;
+-        if (selector == g_seg_cs) base = g_cs_base;
+-        else if (selector == g_seg_ds) base = g_ds_base;
+-        else if (selector == g_seg_es) base = g_es_base;
+-        else if (selector == g_seg_ss) base = g_ss_base;
+-        else if (selector == g_seg_fs) base = g_fs_base;
+-        else if (selector == g_seg_gs) base = g_gs_base;
+-        else goto invalid_selector;
++        uint32_t base;
++        if (!gw_dos_descriptor_base(selector, &base, services)) goto invalid_selector;
+@@
+ void gw_dos_services_init(gw_dos_services *services) {
++    if (services) recomp_set_segment_resolver(gw_dos_descriptor_base, services);
+     gw_interrupt_set_callback(gw_dos_services_callback, services);
+ }
+*** End Patch
