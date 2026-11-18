@@ -60,6 +60,13 @@ static gw_cdda_state g_cdda;
 static volatile int g_cdda_enh,g_cdda_duck;
 static float g_cdda_gain=1.0f;
 void gw_cdda_set_enhanced(int on) { g_cdda_enh=on; }
+float gw_cdda_gain(void) { return g_cdda_gain; }
+const char *gw_cdda_status(void) {
+    static char s[96];
+    snprintf(s,sizeof s,"playing=%d paused=%d queued_bytes=%u",g_cdda.playing,g_cdda.paused,
+        g_cdda.device?SDL_GetQueuedAudioSize(g_cdda.device):0u);
+    return s;
+}
 void gw_cdda_set_duck(int on) {
     if(on!=g_cdda_duck) { g_cdda_duck=on; fprintf(stderr,"TRACE CDDA duck=%d\n",on); }
 }

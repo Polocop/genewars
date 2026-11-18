@@ -9131,7 +9131,12 @@ extern uint32_t g_gw_audio_scale_q8;
 static void enhanced_audio_tick(void) {
     const int on=g_cli_play_mode && g_ini_enhanced_audio;
     gw_vsb16_set_enhanced(on); gw_cdda_set_enhanced(on);
-    gw_cdda_set_duck(on && gw_vsb16_speech_playing());
+    {   static int last_duck=-1; const int duck=on && gw_vsb16_speech_playing();
+        if(duck!=last_duck) {
+            gw_flag_trace("TRACE enhanced_audio cdda_duck=%d music_gain=%.2f cdda_queue=%s%c",duck,gw_cdda_gain(),gw_cdda_status(),10);
+            last_duck=duck;
+        }
+        gw_cdda_set_duck(duck); }
     uint32_t q=256u;
     if(on) {
         const double z=g_zoom>0.1?g_zoom:1.0,vis=(double)(g_present_w-128)/z;
