@@ -8710,6 +8710,15 @@ static void host_zoom_tick(void) {
         if(d<0.002 && d>-0.002) { g_zoom=g_zoom_target; g_zoom_anim=0; }
         g_zoom_x=g_zoom_px-(g_zoom_ax-128.0)/g_zoom; g_zoom_y=g_zoom_py-g_zoom_ay/g_zoom;
     }
+    {   /* QA (GW_QA_ZOOM=<zoom>): once the zoom-out canvas is live, jump to that zoom (automated sharpness checks) */
+        static int qa_done; static double qa_zoom=-1.0;
+        if(qa_zoom<0.0) { const char *e=getenv("GW_QA_ZOOM"); qa_zoom=e&&e[0]?atof(e):0.0; }
+        if(!qa_done && qa_zoom>0.0 && g_canvas_live) {
+            qa_done=1; double z=qa_zoom<GW_ZOOM_MIN_CANVAS?GW_ZOOM_MIN_CANVAS:qa_zoom>2.0?2.0:qa_zoom;
+            g_zoom=g_zoom_target=z; g_zoom_anim=0; g_zoom_x=g_zoom_y=0.0;
+            gw_flag_trace("TRACE host_controls qa_zoom=%.2f%c",z,10);
+        }
+    }
     const double mw=(double)g_present_w-128.0;
     double minx=0.0,maxx=mw-mw/g_zoom,miny=0.0,maxy=480.0-480.0/g_zoom;
     if(g_zoom<1.0) {
