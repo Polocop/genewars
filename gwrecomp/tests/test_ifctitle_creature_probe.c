@@ -8584,7 +8584,13 @@ static int present_geo_compute(int ow,int oh,int lw,gw_present_geo *g) {
         return 1;
     }
     const double sx=(double)ow/lw,sy=(double)oh/480.0,sc=sx<sy?sx:sy;
-    int k=(int)sc; if(k<2) k=2; while(k>1 && (lw*k>8192 || 480*k>8192)) k--;
+    /* sharp bilinear by supersampling: nearest into a target of ceil(scale) x the logical size, then one linear
+       DOWNscale to the window, so pixel interiors stay solid and only the 1-subpixel seams blend (floor(scale) and a
+       linear UPscale, as before, softened every edge: x1.23 at 854 on a 2100 px window). The zoomed-out canvas is drawn
+       at zoom x k, so it gets one more step to keep its nearest columns even. */
+    int k=(int)sc; if((double)k<sc-1e-6) k++;
+    if(g_canvas_live && g_zoom<0.9999) k++;
+    if(k<2) k=2; while(k>1 && (lw*k>8192 || 480*k>8192)) k--;
     g->k=k; g->tw=lw*k; g->th=480*k;
     g->src=(SDL_Rect){0,0,g->tw,g->th};
     g->dst.w=(int)(lw*sc+0.5); g->dst.h=(int)(480.0*sc+0.5);
@@ -9608,7 +9614,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 for(int i=0;i<2;i++) if(!g_canvas_tex[i]) {
                     g_canvas_tex[i]=SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,
                         SDL_TEXTUREACCESS_STREAMING,GW_CANVAS_TEX_W,(int)GW_CANVAS_H);
-                    if(g_canvas_tex[i]) SDL_SetTextureScaleMode(g_canvas_tex[i],SDL_ScaleModeLinear);
+                    /* nearest: the canvas is drawn at zoom x k into the supersampled target; only the final target ->
+                       window copy filters (sharp bilinear). A linear canvas texture blurred the whole zoomed-out frame. */
+                    if(g_canvas_tex[i]) SDL_SetTextureScaleMode(g_canvas_tex[i],SDL_ScaleModeNearest);
                 }
                 if(g_canvas_tex[0] && g_canvas_tex[1]) {
                     SDL_Texture *t=g_canvas_tex[0]; g_canvas_tex[0]=g_canvas_tex[1]; g_canvas_tex[1]=t;   /* [0] previous, [1] current */
