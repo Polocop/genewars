@@ -41,6 +41,3 @@ clean_horizon = 1
 ; 1 = animated water ripples and caustics on the sea and soft highlights on GOOP, in missions only (presented frame
 ;     only: the game itself is unchanged); not shown with the EPX filter
 water_effects = 1
-; 1 = units, creatures and projectiles glide between game ticks at the 120 FPS presentation (shown frame only: the
-;     simulation is unchanged); off at fps = 60 and with the EPX filter
-unit_interp = 1

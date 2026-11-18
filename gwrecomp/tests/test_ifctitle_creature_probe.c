@@ -8460,7 +8460,6 @@ static char g_ini_path_used[MAX_PATH];
 static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launcher=1,g_ini_last_mission=1;
 static int g_ini_clean_horizon=1;   /* clean_horizon: drop 1-pixel horizon slivers from the presented frame */
 static int g_ini_water_effects=1;   /* water_effects: animated water ripples/caustics and GOOP highlights (presented frame only) */
-static int g_ini_unit_interp=1;     /* unit_interp: moving sprites drawn at 120 Hz in between game ticks (presented frame only) */
 static char g_ini_cd_cue[600];
 /* where the launcher writes: the file that was read, else gwrecomp.ini next to the executable */
 static void gwrecomp_ini_target(char *path,size_t n) {
@@ -8547,7 +8546,6 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"cd_cue")) snprintf(g_ini_cd_cue,sizeof g_ini_cd_cue,"%s",val);
         else if(!strcmp(key,"clean_horizon")) g_ini_clean_horizon=atoi(val)!=0;
         else if(!strcmp(key,"water_effects")) g_ini_water_effects=atoi(val)!=0;
-        else if(!strcmp(key,"unit_interp")) g_ini_unit_interp=atoi(val)!=0;
         else if(key[0]) fprintf(stderr,"gwrecomp.ini: unknown key '%s'\n",key);
     }
     fclose(f);
@@ -9152,12 +9150,9 @@ static void fx_classify(const uint8_t *pal) {
         g_fx_kind[k]=kind;
     }
 }
-static int ui_enabled(void) {   /* unit_interp: on in the 120 FPS presentation (fps unset or > 60) */
-    return g_ini_unit_interp && interp_enabled() && (g_ini_fps==0u || g_ini_fps>60u);
-}
 static int fx_active(const gw_interactive_visual_snapshot *v) {
-    return g_cli_play_mode && (g_ini_water_effects || ui_enabled()) && v && v->valid && v->fx_ring_valid &&
-           !g_terrain_modern_backend && g_tex_scale==1 && v->ring_left==128;
+    return g_cli_play_mode && g_ini_water_effects && v && v->valid && v->fx_ring_valid && !g_terrain_modern_backend &&
+           g_tex_scale==1 && v->ring_left==128;
 }
 /* source frame of the effect: the 1152x640 canvas (zoom-out) or the frame at its own pitch */
 static int fx_source(const gw_interactive_visual_snapshot *v,const uint8_t **src,int *pitch,int *rows) {
@@ -9220,168 +9215,14 @@ static void fx_row(uint32_t *out,int x0,int x1,int y,const gw_interactive_visual
         }
     }
 }
-/* ---- unit_interp (gwrecomp.ini, launcher PANTALLA): moving sprites at the presentation rate ----------------------
-   Presentation only: the guest simulation and its frames are untouched (a batch run never gets here). Each new game
-   frame is split into ground (pixel == map ring at its ring position) and sprite pixels; the sprite pixels are grouped
-   into 8-connected blobs (a unit with its shadow, a creature, a projectile). With the camera still between two game
-   frames, every blob is matched to the previous frame's blob that best overlaps it pixel for pixel within +-16 px
-   (search around the bounding-box offset), which gives its displacement d over one tick. A blob with no match (new,
-   recycled, teleported, changed beyond recognition, merged with a building) or a jump over 16 px keeps d = 0. Each
-   presented frame then draws the current frame with every moving blob taken off (the ring ground restored under it)
-   and drawn again shifted by -(1 - alpha) * d, alpha = time since the frame arrived / tick interval, so a unit glides
-   from its previous to its current position like the camera does; at alpha = 1 it is the game's frame exactly. */
-static char g_ui_dump_dir[700]; static unsigned g_ui_dump_left,g_ui_dump_index;   /* QA: stem uiburst_N */
-#define UI_MAXC 4096
-typedef struct { int16_t x0,y0,x1,y1; int32_t n,first; int16_t dx,dy; } ui_comp;
-static ui_comp *g_ui_c[2]; static int g_ui_n[2];
-static uint32_t *g_ui_px[2];        /* blob pixel offsets (y*pitch+x), grouped by blob */
-static int32_t *g_ui_lab[2];        /* blob number + 1 per pixel, 0 = ground */
-static uint8_t *g_ui_src[2],*g_ui_frame,*g_ui_mask;
-static int g_ui_cur,g_ui_have[2],g_ui_pitch[2],g_ui_rows[2],g_ui_rx[2],g_ui_ry[2],g_ui_moving;
-static uint64_t g_ui_t[2],g_ui_generation;
-static double g_ui_alpha=1.0;
-static int ui_alloc(void) {
-    if(g_ui_frame) return 1;
-    const size_t px=1152u*640u;
-    for(int i=0;i<2;i++) {
-        g_ui_c[i]=(ui_comp *)malloc(UI_MAXC*sizeof(ui_comp)); g_ui_px[i]=(uint32_t *)malloc(px*sizeof(uint32_t));
-        g_ui_lab[i]=(int32_t *)malloc(px*sizeof(int32_t)); g_ui_src[i]=(uint8_t *)malloc(px);
-        if(!g_ui_c[i] || !g_ui_px[i] || !g_ui_lab[i] || !g_ui_src[i]) return 0;
-    }
-    g_ui_mask=(uint8_t *)malloc(px); g_ui_frame=(uint8_t *)malloc(px);
-    return g_ui_mask && g_ui_frame;
-}
-static inline uint8_t ui_ring_at(const gw_interactive_visual_snapshot *v,int pitch,int rows,int x,int y) {
-    const int left=128,rw=pitch-left;
-    int rx=(x-left)+(v->ring_x-left); rx%=rw; if(rx<0) rx+=rw;
-    int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
-    return v->fx_ring[ry*pitch+left+rx];
-}
-static void ui_new_frame(const gw_interactive_visual_snapshot *v,const uint8_t *src,int pitch,int rows) {
-    const int c=g_ui_cur^=1,p=c^1,left=128,rw=pitch-left,x0=176;
-    const size_t total=(size_t)pitch*(size_t)rows;
-    memcpy(g_ui_src[c],src,total);
-    g_ui_pitch[c]=pitch; g_ui_rows[c]=rows; g_ui_rx[c]=v->ring_x; g_ui_ry[c]=v->ring_y; g_ui_t[c]=v->captured_at; g_ui_have[c]=1;
-    /* sprite mask, ring walked incrementally per row */
-    for(int y=0;y<rows;y++) {
-        int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
-        const uint8_t *rr=v->fx_ring+(size_t)ry*pitch+left;
-        int rx=(x0-left)+(v->ring_x-left); rx%=rw; if(rx<0) rx+=rw;
-        const uint8_t *s=src+(size_t)y*pitch; uint8_t *m=g_ui_mask+(size_t)y*pitch;
-        memset(m,0,(size_t)x0);
-        for(int x=x0;x<pitch;x++) { m[x]=s[x]!=rr[rx]; if(++rx==rw) rx=0; }
-    }
-    /* 8-connected blobs (breadth-first, the pixel list doubles as the queue) */
-    int32_t *lab=g_ui_lab[c]; uint32_t *px=g_ui_px[c]; ui_comp *cc=g_ui_c[c];
-    memset(lab,0,total*sizeof(int32_t));
-    int n=0; uint32_t used=0;
-    for(int y=0;y<rows && n<UI_MAXC;y++) for(int x=x0;x<pitch && n<UI_MAXC;x++) {
-        const uint32_t q0=(uint32_t)(y*pitch+x);
-        if(!g_ui_mask[q0] || lab[q0]) continue;
-        ui_comp *b=&cc[n]; b->first=(int32_t)used; b->x0=b->x1=(int16_t)x; b->y0=b->y1=(int16_t)y; b->dx=b->dy=0;
-        lab[q0]=n+1; px[used++]=q0;
-        for(uint32_t h=(uint32_t)b->first;h<used;h++) {
-            const int qx=(int)(px[h]%(uint32_t)pitch),qy=(int)(px[h]/(uint32_t)pitch);
-            if(qx<b->x0) b->x0=(int16_t)qx; if(qx>b->x1) b->x1=(int16_t)qx;
-            if(qy<b->y0) b->y0=(int16_t)qy; if(qy>b->y1) b->y1=(int16_t)qy;
-            for(int ny=qy-1;ny<=qy+1;ny++) for(int nx=qx-1;nx<=qx+1;nx++) {
-                if(nx<x0 || nx>=pitch || ny<0 || ny>=rows) continue;
-                const uint32_t nq=(uint32_t)(ny*pitch+nx);
-                if(g_ui_mask[nq] && !lab[nq]) { lab[nq]=n+1; px[used++]=nq; }
-            }
-        }
-        b->n=(int32_t)(used-(uint32_t)b->first); n++;
-    }
-    g_ui_n[c]=n;
-    /* displacement against the previous frame: camera still, same surface */
-    if(!g_ui_have[p] || g_ui_pitch[p]!=pitch || g_ui_rows[p]!=rows || g_ui_rx[p]!=v->ring_x || g_ui_ry[p]!=v->ring_y) return;
-    const ui_comp *pc=g_ui_c[p]; const int pn=g_ui_n[p]; const int32_t *plab=g_ui_lab[p]; const uint8_t *psrc=g_ui_src[p];
-    for(int k=0;k<n;k++) {
-        ui_comp *b=&cc[k];
-        if(b->n<6 || b->n>5000) continue;
-        const int bcx=(b->x0+b->x1)/2,bcy=(b->y0+b->y1)/2;
-        int best=0,bdx=0,bdy=0,bmin=0;
-        for(int j=0;j<pn;j++) {
-            const ui_comp *a=&pc[j];
-            if(a->n*2<b->n || a->n>b->n*2) continue;
-            const int ox=bcx-(a->x0+a->x1)/2,oy=bcy-(a->y0+a->y1)/2;
-            if(abs(ox)>16 || abs(oy)>16) continue;
-            for(int sy=oy-3;sy<=oy+3;sy++) for(int sx=ox-3;sx<=ox+3;sx++) {
-                if(abs(sx)>16 || abs(sy)>16) continue;
-                int score=0;
-                for(int i=0;i<b->n;i++) {
-                    const uint32_t q=g_ui_px[c][b->first+i];
-                    const int qx=(int)(q%(uint32_t)pitch)-sx,qy=(int)(q/(uint32_t)pitch)-sy;
-                    if(qx<x0 || qx>=pitch || qy<0 || qy>=rows) continue;
-                    const uint32_t pq=(uint32_t)(qy*pitch+qx);
-                    score+=plab[pq]==j+1 && psrc[pq]==g_ui_src[c][q];
-                }
-                if(score>best || (score==best && abs(sx)+abs(sy)<abs(bdx)+abs(bdy))) {
-                    best=score; bdx=sx; bdy=sy; bmin=a->n<b->n?a->n:b->n;
-                }
-            }
-        }
-        if(best>=4 && best*10>=bmin*4) { b->dx=(int16_t)bdx; b->dy=(int16_t)bdy; }
-    }
-}
-/* the current frame at alpha (0 = previous positions, 1 = the game's frame); NULL when nothing moves */
-static const uint8_t *ui_compose(const gw_interactive_visual_snapshot *v,int pitch,int rows) {
-    const int c=g_ui_cur,p=c^1;
-    g_ui_moving=0; g_ui_alpha=1.0;
-    if(!g_ui_have[c] || !g_ui_have[p] || g_ui_t[c]<=g_ui_t[p]) return NULL;
-    const uint64_t freq=SDL_GetPerformanceFrequency(),span=g_ui_t[c]-g_ui_t[p];
-    if(span>freq/5u) return NULL;                                     /* over 200 ms between frames: no glide */
-    const uint64_t now=SDL_GetPerformanceCounter();
-    double a=now>g_ui_t[c]?(double)(now-g_ui_t[c])/(double)span:0.0; if(a>1.0) a=1.0;
-    g_ui_alpha=a;
-    if(a>=1.0) return NULL;
-    const ui_comp *cc=g_ui_c[c]; const int n=g_ui_n[c]; const uint8_t *cur=g_ui_src[c];
-    int moving=0;
-    for(int k=0;k<n;k++) moving+=cc[k].dx || cc[k].dy;
-    if(!moving) return NULL;
-    memcpy(g_ui_frame,cur,(size_t)pitch*(size_t)rows);
-    for(int k=0;k<n;k++) {                                            /* take the moving blobs off the ground */
-        const ui_comp *b=&cc[k]; if(!b->dx && !b->dy) continue;
-        for(int i=0;i<b->n;i++) {
-            const uint32_t q=g_ui_px[c][b->first+i];
-            g_ui_frame[q]=ui_ring_at(v,pitch,rows,(int)(q%(uint32_t)pitch),(int)(q/(uint32_t)pitch));
-        }
-    }
-    for(int k=0;k<n;k++) {                                            /* and draw them where they were at alpha */
-        const ui_comp *b=&cc[k]; if(!b->dx && !b->dy) continue;
-        const double back=1.0-a;
-        const double fx=-back*b->dx,fy=-back*b->dy;
-        const int ox=(int)(fx>=0.0?fx+0.5:fx-0.5),oy=(int)(fy>=0.0?fy+0.5:fy-0.5);
-        for(int i=0;i<b->n;i++) {
-            const uint32_t q=g_ui_px[c][b->first+i];
-            const int tx=(int)(q%(uint32_t)pitch)+ox,ty=(int)(q/(uint32_t)pitch)+oy;
-            if(tx<176 || tx>=pitch || ty<0 || ty>=rows) continue;
-            g_ui_frame[(size_t)ty*pitch+tx]=cur[q];
-        }
-    }
-    g_ui_moving=moving;
-    return g_ui_frame;
-}
 /* Re-converts the map area (source x >= 176) of the current frame textures with the effect at the present time.
    x < 176 (HUD, panel art and its overlay split) is never written. */
 static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view_tex,int view_w,
                        SDL_Texture *canvas_tex,int canvas_ready) {
-    if(!fx_active(v)) { g_fx_have_anchor=0; g_ui_have[0]=g_ui_have[1]=0; g_ui_moving=0; return; }
+    if(!fx_active(v)) { g_fx_have_anchor=0; return; }
     const uint8_t *src; int pitch,rows;
     if(!fx_source(v,&src,&pitch,&rows)) return;
     fx_classify(v->palette);
-    if(ui_enabled() && ui_alloc()) {
-        if(v->generation!=g_ui_generation) { ui_new_frame(v,src,pitch,rows); g_ui_generation=v->generation; }
-        const uint8_t *f=ui_compose(v,pitch,rows);
-        if(f) src=f;    /* every row below (view and canvas) is taken from the interpolated frame */
-    } else { g_ui_have[0]=g_ui_have[1]=0; g_ui_moving=0; }
-    if(g_ui_dump_left) {   /* QA (GW_FRAME_DUMP_DIR, stem uiburst_N): the presented map frame, 8-bit, one file per frame */
-        char path[800]; snprintf(path,sizeof path,"%s/ui_%03u.raw",g_ui_dump_dir,g_ui_dump_index);
-        FILE *df=fopen(path,"wb"); if(df) { fwrite(src,1,(size_t)pitch*(size_t)rows,df); fclose(df); }
-        gw_flag_trace("TRACE uiburst %03u turn=%u generation=%llu alpha=%.3f moving_blobs=%d pitch=%d rows=%d%c",g_ui_dump_index,
-            v->turn,(unsigned long long)v->generation,g_ui_alpha,g_ui_moving,pitch,rows,10);
-        g_ui_dump_index++; g_ui_dump_left--;
-    }
     if(v->generation!=g_fx_last_generation) {
         if(g_fx_have_anchor) {
             const int rw=pitch-128;
@@ -9402,9 +9243,9 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
     if(view_tex && view_w>176) {
         const int w=view_w-176;
         for(int y=0;y<480;y++) {
-            uint32_t *o=g_fx_row+(size_t)y*(size_t)w; const uint8_t *row=src+(size_t)y*pitch;
+            uint32_t *o=g_fx_row+(size_t)y*(size_t)w; const uint8_t *row=(v->canvas_valid?v->wscreen+(size_t)y*v->wscreen_pitch:src+(size_t)y*pitch);
             for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
-            if(g_ini_water_effects) fx_row(o,176,view_w,y,v,src,pitch,rows,lut,tq);
+            fx_row(o,176,view_w,y,v,src,pitch,rows,lut,tq);
         }
         const SDL_Rect r={176,0,w,480};
         (void)SDL_UpdateTexture(view_tex,&r,g_fx_row,w*(int)sizeof(uint32_t));
@@ -9413,9 +9254,9 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
     if(canvas_tex && canvas_ready && v->canvas_valid) {
         const int w=(int)GW_CANVAS_W-176;
         for(int y=0;y<(int)GW_CANVAS_H;y++) {
-            uint32_t *o=g_fx_row+(size_t)y*(size_t)w; const uint8_t *row=src+(size_t)y*GW_CANVAS_W;
+            uint32_t *o=g_fx_row+(size_t)y*(size_t)w; const uint8_t *row=v->canvas+(size_t)y*GW_CANVAS_W;
             for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
-            if(g_ini_water_effects) fx_row(o,176,(int)GW_CANVAS_W,y,v,src,pitch,rows,lut,tq);
+            fx_row(o,176,(int)GW_CANVAS_W,y,v,src,pitch,rows,lut,tq);
         }
         const SDL_Rect r={176-128,0,w,(int)GW_CANVAS_H};
         (void)SDL_UpdateTexture(canvas_tex,&r,g_fx_row,w*(int)sizeof(uint32_t));
@@ -9804,8 +9645,6 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 char out[900]; snprintf(out,sizeof out,"%s/%s.bmp",dump_dir,stem);
                 /* stems starting with pres_ capture the composed window output (after interpolation and pointer) */
                 /* stem burst_<N>: the next N composed window frames go to <dir>/burst_000.bmp.. (QA, scroll artefacts) */
-                if(!strncmp(stem,"uiburst_",8)) { const int nb=atoi(stem+8); snprintf(g_ui_dump_dir,sizeof g_ui_dump_dir,"%s",dump_dir);
-                    g_ui_dump_left=(unsigned)(nb>0&&nb<=400?nb:60); g_ui_dump_index=0u; } else
                 if(!strncmp(stem,"burst_",6)) { const int nb=atoi(stem+6); snprintf(g_present_burst_dir,sizeof g_present_burst_dir,"%s",dump_dir);
                     g_present_burst_left=(unsigned)(nb>0&&nb<=400?nb:60); g_present_burst_index=0u; } else
                 if(!strncmp(stem,"pres_",5)) snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s",out); else {
@@ -10174,8 +10013,6 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         }
     }
     if(!g_present_dump_path[0] && g_present_burst_left) {
-        gw_flag_trace("TRACE burst %03u turn=%u generation=%llu alpha=%.3f moving_blobs=%d%c",g_present_burst_index,
-            visual?visual->turn:0u,visual?(unsigned long long)visual->generation:0ull,g_ui_alpha,g_ui_moving,10);
         snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s/burst_%03u.bmp",g_present_burst_dir,g_present_burst_index++);
         g_present_burst_left--;
     }
@@ -17800,7 +17637,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         const uint32_t ring=*(const uint32_t *)(memory+0x002EECA0u);
         const uint32_t rw=canvas?GW_CANVAS_W:pitch,rh=canvas?GW_CANVAS_H:480u;
         g_interactive_published_snapshot.fx_ring_valid=0;
-        if(g_cli_play_mode && (g_ini_water_effects || g_ini_unit_interp) && ring && ring<=GUEST_LIMIT-rw*rh && rw*rh<=sizeof g_interactive_published_snapshot.fx_ring &&
+        if(g_cli_play_mode && g_ini_water_effects && ring && ring<=GUEST_LIMIT-rw*rh && rw*rh<=sizeof g_interactive_published_snapshot.fx_ring &&
            *(const uint32_t *)(memory+0x002EF7E8u)==0x0035FE9Au && !*(const uint32_t *)(memory+0x002EF7ECu) &&
            *(const uint16_t *)(memory+map_guest+0x1Du)==128u) {
             memcpy(g_interactive_published_snapshot.fx_ring,memory+ring,(size_t)rw*rh);
@@ -19564,41 +19401,37 @@ static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
 }
 static void gl_draw_display(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
-    /* rows every 36 units: 58, 94, 130, 166, 202, 238, 274, 310 (panel 52..352) */
+    /* rows every 41 units: 60, 101, 142, 183, 224, 265, 306 (panel 52..352) */
     static const wchar_t *const modes[3]={L"CLÁSICO 4:3",L"PANORÁMICO 854×480",L"ZOOM OUT 1152×640"};
-    gl_row_label(58,L"MODO DE VISTA",L"Zoom: rueda; Inicio = 1x");
+    gl_row_label(60,L"MODO DE VISTA",L"Zoom: rueda; Inicio = 1x");
     int cur=g_ws_canvas?2:g_ws_requested?1:0;
-    int c=gl_choice(228,58,390,24,modes,3,cur,0u);
+    int c=gl_choice(228,60,390,24,modes,3,cur,0u);
     if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
     static const wchar_t *const res[5]={L"AUTO",L"900p",L"1080p",L"1440p",L"2160p"};
     unsigned dis=0u; for(int i=1;i<5;i++) if(GL.desk_w && (gl_res_w[i]>GL.desk_w || gl_res_h[i]>GL.desk_h)) dis|=1u<<i;
-    gl_row_label(94,L"RESOLUCIÓN",L"Tamaño de la ventana");
-    cur=gl_res_index(); c=gl_choice(228,94,390,24,res,5,cur,dis);
+    gl_row_label(101,L"RESOLUCIÓN",L"Tamaño de la ventana");
+    cur=gl_res_index(); c=gl_choice(228,101,390,24,res,5,cur,dis);
     if(c>=0 && c!=cur) { g_cli_res_w=gl_res_w[c]; g_cli_res_h=gl_res_h[c]; (void)gwrecomp_ini_set("resolution",gl_res_ini[c]); }
     static const wchar_t *const fs[2]={L"VENTANA",L"COMPLETA SIN BORDES"};
-    gl_row_label(130,L"PANTALLA",L"Sin bordes = escritorio");
-    c=gl_choice(228,130,390,24,fs,2,g_cli_fullscreen,0u);
+    gl_row_label(142,L"PANTALLA",L"Sin bordes = escritorio");
+    c=gl_choice(228,142,390,24,fs,2,g_cli_fullscreen,0u);
     if(c>=0 && c!=g_cli_fullscreen) { g_cli_fullscreen=c; gwrecomp_ini_set_int("fullscreen",c); }
     static const wchar_t *const fps[2]={L"60 FPS CLÁSICO",L"120 FPS INTERPOLADO"};
-    gl_row_label(166,L"FOTOGRAMAS",L"El ritmo del juego no cambia");
-    cur=g_ini_fps==60u?0:1; c=gl_choice(228,166,390,24,fps,2,cur,0u);
+    gl_row_label(183,L"FOTOGRAMAS",L"El ritmo del juego no cambia");
+    cur=g_ini_fps==60u?0:1; c=gl_choice(228,183,390,24,fps,2,cur,0u);
     if(c>=0 && c!=cur) { g_ini_fps=c?120u:60u; gwrecomp_ini_set_int("fps",(int)g_ini_fps); }
     static const wchar_t *const flt[3]={L"NÍTIDO",L"EPX SUAVE",L"CRT"};
-    gl_row_label(202,L"FILTRO (F7)",L"También con F7 al jugar");
-    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,202,390,24,flt,3,cur,0u);
+    gl_row_label(224,L"FILTRO (F7)",L"También con F7 al jugar");
+    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,224,390,24,flt,3,cur,0u);
     if(c>=0 && c!=cur) { g_filter_mode=c; (void)gwrecomp_ini_set("filter",g_filter_names[c]); }
     static const wchar_t *const hz[2]={L"ORIGINAL",L"LIMPIO"};
-    gl_row_label(238,L"HORIZONTE",L"Quita píxeles sueltos");
-    c=gl_choice(228,238,390,24,hz,2,g_ini_clean_horizon,0u);
+    gl_row_label(265,L"HORIZONTE",L"Quita píxeles sueltos");
+    c=gl_choice(228,265,390,24,hz,2,g_ini_clean_horizon,0u);
     if(c>=0 && c!=g_ini_clean_horizon) { g_ini_clean_horizon=c; gwrecomp_ini_set_int("clean_horizon",c); }
     static const wchar_t *const fx[2]={L"NO",L"SÍ"};
-    gl_row_label(274,L"EFECTOS AGUA / GOOP",L"Olas y brillos animados");
-    c=gl_choice(228,274,390,24,fx,2,g_ini_water_effects,0u);
+    gl_row_label(306,L"EFECTOS AGUA / GOOP",L"Olas y brillos animados");
+    c=gl_choice(228,306,390,24,fx,2,g_ini_water_effects,0u);
     if(c>=0 && c!=g_ini_water_effects) { g_ini_water_effects=c; gwrecomp_ini_set_int("water_effects",c); }
-    static const wchar_t *const ui[2]={L"NO",L"SÍ"};
-    gl_row_label(310,L"UNIDADES 120 HZ",L"Movimiento suave a 120 FPS");
-    c=gl_choice(228,310,390,24,ui,2,g_ini_unit_interp,0u);
-    if(c>=0 && c!=g_ini_unit_interp) { g_ini_unit_interp=c; gwrecomp_ini_set_int("unit_interp",c); }
 }
 static void gl_draw_controls(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
