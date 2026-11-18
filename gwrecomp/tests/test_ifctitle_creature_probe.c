@@ -7923,6 +7923,10 @@ typedef struct gw_interactive_visual_snapshot {
     uint8_t canvas[1152u*640u];
     uint8_t canvas_panel[480u*48u];  /* x=128..175 of the canvas: 1 = panel art (differs from the map ring there) */
     int canvas_valid;
+    /* water_effects: the map ring at publication (terrain only, no Things), to tell ground pixels from sprites */
+    uint8_t fx_ring[1152u*640u];
+    uint32_t fx_ring_w,fx_ring_h;
+    int fx_ring_valid;
     gw_info_overlay info;
     uint64_t generation;
     uint64_t captured_at;
@@ -8455,6 +8459,7 @@ static unsigned g_ini_fps;   /* gwrecomp.ini fps = N (play mode) */
 static char g_ini_path_used[MAX_PATH];
 static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launcher=1,g_ini_last_mission=1;
 static int g_ini_clean_horizon=1;   /* clean_horizon: drop 1-pixel horizon slivers from the presented frame */
+static int g_ini_water_effects=1;   /* water_effects: animated water ripples/caustics and GOOP highlights (presented frame only) */
 static char g_ini_cd_cue[600];
 /* where the launcher writes: the file that was read, else gwrecomp.ini next to the executable */
 static void gwrecomp_ini_target(char *path,size_t n) {
@@ -8540,6 +8545,7 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"last_mission")) { const int v=atoi(val); if(v>=1 && v<=24) g_ini_last_mission=v; }
         else if(!strcmp(key,"cd_cue")) snprintf(g_ini_cd_cue,sizeof g_ini_cd_cue,"%s",val);
         else if(!strcmp(key,"clean_horizon")) g_ini_clean_horizon=atoi(val)!=0;
+        else if(!strcmp(key,"water_effects")) g_ini_water_effects=atoi(val)!=0;
         else if(key[0]) fprintf(stderr,"gwrecomp.ini: unknown key '%s'\n",key);
     }
     fclose(f);
@@ -9115,6 +9121,147 @@ static double interactive_duration_limit(void) {
 }
 
 SDL_Window *gw_smk_adopt_window(void);   /* defined with the Smacker window code */
+/* ---- water_effects (gwrecomp.ini, launcher PANTALLA): presentation-only water ripples/caustics and GOOP highlights
+   Runs on the host's copy of the published frame, never on guest memory. Only ground pixels are touched: a pixel is
+   ground when it equals the map ring (MapDisplay's terrain buffer, no Things) at its ring position, so units,
+   buildings, the placement preview, the HUD and its panel art keep their exact original pixels. Palette ranges
+   measured in mission 1 (Exceland): ocean 51..70 (dark teal ramp), GOOP sparkle ramp 7..44 (blue-violet); an index
+   only takes part while the current palette still gives it that hue, so a planet whose palette uses those slots for
+   something else is left alone. The phase is anchored to the world through the ring scroll (x + ring_x stays fixed
+   on a world point), so the waves stay on the sea while the camera moves. Redrawn on every presented frame. */
+enum { FX_NONE=0, FX_WATER=1, FX_GOOP=2 };
+static uint8_t g_fx_kind[256];
+static uint8_t g_fx_palette[768];
+static int g_fx_palette_ok;
+static int16_t g_fx_sin[1024];      /* sin * 4096, 1024 steps per turn */
+static int64_t g_fx_wx,g_fx_wy;     /* unwrapped ring scroll: world x = x + g_fx_wx */
+static int g_fx_last_rx,g_fx_last_ry,g_fx_have_anchor;
+static uint64_t g_fx_last_generation;
+static uint32_t *g_fx_row;
+static void fx_classify(const uint8_t *pal) {
+    if(g_fx_palette_ok && !memcmp(g_fx_palette,pal,768)) return;
+    memcpy(g_fx_palette,pal,768); g_fx_palette_ok=1;
+    if(!g_fx_sin[256]) for(int i=0;i<1024;i++) g_fx_sin[i]=(int16_t)(SDL_sin((double)i*(2.0*3.14159265358979323846/1024.0))*4096.0);
+    for(int k=0;k<256;k++) {
+        const int r=pal[k*3],g=pal[k*3+1],b=pal[k*3+2];
+        uint8_t kind=FX_NONE;
+        if(k>=51 && k<=70 && b>=r && g>=r && g+b>2*r) kind=FX_WATER;          /* teal / dark cyan sea */
+        else if(k>=7 && k<=44 && b>r && b+2>=g) kind=FX_GOOP;                /* blue-violet GOOP sparkle */
+        g_fx_kind[k]=kind;
+    }
+}
+static int fx_active(const gw_interactive_visual_snapshot *v) {
+    return g_cli_play_mode && g_ini_water_effects && v && v->valid && v->fx_ring_valid && !g_terrain_modern_backend &&
+           g_tex_scale==1 && v->ring_left==128;
+}
+/* source frame of the effect: the 1152x640 canvas (zoom-out) or the frame at its own pitch */
+static int fx_source(const gw_interactive_visual_snapshot *v,const uint8_t **src,int *pitch,int *rows) {
+    if(v->canvas_valid) { *src=v->canvas; *pitch=(int)GW_CANVAS_W; *rows=(int)GW_CANVAS_H; }
+    else { *src=v->wscreen; *pitch=(int)v->wscreen_pitch; *rows=480; }
+    return (uint32_t)*pitch==v->fx_ring_w && (uint32_t)*rows==v->fx_ring_h;
+}
+static inline int fx_ground(const gw_interactive_visual_snapshot *v,const uint8_t *src,int pitch,int rows,int x,int y) {
+    const int left=128,rw=pitch-left;
+    if(x<left || x>=pitch || y<0 || y>=rows) return 0;
+    int rx=(x-left)+(v->ring_x-left); rx%=rw; if(rx<0) rx+=rw;
+    int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
+    return src[y*pitch+x]==v->fx_ring[ry*pitch+left+rx];
+}
+#define FX_S(p) ((int)g_fx_sin[(unsigned)(p)&1023u])
+/* writes the effect into out[0..x1-x0) for source row y, columns x0..x1-1 (out already holds lut[] of the row) */
+static void fx_row(uint32_t *out,int x0,int x1,int y,const gw_interactive_visual_snapshot *v,const uint8_t *src,
+                   int pitch,int rows,const uint32_t *lut,int tq) {
+    const int wy=(int)(y+g_fx_wy);
+    const uint8_t *row=src+y*pitch;
+    for(int x=x0;x<x1;x++) {
+        const uint8_t k=row[x]; const uint8_t kind=g_fx_kind[k];
+        if(!kind || !fx_ground(v,src,pitch,rows,x,y)) continue;
+        const int wx=(int)(x+g_fx_wx);
+        if(kind==FX_WATER) {
+            /* two sine waves at different frequencies, ~1.2 px horizontally and ~0.6 px vertically (x4096) */
+            const int dxq=(FX_S(wy*24+tq*5)*13+FX_S((wx+wy)*13-tq*7/2)*7)/20;            /* -4096..4096 */
+            const int dyq=FX_S(wx*19+tq*9/2);
+            const int dx=(dxq*12/10+(dxq>=0?2048:-2048))/4096,dy=(dyq*6/10+(dyq>=0?2048:-2048))/4096;
+            uint8_t ks=k;
+            if(dx || dy) {
+                const int sx=x+dx,sy=y+dy;
+                if(sx>=128 && sx<pitch && sy>=0 && sy<rows) {
+                    const uint8_t c=src[sy*pitch+sx];
+                    if(g_fx_kind[c]==FX_WATER && fx_ground(v,src,pitch,rows,sx,sy)) ks=c;   /* never pulls from land or sprites */
+                }
+            }
+            /* caustics: product of two drifting waves, squared, up to +12% brightness */
+            const int c1=FX_S(wx*31+wy*17+tq*5/2),c2=FX_S(-wx*23+wy*29+tq*3);
+            int cq=(c1+4096)*(c2+4096)/16384;            /* 0..4096 */
+            cq=cq*cq/4096; cq=cq*cq/4096;                  /* sharpen to thin bright lines */
+            const uint32_t p=lut[ks];
+            const int boost=4096+cq*12/100;
+            int r=(int)((p>>16)&255u)*boost/4096+cq/400,g=(int)((p>>8)&255u)*boost/4096+cq/256,b=(int)(p&255u)*boost/4096+cq/256;
+            if(r>255) r=255; if(g>255) g=255; if(b>255) b=255;
+            out[x-x0]=0xFF000000u|((uint32_t)r<<16)|((uint32_t)g<<8)|(uint32_t)b;
+        } else {
+            /* GOOP: a slow soft specular band with a gentle iridescent tint, additive and capped */
+            int s=FX_S(wx*9+wy*6+tq);                      /* -4096..4096 */
+            if(s<=0) continue;
+            s=s*s/4096; s=s*s/4096; s=s*s/4096;            /* ^8: narrow highlight */
+            const int hue=tq*2+wx*5-wy*3;
+            const int ir=2048+FX_S(hue)/2,ig=2048+FX_S(hue+341)/2,ib=2048+FX_S(hue+683)/2;   /* 0..4096 each */
+            const uint32_t p=lut[k];
+            int r=(int)((p>>16)&255u)+s*ir/4096*70/4096,g=(int)((p>>8)&255u)+s*ig/4096*70/4096,b=(int)(p&255u)+s*ib/4096*80/4096;
+            if(r>255) r=255; if(g>255) g=255; if(b>255) b=255;
+            out[x-x0]=0xFF000000u|((uint32_t)r<<16)|((uint32_t)g<<8)|(uint32_t)b;
+        }
+    }
+}
+/* Re-converts the map area (source x >= 176) of the current frame textures with the effect at the present time.
+   x < 176 (HUD, panel art and its overlay split) is never written. */
+static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view_tex,int view_w,
+                       SDL_Texture *canvas_tex,int canvas_ready) {
+    if(!fx_active(v)) { g_fx_have_anchor=0; return; }
+    const uint8_t *src; int pitch,rows;
+    if(!fx_source(v,&src,&pitch,&rows)) return;
+    fx_classify(v->palette);
+    if(v->generation!=g_fx_last_generation) {
+        if(g_fx_have_anchor) {
+            const int rw=pitch-128;
+            int d=v->ring_x-g_fx_last_rx; d%=rw; if(d>rw/2) d-=rw; if(d<-rw/2) d+=rw;
+            int e=v->ring_y-g_fx_last_ry; e%=rows; if(e>rows/2) e-=rows; if(e<-rows/2) e+=rows;
+            g_fx_wx+=d; g_fx_wy+=e;
+        } else { g_fx_wx=v->ring_x; g_fx_wy=v->ring_y; }
+        g_fx_last_rx=v->ring_x; g_fx_last_ry=v->ring_y; g_fx_last_generation=v->generation; g_fx_have_anchor=1;
+    }
+    uint32_t lut[256];
+    for(unsigned k=0;k<256u;k++)
+        lut[k]=0xFF000000u|((uint32_t)v->palette[k*3u+0u]*255u/63u<<16)|((uint32_t)v->palette[k*3u+1u]*255u/63u<<8)|((uint32_t)v->palette[k*3u+2u]*255u/63u);
+    const uint64_t freq=SDL_GetPerformanceFrequency();
+    const int tq=(int)((SDL_GetPerformanceCounter()%(freq*4096u))*64u/freq);   /* 64 steps per second, wraps */
+    if(!g_fx_row) g_fx_row=(uint32_t *)malloc(1152u*640u*sizeof(uint32_t));
+    if(!g_fx_row) return;
+    /* the 640/854-wide view: view (x,y) is source (x,y) for x >= 176 in every mode */
+    if(view_tex && view_w>176) {
+        const int w=view_w-176;
+        for(int y=0;y<480;y++) {
+            uint32_t *o=g_fx_row+(size_t)y*(size_t)w; const uint8_t *row=(v->canvas_valid?v->wscreen+(size_t)y*v->wscreen_pitch:src+(size_t)y*pitch);
+            for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
+            fx_row(o,176,view_w,y,v,src,pitch,rows,lut,tq);
+        }
+        const SDL_Rect r={176,0,w,480};
+        (void)SDL_UpdateTexture(view_tex,&r,g_fx_row,w*(int)sizeof(uint32_t));
+    }
+    /* the zoom-out canvas texture (canvas x 128.. at texture x 0..): map area from canvas x 176 */
+    if(canvas_tex && canvas_ready && v->canvas_valid) {
+        const int w=(int)GW_CANVAS_W-176;
+        for(int y=0;y<(int)GW_CANVAS_H;y++) {
+            uint32_t *o=g_fx_row+(size_t)y*(size_t)w; const uint8_t *row=v->canvas+(size_t)y*GW_CANVAS_W;
+            for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
+            fx_row(o,176,(int)GW_CANVAS_W,y,v,src,pitch,rows,lut,tq);
+        }
+        const SDL_Rect r={176-128,0,w,(int)GW_CANVAS_H};
+        (void)SDL_UpdateTexture(canvas_tex,&r,g_fx_row,w*(int)sizeof(uint32_t));
+    }
+}
+#undef FX_S
+
 static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *palette,
                                        const char *capture_path,int upload_texture,
                                        const gw_interactive_visual_snapshot *visual) {
@@ -9457,6 +9604,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             }
         }
     }
+    /* water_effects: every presented frame, map area of the current textures re-converted with the effect */
+    if(visual && !g_terrain_modern_backend)
+        fx_refresh(visual,g_ifclevel_demo_texture,g_present_w,g_canvas_tex[1],g_canvas_live && g_canvas_tex_ready);
     {   /* QA aid (opt-in, read-only): GW_ORDER_TRACE=<file>. Once per presented frame, samples a few guest fields that decide
            whether a map click becomes an order (selected specialist, MapDisplay candidate/flags, the 11-byte action packet) and
            appends a line whenever one of them changes. Never writes guest memory. Local diagnostics only. */
@@ -17481,6 +17631,18 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
     g_interactive_published_snapshot.ring_x=*(int16_t *)(memory+map_guest+0x08u);
     g_interactive_published_snapshot.ring_y=*(int16_t *)(memory+map_guest+0x0Au);
     g_interactive_published_snapshot.ring_left=*(int16_t *)(memory+map_guest+0x1Du);
+    {   /* water_effects: missions only (IFCMain current, no pending interface); the ring at the frame's own pitch */
+        const uint32_t ring=*(const uint32_t *)(memory+0x002EECA0u);
+        const uint32_t rw=canvas?GW_CANVAS_W:pitch,rh=canvas?GW_CANVAS_H:480u;
+        g_interactive_published_snapshot.fx_ring_valid=0;
+        if(g_cli_play_mode && g_ini_water_effects && ring && ring<=GUEST_LIMIT-rw*rh && rw*rh<=sizeof g_interactive_published_snapshot.fx_ring &&
+           *(const uint32_t *)(memory+0x002EF7E8u)==0x0035FE9Au && !*(const uint32_t *)(memory+0x002EF7ECu) &&
+           *(const uint16_t *)(memory+map_guest+0x1Du)==128u) {
+            memcpy(g_interactive_published_snapshot.fx_ring,memory+ring,(size_t)rw*rh);
+            g_interactive_published_snapshot.fx_ring_w=rw; g_interactive_published_snapshot.fx_ring_h=rh;
+            g_interactive_published_snapshot.fx_ring_valid=1;
+        }
+    }
     {   const uint32_t ring=*(const uint32_t *)(memory+0x002EECA0u);
         const uint32_t rw=canvas?GW_CANVAS_W:pitch,rh=canvas?GW_CANVAS_H:480u;
         const uint32_t ox=canvas?(uint32_t)(GW_CANVAS_VX0-128):0u,oy=canvas?(uint32_t)GW_CANVAS_VY0:0u;
@@ -19237,6 +19399,7 @@ static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
 }
 static void gl_draw_display(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
+    /* rows every 41 units: 60, 101, 142, 183, 224, 265, 306 (panel 52..352) */
     static const wchar_t *const modes[3]={L"CLÁSICO 4:3",L"PANORÁMICO 854×480",L"ZOOM OUT 1152×640"};
     gl_row_label(60,L"MODO DE VISTA",L"Zoom: rueda; Inicio = 1x");
     int cur=g_ws_canvas?2:g_ws_requested?1:0;
@@ -19244,25 +19407,29 @@ static void gl_draw_display(void) {
     if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
     static const wchar_t *const res[5]={L"AUTO",L"900p",L"1080p",L"1440p",L"2160p"};
     unsigned dis=0u; for(int i=1;i<5;i++) if(GL.desk_w && (gl_res_w[i]>GL.desk_w || gl_res_h[i]>GL.desk_h)) dis|=1u<<i;
-    gl_row_label(108,L"RESOLUCIÓN",L"Tamaño de la ventana");
-    cur=gl_res_index(); c=gl_choice(228,108,390,24,res,5,cur,dis);
+    gl_row_label(101,L"RESOLUCIÓN",L"Tamaño de la ventana");
+    cur=gl_res_index(); c=gl_choice(228,101,390,24,res,5,cur,dis);
     if(c>=0 && c!=cur) { g_cli_res_w=gl_res_w[c]; g_cli_res_h=gl_res_h[c]; (void)gwrecomp_ini_set("resolution",gl_res_ini[c]); }
     static const wchar_t *const fs[2]={L"VENTANA",L"COMPLETA SIN BORDES"};
-    gl_row_label(156,L"PANTALLA",L"Sin bordes = escritorio");
-    c=gl_choice(228,156,390,24,fs,2,g_cli_fullscreen,0u);
+    gl_row_label(142,L"PANTALLA",L"Sin bordes = escritorio");
+    c=gl_choice(228,142,390,24,fs,2,g_cli_fullscreen,0u);
     if(c>=0 && c!=g_cli_fullscreen) { g_cli_fullscreen=c; gwrecomp_ini_set_int("fullscreen",c); }
     static const wchar_t *const fps[2]={L"60 FPS CLÁSICO",L"120 FPS INTERPOLADO"};
-    gl_row_label(204,L"FOTOGRAMAS",L"El ritmo del juego no cambia");
-    cur=g_ini_fps==60u?0:1; c=gl_choice(228,204,390,24,fps,2,cur,0u);
+    gl_row_label(183,L"FOTOGRAMAS",L"El ritmo del juego no cambia");
+    cur=g_ini_fps==60u?0:1; c=gl_choice(228,183,390,24,fps,2,cur,0u);
     if(c>=0 && c!=cur) { g_ini_fps=c?120u:60u; gwrecomp_ini_set_int("fps",(int)g_ini_fps); }
     static const wchar_t *const flt[3]={L"NÍTIDO",L"EPX SUAVE",L"CRT"};
-    gl_row_label(252,L"FILTRO (F7)",L"También con F7 al jugar");
-    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,252,390,24,flt,3,cur,0u);
+    gl_row_label(224,L"FILTRO (F7)",L"También con F7 al jugar");
+    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,224,390,24,flt,3,cur,0u);
     if(c>=0 && c!=cur) { g_filter_mode=c; (void)gwrecomp_ini_set("filter",g_filter_names[c]); }
     static const wchar_t *const hz[2]={L"ORIGINAL",L"LIMPIO"};
-    gl_row_label(300,L"HORIZONTE",L"Quita píxeles sueltos");
-    c=gl_choice(228,300,390,24,hz,2,g_ini_clean_horizon,0u);
+    gl_row_label(265,L"HORIZONTE",L"Quita píxeles sueltos");
+    c=gl_choice(228,265,390,24,hz,2,g_ini_clean_horizon,0u);
     if(c>=0 && c!=g_ini_clean_horizon) { g_ini_clean_horizon=c; gwrecomp_ini_set_int("clean_horizon",c); }
+    static const wchar_t *const fx[2]={L"NO",L"SÍ"};
+    gl_row_label(306,L"EFECTOS AGUA / GOOP",L"Olas y brillos animados");
+    c=gl_choice(228,306,390,24,fx,2,g_ini_water_effects,0u);
+    if(c>=0 && c!=g_ini_water_effects) { g_ini_water_effects=c; gwrecomp_ini_set_int("water_effects",c); }
 }
 static void gl_draw_controls(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);

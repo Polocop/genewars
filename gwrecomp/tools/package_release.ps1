@@ -113,6 +113,7 @@ fullscreen = 0
 fps = 120
 filter = sharp
 clean_horizon = 1
+water_effects = 1
 launcher = 1
 skip_intro = 0
 ; your Gene Wars 1.1 folder (the launcher's CAMBIAR button fills this in)

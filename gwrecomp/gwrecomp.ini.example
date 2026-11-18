@@ -38,3 +38,6 @@ last_mission = 1
 ; cd_cue = C:\path\to\genewars.cue
 ; 1 = remove the 1-pixel slivers the original terrain drawing leaves on the planet's horizon (shown frame only)
 clean_horizon = 1
+; 1 = animated water ripples and caustics on the sea and soft highlights on GOOP, in missions only (presented frame
+;     only: the game itself is unchanged); not shown with the EPX filter
+water_effects = 1
