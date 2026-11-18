@@ -9190,13 +9190,15 @@ static void fx_row(uint32_t *out,int x0,int x1,int y,const gw_interactive_visual
                     if(g_fx_kind[c]==FX_WATER && fx_ground(v,src,pitch,rows,sx,sy)) ks=c;   /* never pulls from land or sprites */
                 }
             }
-            /* caustics: product of two drifting waves, squared, up to +12% brightness */
-            const int c1=FX_S(wx*31+wy*17+tq*5/2),c2=FX_S(-wx*23+wy*29+tq*3);
-            int cq=(c1+4096)*(c2+4096)/16384;            /* 0..4096 */
-            cq=cq*cq/4096; cq=cq*cq/4096;                  /* sharpen to thin bright lines */
+            /* glints: the zero-crossing ridge of one domain-warped wave gives long wavy streaks that drift and bend
+               (no crossed waves, so no regular lattice of dots), brightening the water's own colour by up to 7%,
+               without adding white */
+            const int warp=FX_S(wy*9+tq*2)/56+FX_S(wx*7-tq*3)/72;               /* about +-130 phase units */
+            int cq=4096-abs(FX_S(wx*11+wy*5+warp+tq*2));                         /* 0..4096, high on the ridge */
+            cq=cq*cq/4096; cq=cq*cq/4096;                                        /* narrow the streak */
             const uint32_t p=lut[ks];
-            const int boost=4096+cq*12/100;
-            int r=(int)((p>>16)&255u)*boost/4096+cq/400,g=(int)((p>>8)&255u)*boost/4096+cq/256,b=(int)(p&255u)*boost/4096+cq/256;
+            const int boost=4096+cq*7/100;
+            int r=(int)((p>>16)&255u)*boost/4096,g=(int)((p>>8)&255u)*boost/4096,b=(int)(p&255u)*boost/4096;
             if(r>255) r=255; if(g>255) g=255; if(b>255) b=255;
             out[x-x0]=0xFF000000u|((uint32_t)r<<16)|((uint32_t)g<<8)|(uint32_t)b;
         } else {
