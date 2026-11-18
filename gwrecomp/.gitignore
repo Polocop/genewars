@@ -9,3 +9,13 @@ third_party/
 work/
 evidence/
 dist/
+# run-time output and diagnostics (never committed)
+*.log
+*.sav
+*.SAV
+*.mem
+*.raw
+placement-*/
+snap.req
+# a local gwrecomp.ini holds your own paths; gwrecomp.ini.example is the template
+/gwrecomp.ini
