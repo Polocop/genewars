@@ -3266,7 +3266,7 @@ if partial:
     #  * 0x7C6B0 derives the camera centre from the surface width; it must stay at the 640 centre (x=384).
     widescreen_rules = []
     ws_site_rules = []   # (site, old, new): replace inside every lifted copy of that instruction
-    ws_every_copy = {0x22F58}   # rules applied to every lifted copy of their instruction (IFCMain draw is lifted twice)
+    ws_every_copy = {0x22F58, 0x234A5}   # IFCMain draw is lifted twice
     def ws_rule(original: str, replacement: str, optional: bool = False) -> None:
         widescreen_rules.append((original, replacement, optional))
     ws_width = "MEM32(DS_BASE + (0x376A78))"
@@ -3352,6 +3352,12 @@ if partial:
     ws_rule("    if (!gw_recomp_guest_instruction(0x00022F58u)) return;",
             "    if (!gw_recomp_guest_instruction(0x00022F58u)) return;\n"
             "    if (g_gw_ws_after_map) g_gw_ws_after_map(); /* 0x00022F58: after MapDisplay::Draw (HUD pass follows) */")
+    ws_rule("    if (!gw_recomp_guest_instruction(0x00024C98u)) return;",
+            "    if (!gw_recomp_guest_instruction(0x00024C98u)) return;\n"
+            "    if (g_gw_ws_info_begin) g_gw_ws_info_begin(esi);")
+    ws_rule("    if (!gw_recomp_guest_instruction(0x000234A5u)) return;",
+            "    if (!gw_recomp_guest_instruction(0x000234A5u)) return;\n"
+            "    if (g_gw_ws_info_end) g_gw_ws_info_end();")
     # 0x79D00 (request a whole redraw) fills the 20 MapDisplay strip levels with 2; fill the extension too
     ws_rule("    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;",
             "    if (!gw_recomp_guest_instruction(0x00079D1Cu)) return;\n"
@@ -3483,6 +3489,9 @@ if partial:
         (0x8AA08, "MEM8(DS_BASE + (edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(edx - ecx, ecx))"),
         (0x8ACAE, "MEM8(DS_BASE + (ecx + edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(ecx, edx))"),
         (0x8ACCE, "MEM8(DS_BASE + (edx + 0x376BF8))", "MEM8(GW_WS_GRID_EA(edx - LO8(eax), LO8(eax)))"),
+        # 0x99231 stores the level read at 0x99262. EAX holds row*5 and ECX holds the column.
+        # On the 36x20 canvas the old store can write into another row or past the original grid.
+        (0x99231, "MEM8(DS_BASE + (ecx + eax * 4 + 0x376BF8))", "MEM8(GW_WS_GRID_EA(eax * 4u, ecx))"),
         (0x99262, "MEM8(DS_BASE + (eax + 0x376BF8))", "MEM8(GW_WS_GRID_EA(eax - LO8(edx), LO8(edx)))"),
         (0x99CB4, "MEM8(DS_BASE + (edi + eax + 0x376BF8))", "MEM8(GW_WS_GRID_EA(edi, eax))"),
         (0x99CE6, "MEM8(DS_BASE + (eax + 0x376BF8))", "MEM8(GW_WS_GRID_EA(eax - edi, edi))"),
@@ -3563,6 +3572,8 @@ if partial:
             "#define GW_WS_POOL_CAP(md) ((g_gw_ws_drawpool && (uint32_t)(md) == 0x00346D70u) ? GW_WS_DRAWPOOL_ENTRIES : 0x100u)\n"
             "void (*g_gw_ws_band_copy)(void) = 0;\n"
             "void (*g_gw_ws_after_map)(void) = 0;\n"
+            "void (*g_gw_ws_info_begin)(uint32_t) = 0;\n"
+            "void (*g_gw_ws_info_end)(void) = 0;\n"
             "#define GW_WS_STRIP_FLAG(base_reg, index) (((uint32_t)(index) < 20u || !g_gw_ws_strip_ext) ? \\\n"
             "    (uint32_t)(DS_BASE + ((base_reg) + 0x11BDu)) : (uint32_t)(g_gw_ws_strip_ext + ((uint32_t)(index) - 20u)))\n"
             "#define GW_WS_STRIPS ((MEM32(DS_BASE + (0x376A78)) + 31u) >> 5)\n"

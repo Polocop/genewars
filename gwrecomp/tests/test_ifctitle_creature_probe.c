@@ -7900,6 +7900,13 @@ static uint32_t *g_ifclevel_demo_rgba;
 #define GW_INTERACTIVE_WORLD_BYTES (128u*128u*14u)
 #define GW_MODERN_HUD_WIDTH 176u /* measured right edge of the original panel in the 640x480 frame */
 #define GW_INTERACTIVE_KEY_QUEUE 512u
+#define GW_INFO_WIDTH 640u
+#define GW_INFO_HEIGHT 480u
+typedef struct gw_info_overlay {
+    unsigned width,height;
+    uint16_t pixels[GW_INFO_WIDTH*GW_INFO_HEIGHT]; /* palette index + 1, or transparent */
+} gw_info_overlay;
+static gw_info_overlay g_info_overlay;
 typedef struct gw_interactive_visual_snapshot {
     uint8_t wscreen[GW_INTERACTIVE_WSCREEN_BYTES];
     uint8_t palette[768u];
@@ -7916,6 +7923,7 @@ typedef struct gw_interactive_visual_snapshot {
     uint8_t canvas[1152u*640u];
     uint8_t canvas_panel[480u*48u];  /* x=128..175 of the canvas: 1 = panel art (differs from the map ring there) */
     int canvas_valid;
+    gw_info_overlay info;
     uint64_t generation;
     uint64_t captured_at;
     int valid;
@@ -8049,6 +8057,42 @@ static void terrain_build_palette_lut(const uint8_t *palette,uint32_t lut[256]) 
         const uint32_t b=(uint32_t)palette[i*3u+2u]*255u/63u;
         lut[i]=0xFF000000u|(r<<16)|(g<<8)|b;
     }
+}
+static int present_info_overlay(SDL_Renderer *renderer,const gw_interactive_visual_snapshot *visual,
+                                const SDL_Rect *view,int view_width) {
+    static SDL_Texture *texture;
+    static uint64_t uploaded;
+    const gw_info_overlay *info=&visual->info;
+    if(!info->width || !info->height) return 1;
+    if(!texture) {
+        texture=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,
+                                  GW_INFO_WIDTH,GW_INFO_HEIGHT);
+        if(!texture) return 0;
+        SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);
+    }
+    const SDL_Rect source={0,0,(int)info->width,(int)info->height};
+    if(uploaded!=visual->generation) {
+        uint32_t lut[256];
+        terrain_build_palette_lut(visual->palette,lut);
+        void *pixels;
+        int pitch;
+        if(SDL_LockTexture(texture,&source,&pixels,&pitch)!=0) return 0;
+        for(unsigned y=0;y<info->height;y++) {
+            uint32_t *row=(uint32_t *)((uint8_t *)pixels+y*pitch);
+            for(unsigned x=0;x<info->width;x++) {
+                const uint16_t index=info->pixels[y*info->width+x];
+                row[x]=index?lut[index-1u]:0u;
+            }
+        }
+        SDL_UnlockTexture(texture);
+        uploaded=visual->generation;
+    }
+    /* The original centres the panel in the whole game view, including the HUD. */
+    const int x=(view_width-source.w)/2;
+    const int y=(480-source.h)/2;
+    const SDL_Rect dest={view->x+x*view->w/view_width,view->y+y*view->h/480,
+        source.w*view->w/view_width,source.h*view->h/480};
+    return SDL_RenderCopy(renderer,texture,&source,&dest)==0;
 }
 
 static int env_dimension(const char *name,int fallback,int minimum,int maximum) {
@@ -9664,6 +9708,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         const int map_ok=SDL_RenderCopyF(g_ifclevel_demo_renderer,g_terrain_cache_texture,NULL,&map_dst)==0;
         SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
         if(!map_ok) { fprintf(stderr,"SDL interpolated terrain copy: %s\n",SDL_GetError()); return 0; }
+    }
+    if(visual && !present_info_overlay(g_ifclevel_demo_renderer,visual,&dst,g_present_w)) {
+        fprintf(stderr,"SDL information overlay: %s\n",SDL_GetError()); return 0;
     }
     if(scaled) {
         SDL_SetRenderTarget(g_ifclevel_demo_renderer,NULL);
@@ -15448,6 +15495,27 @@ static int ws_ring_source(const uint8_t *m,uint32_t width,uint32_t height,uint32
     *at=(uint32_t)ry*width+(uint32_t)(left+rx);
     return 1;
 }
+/* Called after the normal ring blit (0x7C765/0x7C76E), before the object
+   draw passes and the Engineer preview. Copy all map pixels, including the
+   legacy grid, in at most two spans per row. The four left columns are HUD. */
+static void ws_restore_map(uint8_t *dst,const uint8_t *ring,
+                                     int ring_x,int ring_y) {
+    const unsigned left=128u, width=GW_CANVAS_W, height=GW_CANVAS_H;
+    const int map_width=(int)(width-left);
+    int rx=(ring_x-(int)left)%map_width;
+    if(rx<0) rx+=map_width;
+    int ry=ring_y%(int)height;
+    if(ry<0) ry+=(int)height;
+    const unsigned first=(unsigned)(map_width-rx);
+    for(unsigned y=0;y<height;y++) {
+        const uint8_t *src=ring+(unsigned)ry*width+left;
+        uint8_t *row=dst+y*width+left;
+        memcpy(row,src+rx,first);
+        if(rx) memcpy(row+first,src,(unsigned)rx);
+        if(++ry==(int)height) ry=0;
+    }
+}
+
 static void ws_band_copy_impl(void) {
     uint8_t *m=guest_memory; if(!m) return;
     const uint32_t width=*(const uint32_t *)(m+0x00376A78u),height=*(const uint32_t *)(m+0x00376A7Cu);
@@ -15461,6 +15529,22 @@ static void ws_band_copy_impl(void) {
     const int ring_x=(int)*(const int16_t *)(m+map+0x08u),ring_y=(int)*(const int16_t *)(m+map+0x0Au);
     const int ring_w=(int)width-left;
     if(ring_w<=0 || left>640) return;
+    if(width==GW_CANVAS_W && height==GW_CANVAS_H && left==128 &&
+       g_gw_ws_grid_ext && g_gw_ws_grid_ext<=GUEST_LIMIT-720u) {
+        /* Refresh the extended map background on every IFCMain draw. Camera
+           motion also invalidates pixels behind informational overlays, whose
+           draw lifetime is independent of the Engineer placement preview. */
+        ws_restore_map(m+ws,m+ring,ring_x,ring_y);
+        /* Redraw objects over the restored ground. Cell levels here are for
+           sprite passes only and never gate the background copy. */
+        for(unsigned r=0;r<20u;r++) for(unsigned c=4u;c<36u;c++) {
+            uint8_t *cell=r<15u && c<20u ? m+0x00376BF8u+r*20u+c :
+                m+g_gw_ws_grid_ext+r*36u+c;
+            if(!*cell) *cell=1u;
+        }
+        g_ws_band_copies++;
+        return;
+    }
     int rx0=(640-left)+(ring_x-left); rx0%=ring_w; if(rx0<0) rx0+=ring_w;
     const uint32_t band=width-640u;
     const uint32_t first=(uint32_t)(ring_w-rx0)<band?(uint32_t)(ring_w-rx0):band;
@@ -17336,6 +17420,9 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
        map_guest+0x14u>GUEST_LIMIT) return;
     SDL_LockMutex(g_interactive_snapshot_mutex);
     g_interactive_published_snapshot.canvas_valid=0;
+    if(g_info_overlay.width) g_interactive_published_snapshot.info=g_info_overlay;
+    else g_interactive_published_snapshot.info.width=0;
+    g_info_overlay.width=0;
     g_interactive_published_snapshot.ring_w=(int)pitch-*(const int16_t *)(memory+map_guest+0x1Du);
     g_interactive_published_snapshot.ring_h=canvas?(int)GW_CANVAS_H:480;
     if(canvas) {
@@ -17696,6 +17783,47 @@ static void ws_live_viewport_gadget_h(uint8_t *memory,uint16_t left,uint16_t h) 
     gw_flag_trace("TRACE widescreen viewport_gadget y=%u h=%u%c",*(const uint16_t *)(memory+g+0x2Eu),*gh,10);
 }
 extern void (*g_gw_ws_after_map)(void);   /* lifter hook at 0x22F58, after MapDisplay::Draw in the IFCMain draw */
+extern void (*g_gw_ws_info_begin)(uint32_t),(*g_gw_ws_info_end)(void);
+static uint8_t g_info_background[GW_INFO_WIDTH*GW_INFO_HEIGHT];
+static uint32_t g_info_screen;
+static unsigned g_info_pitch,g_info_x,g_info_y,g_info_w,g_info_h;
+
+/* 0x24C60 lays out the original panel around (320,240), using the size of
+   its frame sprite. Keep those coordinates for all its guest draw calls. */
+static void info_before_draw(uint32_t sprite) {
+    g_info_w=0;
+    if(!guest_memory || !sprite || sprite>GUEST_LIMIT-8u) return;
+    const uint8_t *m=guest_memory;
+    const unsigned w=*(const uint16_t *)(m+sprite+4u),h=*(const uint16_t *)(m+sprite+6u);
+    const unsigned pitch=*(const uint32_t *)(m+0x00376A78u);
+    const uint32_t screen=*(const uint32_t *)(m+0x00376A5Cu);
+    if((pitch!=864u && pitch!=GW_CANVAS_W) || !screen || screen>GUEST_LIMIT-pitch*480u ||
+       w<=10u || w>GW_INFO_WIDTH || h<=10u || h>GW_INFO_HEIGHT) return;
+    g_info_screen=screen; g_info_pitch=pitch;
+    g_info_x=320u-w/2u; g_info_y=240u-h/2u;
+    g_info_w=w; g_info_h=h;
+    for(unsigned y=0;y<h;y++)
+        memcpy(g_info_background+y*w,m+screen+(g_info_y+y)*pitch+g_info_x,w);
+}
+
+/* Remove the panel from the world frame before publication. Its opaque
+   interior starts five pixels in (0x24CCD..0x24CD3 clears it to black). */
+static void info_after_draw(void) {
+    if(!g_info_w) return;
+    const unsigned w=g_info_w,h=g_info_h;
+    g_info_w=0;
+    if(!guest_memory || *(const uint32_t *)(guest_memory+0x00376A5Cu)!=g_info_screen) return;
+    for(unsigned y=0;y<h;y++) {
+        uint8_t *row=guest_memory+g_info_screen+(g_info_y+y)*g_info_pitch+g_info_x;
+        const uint8_t *background=g_info_background+y*w;
+        for(unsigned x=0;x<w;x++) {
+            const int inside=x>=5u && x<w-5u && y>=5u && y<h-5u;
+            g_info_overlay.pixels[y*w+x]=(inside || row[x]!=background[x])?row[x]+1u:0u;
+        }
+        memcpy(row,background,w);
+    }
+    g_info_overlay.width=w; g_info_overlay.height=h;
+}
 /* Sentinel pass: right after MapDisplay::Draw (0x22F58) the canvas strip x=128..175, y<480 is saved and filled
    with a sentinel byte; whatever the rest of the frame (the HUD) paints there is no longer the sentinel when the
    frame is published, which gives the panel-art pixels whatever routine drew them; the sentinel pixels get their
@@ -17800,6 +17928,7 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x00376A7Cu)=H;
         *(uint32_t *)(memory+0x002EECA0u)=g_ws_live_ring;
         g_gw_ws_strip_ext=g_ws_live_flags; g_gw_ws_band_copy=ws_band_copy_impl;
+        g_gw_ws_info_begin=info_before_draw; g_gw_ws_info_end=info_after_draw;
         memset(memory+g_ws_live_pool,0,GW_WS_DRAWPOOL_BYTES); g_gw_ws_drawpool=g_ws_live_pool;
         memset(memory+g_ws_live_grid,2u,720u); g_gw_ws_grid_ext=g_ws_live_grid;   /* all cells redrawn */
         if(g_ws_canvas) { memset(memory+g_ws_live_buckets,0,4u*GW_CANVAS_H); g_gw_ws_buckets=g_ws_live_buckets; }
@@ -17829,6 +17958,8 @@ static void ws_live_update(uint8_t *memory,const gw_recomp_context *parked) {
         *(uint32_t *)(memory+0x002DA110u)=640u; *(uint32_t *)(memory+0x002DA114u)=640u; *(uint32_t *)(memory+0x002DA118u)=480u;
         g_gw_ws_strip_ext=0u; g_gw_ws_band_copy=NULL; g_gw_ws_drawpool=0u; g_gw_ws_grid_ext=0u; g_gw_ws_buckets=0u;
         g_gw_ws_after_map=NULL; hud_sentinel_reset();
+        g_gw_ws_info_begin=NULL; g_gw_ws_info_end=NULL;
+        g_info_w=0; g_info_overlay.width=0;
         if(g_ws_canvas) ws_live_viewport_gadget_h(memory,*(const uint16_t *)(memory+map+0x1Du),480u);
         if(!ws_live_game_redraw(memory,parked)) { ws_live_request_redraw(memory,640u); memory[0x00346D70u+0x11D5u]=1u; }
         ws_live_viewport_gadget(memory,*(const uint16_t *)(memory+map+0x1Du),640u);
