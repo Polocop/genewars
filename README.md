@@ -1,11 +1,40 @@
 # GWRecomp v1.0 — Gene Wars, natively on Windows
 
+<p align="center">
+  <img src="gwrecomp/docs/screenshots/widescreen.png" alt="Mission 1 in widescreen 854x480: an extractor built on the GOOP field and the translucent placement ghost of the next one" width="100%">
+  <br><em>Mission 1 (Exceland) in widescreen 854×480: an extractor on the GOOP field, the next one being placed, animated sea</em>
+</p>
+
 **GWRecomp** runs *Gene Wars* (Bullfrog Productions, 1996, version 1.1) as a native Win32 program, without DOSBox.
 The original x86-32 DOS4GW executable is statically lifted to C and runs on a modern host layer (SDL2 video, audio
 and input, DOS/DPMI services, a virtual Sound Blaster for the game's own Miles mixer, CD-DA playback). The game logic,
 AI and mixer are the original code; the host only replaces the hardware and DOS around it.
 
-It needs **your own copy of Gene Wars 1.1**: no game data is included (see [Legal](#legal)).
+It needs **your own copy of Gene Wars 1.1**: no game files are included (see [Legal](#legal)).
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="gwrecomp/docs/screenshots/zoomout.png" alt="Zoom Out on the 1152x640 canvas at 0.87x"></td>
+    <td width="50%"><img src="gwrecomp/docs/screenshots/classic.png" alt="Classic 640x480"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Zoom Out: the 1152×640 map canvas at 0.87×, sharp scaling</em></td>
+    <td align="center"><em>Classic 640×480, as in 1996</em></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="gwrecomp/docs/screenshots/launcher-play.png" alt="Native launcher: mission selection"></td>
+    <td width="50%"><img src="gwrecomp/docs/screenshots/launcher-display.png" alt="Native launcher: display options"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Native launcher: start, continue or pick any of the 24 missions</em></td>
+    <td align="center"><em>Display options: view mode, resolution, 60/120 FPS, filter, water and GOOP</em></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="gwrecomp/docs/screenshots/planet.png" alt="Planet system screen" width="60%"><br><em>The original planet-system screen, with its sounds</em></td>
+  </tr>
+</table>
 
 The source lives in [`gwrecomp/`](gwrecomp/README.md). This repository is a fork of
 [mefistotelis/genewars](https://github.com/mefistotelis/genewars), whose engine re-implementation is kept unchanged
@@ -94,7 +123,8 @@ completa, 60/120 FPS, filtro, `water_effects`, `enhanced_audio`). Para la músic
 holders.
 
 - **This repository** contains no game executable, data, video, audio, disc image or extracted game code. It contains
-  the host layer, the lifter and the tools that translate *your* `GW.EXE` at build time.
+  the host layer, the lifter and the tools that translate *your* `GW.EXE` at build time, plus a few screenshots in
+  `gwrecomp/docs/screenshots/` that show the game's graphics for illustration only.
 - **A built `gwrecomp.exe`** is that translation compiled: it contains native code derived from the original Gene
   Wars program. It contains none of the game's data (graphics, sounds, videos, levels, speech), which are always read
   from your own `GENEWARS` folder. Whether a prebuilt binary may be redistributed is a question for the rights
