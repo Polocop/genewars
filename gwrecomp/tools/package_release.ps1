@@ -8,7 +8,7 @@
    work\                    only the install SHA-256 manifest; gwrecomp.exe makes the guest image (from the player's
                             GW.EXE) and the DOS low-memory image on its first start
    gwrecomp.ini             default settings (zoomout, auto, 120 fps, launcher on); gwrecomp.ini.example; README_INSTALL.txt
-   licenses\                SDL2's license and the project's third-party notices
+   licenses\                GWRecomp's MIT license, SDL2's license and the third-party notices
    package_manifest.txt     build id, commit, SHA-256 of every file
  Double-click gwrecomp.exe: the launcher opens (with the folder picker for the player's Gene Wars 1.1 folder).
  -Test starts dist\<Name>\gwrecomp.exe with no arguments and a PATH that holds only Windows folders, checks that the
@@ -126,6 +126,7 @@ $sdlLicense = Join-Path (Split-Path -Parent $mingwBin) 'share\licenses\SDL2\LICE
 if (Test-Path -LiteralPath $sdlLicense) { Copy-Item -LiteralPath $sdlLicense -Destination (Join-Path $out 'licenses\SDL2-LICENSE.txt') }
 else { Fail "SDL2 license not found at $sdlLicense" }
 Copy-Item -LiteralPath (Join-Path $repo 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $out 'licenses')
+Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $out 'licenses\GWRecomp-LICENSE.txt')   # MIT, GWRecomp's own work only (scope in the file)
 $readme = @'
 GWRecomp - Gene Wars recompilado de forma nativa para Windows
 =============================================================
@@ -166,6 +167,9 @@ DÓNDE QUEDA CADA COSA
   play.stdout.log, play.stderr.log, gw_flags.log   registros de la última sesión
   gwrecomp.ini                 configuración (gwrecomp.ini.example explica cada clave)
 
+SI WINDOWS LO BLOQUEA
+  gwrecomp.exe no está firmado: si sale «Windows protegió su PC», pulsa Más información → Ejecutar de todas formas.
+
 PRIMER ARRANQUE
   La primera vez que entras en el juego, gwrecomp.exe prepara en work\ dos archivos que necesita: los genera a partir
   de TU GW.EXE (el de la carpeta GENEWARS, comprobado por SHA-256) y de estructuras de DOS propias. Tarda un momento y
@@ -202,6 +206,9 @@ IN-GAME KEYS
 
 CD MUSIC
   Optional: add  cd_cue = C:\path\to\your\genewars.cue  (your own CD image) to gwrecomp.ini.
+
+IF WINDOWS BLOCKS IT
+  gwrecomp.exe is not code-signed: if "Windows protected your PC" appears, click More info → Run anyway.
 
 FIRST START
   The first time you enter the game, gwrecomp.exe makes two files in work\ from YOUR GW.EXE (checked by SHA-256).

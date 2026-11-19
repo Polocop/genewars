@@ -85,6 +85,11 @@ GitHub issues are kept in [gwrecomp/docs/issues-archive.md](gwrecomp/docs/issues
    DATA / LEVELS / SOUND / INTRO turn green. The **ES / EN** buttons at the top switch the launcher's language.
 4. Start the game, continue the last game, or pick a mission.
 
+**"Windows protected your PC":** `gwrecomp.exe` is not code-signed, so Windows SmartScreen may stop it the first
+time. Click **More info → Run anyway**. If Windows blocks the downloaded zip as a whole, right-click it before
+unzipping → **Properties** → tick **Unblock** → **OK**. You can check the file against the SHA-256 published with
+each release.
+
 **First start:** the first time you enter the game, `gwrecomp.exe` prepares two files in `work\` from *your* `GW.EXE`
 (checked by SHA-256). It takes a moment and happens once. Those files come from your copy of the game: do not share
 them.
@@ -120,6 +125,11 @@ Building from source (Windows, MSYS2 mingw32, Python, LLVM clang) is described i
    lanzador.
 4. Inicia el juego, continúa la última partida o elige una misión.
 
+**«Windows protegió su PC»:** `gwrecomp.exe` no está firmado digitalmente, así que SmartScreen puede detenerlo la
+primera vez. Pulsa **Más información → Ejecutar de todas formas**. Si Windows bloquea el zip descargado, antes de
+descomprimirlo haz clic derecho → **Propiedades** → marca **Desbloquear** → **Aceptar**. Puedes comprobar el archivo
+con el SHA-256 que se publica en cada versión.
+
 **Primer arranque:** la primera vez que entras al juego, `gwrecomp.exe` prepara dos archivos en `work\` a partir de
 *tu* `GW.EXE` (comprobado por SHA-256). Tarda un momento y solo ocurre una vez. Salen de tu copia del juego: no los
 compartas.
@@ -140,6 +150,10 @@ holders.
   Wars program. It contains none of the game's data (graphics, sounds, videos, levels, speech), which are always read
   from your own `GENEWARS` folder. Whether a prebuilt binary may be redistributed is a question for the rights
   holders; this project does not grant any such right.
-- No license has been applied to GWRecomp's own code yet (see [gwrecomp/PROVENANCE.md](gwrecomp/PROVENANCE.md));
-  default copyright applies. Third-party components keep their licenses ([THIRD_PARTY_NOTICES](gwrecomp/THIRD_PARTY_NOTICES.md);
-  SDL2: zlib).
+- **License of GWRecomp's own work: [MIT](gwrecomp/LICENSE).** It covers the code, scripts and documentation written
+  for GWRecomp under `gwrecomp/` (host layer, runtime, lifter, tools, launcher, build scripts). It does **not** cover,
+  and grants nothing over: *Gene Wars* itself or any code derived from `GW.EXE` (including the lifted code inside a
+  built `gwrecomp.exe`), the game's graphics in the screenshots, the original function names and the short residual
+  byte patterns listed in [PROVENANCE.md](gwrecomp/PROVENANCE.md), the upstream re-implementation in the other folders
+  (GPL-2.0-or-later, as stated in its file headers), or third-party material, which keeps its own license
+  ([THIRD_PARTY_NOTICES](gwrecomp/THIRD_PARTY_NOTICES.md); SDL2: zlib; pcrecomp patch: MIT; DOSBox-X patch: GPL-2.0).
