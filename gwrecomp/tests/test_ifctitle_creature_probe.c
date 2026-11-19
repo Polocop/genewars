@@ -12460,7 +12460,7 @@ static uint16_t host_open(void *user,const char *path,uint8_t access,void **out)
     }
     if (!s->first_path[0]) strncpy(s->first_path,path,sizeof s->first_path-1u);
     strncpy(s->last_path,path,sizeof s->last_path-1u); *out=h;
-    fprintf(stderr,"TRACE original VFS open path='%s' access=%u result=0 handle=%u source='%s' mode=%s manifest_sha256=%s\n",path,access,s->opens,access?overlay:(save_overlay_exists?save_overlay:source),access?"overlay-rw":(save_overlay_exists?"overlay-ro":"install-ro"),(access||!manifest)?"overlay-only":manifest->sha256);
+    fprintf(stderr,"TRACE original VFS open path='%s' access=%u result=0 handle=%u source='%s' mode=%s manifest_sha256=%s\n",path,access,s->opens,access?overlay:(save_overlay_exists?save_overlay:source),access?"overlay-rw":(save_overlay_exists?"overlay-ro":"install-ro"),access?"overlay-only":host_generated?"host-generated":listed?"verified":"none");
     return 0;
 }
 static uint16_t host_read(void *user,void *file,uint8_t *buffer,uint16_t requested,uint16_t *done) {
