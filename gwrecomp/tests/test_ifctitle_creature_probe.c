@@ -12151,6 +12151,69 @@ static int verify_manifest_file(const vfs_manifest_record *record,const char *pa
     return !_stricmp(hex,record->sha256);
 }
 
+/* A file is accepted when it matches ANY record of its path: the install manifest lists the builder's installation
+   and, appended at build time, the speech files of the six languages of the European CD
+   (tools/rebuild/fixtures/language_variants.tsv). *listed says whether the path is known at all. */
+static int manifest_accepts(fixture_vfs *s,const char *root,const char *source,int *listed) {
+    *listed=0;
+    const vfs_manifest_record *first=manifest_find(s,root,source);
+    if(!first) return 0;
+    *listed=1;
+    for(uint32_t i=(uint32_t)(first-s->manifest);i<s->manifest_count;i++)
+        if(!_stricmp(s->manifest[i].path,first->path) && verify_manifest_file(&s->manifest[i],source)) return 1;
+    return 0;
+}
+
+/* Files that differ legitimately between installations, checked by explicit rules instead of by hash (each
+   acceptance is written to gw_flags.log):
+   - data/text.dat: the 1.1 patch ships one per language; only the Spanish one's hash is known. Accepted when it has
+     the 1.1 layout the executable indexes into: 627 NUL-terminated strings, 20..64 KB, ending in NUL.
+   - sound.ini (SETSOUND's 11-byte record), gw.err (the game's error log), modem.cfg (modem strings): settings or logs
+     written on the player's machine; accepted when small (sizes below). */
+static int install_file_rule_accepts(const char *rel,const char *source) {
+    FILE *f=fopen(source,"rb"); if(!f) return 0;
+    uint8_t buf[65536]; const size_t n=fread(buf,1,sizeof buf,f); const int more=fgetc(f)!=EOF; fclose(f);
+    if(more) return 0;
+    int ok=0;
+    if(!_stricmp(rel,"data/text.dat")) {
+        size_t nul=0; for(size_t i=0;i<n;i++) if(!buf[i]) nul++;
+        ok=n>=20000u && n<=65535u && buf[n-1]==0 && nul==627u;
+    } else if(!_stricmp(rel,"sound.ini")) ok=n>=1u && n<=64u;
+    else if(!_stricmp(rel,"gw.err")) ok=n<=65535u;
+    else if(!_stricmp(rel,"modem.cfg")) ok=n<=4096u;
+    gw_flag_trace("TRACE install rule %s file=%s bytes=%u%c",ok?"accepted":"rejected",rel,(unsigned)n,10);
+    return ok;
+}
+
+/* CONFIG.INI as the game sees it: the installer's file names the install and CD paths the player chose; the VFS
+   serves the game at C:\GENEWARS\ and D:\GAME\, so the host gives the game the canonical file with those paths and
+   the player's own Language (one of the six the executable knows; otherwise English). For a Spanish installation
+   made with the default paths this is byte-identical to the installer's file. Written to work\host_config.ini. */
+static int host_config_ini(const char *root,char *out,size_t out_n) {
+    static const char *const langs[6]={"English","French","German","Italian","Spanish","Swedish"};
+    const char *lang="English"; char user[MAX_PATH+16];
+    if(_snprintf(user,sizeof user,"%s\\CONFIG.INI",root)>0) {
+        FILE *f=fopen(user,"rb");
+        if(f) { char line[256];
+            while(fgets(line,sizeof line,f)) {
+                if(_strnicmp(line,"Language",8)) continue;
+                char *q=strchr(line,'"'); if(!q) continue; q++; char *e=strchr(q,'"'); if(!e) continue; *e=0;
+                for(int i=0;i<6;i++) if(!_stricmp(q,langs[i])) lang=langs[i];
+            }
+            fclose(f); }
+    }
+    char body[400];
+    const int len=_snprintf(body,sizeof body,"CD=\"D:\\GAME\\\"\r\nInstallDrive=\"C:\\GENEWARS\\\"\r\nLanguage=\"%s\"\r\n"
+        "Intro=\"All\"\r\nAnims=\"All\"\r\nSounds=\"All\"\r\nLevels=\"All\"\r\nData=\"All\"\r\n",lang);
+    if(len<=0) return 0;
+    (void)_mkdir("work");
+    if(!_fullpath(out,"work\\host_config.ini",out_n)) return 0;
+    FILE *w=fopen(out,"wb"); if(!w) return 0;
+    const int ok=fwrite(body,1,(size_t)len,w)==(size_t)len; fclose(w);
+    static int traced; if(!traced) { traced=1; gw_flag_trace("TRACE install config.ini language=%s (canonical paths)%c",lang,10); }
+    return ok;
+}
+
 static int ensure_parent_directories(const char *path) {
     char parent[1024]; size_t n=strlen(path);
     if(n>=sizeof parent) return 0;
@@ -12266,11 +12329,12 @@ static uint16_t host_open(void *user,const char *path,uint8_t access,void **out)
     if(g_cli_level && path) { /* --level evidence: which level header the original LoadHeader opens */
         for(const char *p=path;*p;p++) if(!_strnicmp(p,"hdrco",5)) { gw_flag_trace("TRACE level_select open path=%s\n",path); break; }
     }
-    char source[1024],overlay[1024];
+    char source[1024],overlay[1024]; int host_generated=0;
     if(path && (!_stricmp(path,"config.ini") ||
                 !_stricmp(path,"c:\\genewars\\") ||
                 !_stricmp(path,"d:\\game\\"))) {
-        if(!s||!make_confined_path(source,sizeof source,s->root,"CONFIG.INI")) return 3u;
+        if(!s||!host_config_ini(s->root,source,sizeof source)) return 3u;
+        host_generated=1;
     } else if(path && (!_stricmp(path,"c:\\genewars\\sound.ini") ||
                        !_stricmp(path,"d:\\game\\sound.ini"))) {
         if(!s||!make_confined_path(source,sizeof source,s->root,"SOUND.INI")) return 3u;
@@ -12310,8 +12374,8 @@ static uint16_t host_open(void *user,const char *path,uint8_t access,void **out)
             if(save_overlay_exists) { if(gw_save_validate(save_overlay,&why)) src=save_overlay; }
             else { FILE *sp=fopen(source,"rb");
                    if(sp) { fclose(sp);
-                       const vfs_manifest_record *m=manifest_find(s,s->root,source);
-                       if(m && verify_manifest_file(m,source) && gw_save_validate(source,&why)) src=source; } }
+                       int listed_save=0;
+                       if(manifest_accepts(s,s->root,source,&listed_save) && gw_save_validate(source,&why)) src=source; } }
             if(!src) { v16_trace("TRACE v16 save_rw_open slot=%d result=2 no_valid_existing_file(%s)\n",v16_slot,why); return 2u; }
             if(!gw_save_copy(src,v16_stage_tmp)) return 5u;
             g_save_stage_pending[v16_slot]=1;
@@ -12346,11 +12410,15 @@ static uint16_t host_open(void *user,const char *path,uint8_t access,void **out)
     FILE *source_probe=fopen(source,"rb");
     int source_exists=source_probe!=NULL;
     if(source_probe) fclose(source_probe);
-    const vfs_manifest_record *manifest=source_exists?manifest_find(s,s->root,source):NULL;
-    if(source_exists && (!manifest || !verify_manifest_file(manifest,source))) {
-        fprintf(stderr,"TRACE original VFS manifest-deny path='%s' source='%s' listed=%u verified=0\n",
-                path,source,manifest!=NULL);
-        s->denied++; return 5u;
+    int listed=0;
+    if(source_exists && !host_generated && !manifest_accepts(s,s->root,source,&listed)) {
+        const vfs_manifest_record *m=listed?manifest_find(s,s->root,source):NULL;
+        if(!m || !install_file_rule_accepts(m->path,source)) {
+            fprintf(stderr,"TRACE original VFS manifest-deny path='%s' source='%s' listed=%u verified=0\n",
+                    path,source,(unsigned)listed);
+            gw_flag_trace("TRACE install file refused (not a known Gene Wars 1.1 file) %s%c",m?m->path:path,10);
+            s->denied++; return 5u;
+        }
     }
     if(!source_exists && access==0u && !save_overlay_exists) {
         fprintf(stderr,"TRACE original VFS open path='%s' access=%u result=2 missing_file\n",path,access);
@@ -19398,6 +19466,55 @@ static void gl_pick_folder(SDL_Window *win) {
     }
     if(sh) FreeLibrary(sh); if(ole) FreeLibrary(ole);
 }
+/* the .cue of the player's own CD image, for the CD music: counts its AUDIO tracks and checks that every FILE it
+   names exists (relative names are next to the .cue); returns the number of audio tracks, 0 with a reason */
+static int gl_cue_check(const char *cue,char *why,size_t why_n) {
+    FILE *f=fopen(cue,"rb");
+    if(!f) { snprintf(why,why_n,"%s",GWT("No se puede leer ese .cue","That .cue cannot be read")); return 0; }
+    char dir[MAX_PATH]; snprintf(dir,sizeof dir,"%s",cue); { char *s=strrchr(dir,92); if(s) s[1]=0; else dir[0]=0; }
+    char line[700]; int audio=0,files=0,missing=0;
+    while(fgets(line,sizeof line,f)) {
+        const char *p=line; while(*p==' '||*p=='\t') p++;
+        if(!_strnicmp(p,"FILE",4)) {
+            const char *q=strchr(p,'"'); if(!q) continue; q++; const char *e=strchr(q,'"'); if(!e) continue;
+            char name[MAX_PATH*2]; const size_t l=(size_t)(e-q);
+            if(l>=MAX_PATH) { missing++; continue; }
+            char rel[MAX_PATH]; memcpy(rel,q,l); rel[l]=0;
+            if(rel[0] && rel[1]==':') snprintf(name,sizeof name,"%s",rel); else snprintf(name,sizeof name,"%s%s",dir,rel);
+            files++; if(GetFileAttributesA(name)==INVALID_FILE_ATTRIBUTES) missing++;
+        } else if(!_strnicmp(p,"TRACK",5) && strstr(p,"AUDIO")) audio++;
+    }
+    fclose(f);
+    if(!files) { snprintf(why,why_n,"%s",GWT("Ese archivo no es un .cue de imagen de CD","That file is not a CD image .cue")); return 0; }
+    if(missing) { snprintf(why,why_n,GWT("Faltan %d archivos .bin junto al .cue","%d .bin files are missing next to the .cue"),missing); return 0; }
+    if(!audio) { snprintf(why,why_n,"%s",GWT("Esa imagen no tiene pistas de música","That image has no music tracks")); return 0; }
+    return audio;
+}
+static void gl_pick_cue(void) {
+    HMODULE cd=LoadLibraryA("comdlg32.dll");
+    typedef BOOL (WINAPI *open_fn)(LPOPENFILENAMEA);
+    open_fn get=cd?(open_fn)(void *)GetProcAddress(cd,"GetOpenFileNameA"):NULL;
+    if(get) {
+        char file[MAX_PATH]=""; OPENFILENAMEA o; memset(&o,0,sizeof o);
+        o.lStructSize=sizeof o;
+        o.lpstrFilter=GWT("Imagen de CD (*.cue)\0*.cue\0","CD image (*.cue)\0*.cue\0");
+        o.lpstrFile=file; o.nMaxFile=MAX_PATH;
+        o.lpstrTitle=GWT("Imagen de tu CD de Gene Wars (.cue con sus .bin)","Your Gene Wars CD image (.cue with its .bin files)");
+        o.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_HIDEREADONLY|OFN_NOCHANGEDIR;
+        if(g_ini_cd_cue[0]) { static char start[MAX_PATH]; snprintf(start,sizeof start,"%s",g_ini_cd_cue);
+            char *s=strrchr(start,92); if(s) { *s=0; o.lpstrInitialDir=start; } }
+        if(get(&o)) {
+            static char msg[200]; char why[160]="";
+            const int tracks=gl_cue_check(file,why,sizeof why);
+            if(tracks>0 && gwrecomp_ini_set("cd_cue",file)) {
+                snprintf(g_ini_cd_cue,sizeof g_ini_cd_cue,"%s",file);
+                snprintf(msg,sizeof msg,GWT("Música del CD: %d pistas","CD music: %d tracks"),tracks); gl_status(msg);
+                gw_flag_trace("TRACE launcher cd_cue set tracks=%d%c",tracks,10);
+            } else { snprintf(msg,sizeof msg,"%s",why[0]?why:GWT("No se pudo guardar en gwrecomp.ini","Could not save it in gwrecomp.ini")); gl_status(msg); }
+        }
+    }
+    if(cd) FreeLibrary(cd);
+}
 static const int gl_res_w[5]={0,1600,1920,2560,3840},gl_res_h[5]={0,900,1080,1440,2160};
 static const char *const gl_res_ini[5]={"auto","900p","1080p","1440p","2160p"};
 static int gl_res_index(void) { for(int i=1;i<5;i++) if(g_cli_res_w==gl_res_w[i] && g_cli_res_h==gl_res_h[i]) return i; return g_cli_res_w?-1:0; }
@@ -19423,6 +19540,13 @@ static void gl_draw_play(void) {
       gl_text_fit(GL.f_small,24,212,286,GL.have_save?GLC_DIMCYAN:GLC_GREY,w); }
     if(gl_button((gl_rect){22,252,290,30},GWT(L"ELEGIR UNA MISIÓN",L"CHOOSE A MISSION"),ready?0:3,GL.f_bold) && ready) GL.tab=1;
     gl_text_fit(GL.f_small,24,286,286,GLC_GREY,GWT(L"Las 24 misiones sueltas: pestaña MISIONES",L"Any of the 24 missions: MISSIONS tab"));
+    /* CD music: the .cue of the player's own CD image (else found next to the GENEWARS folder at start) */
+    gl_text_fit(GL.f_bold,24,304,286,GLC_AMBER,GWT(L"MÚSICA DEL CD",L"CD MUSIC"));
+    if(gl_button((gl_rect){22,320,124,26},GWT(L"IMAGEN DEL CD",L"CD IMAGE"),0,GL.f_small)) GL.result=3;
+    {   wchar_t w[300];
+        if(g_ini_cd_cue[0]) { const char *b=strrchr(g_ini_cd_cue,92); gl_wide(b?b+1:g_ini_cd_cue,w,300); }
+        else wcscpy(w,GWT(L"(se busca sola junto a la carpeta)",L"(looked for next to the game folder)"));
+        gl_text_fit(GL.f_small,152,327,158,g_ini_cd_cue[0]?GLC_DIMCYAN:GLC_GREY,w); }
 
     /* right: start-up options and the picture settings in use */
     gl_panel((gl_rect){330,62,288,170},0x2E2B4E,0x1E1C36,0);
@@ -19638,6 +19762,9 @@ static int launcher_run(const char *data_dir,const char *root) {
         }
         if(GL.result==2) {   /* folder dialog (modal, outside the SDL frame) */
             GL.result=0; gl_pick_folder(win); continue;
+        }
+        if(GL.result==3) {   /* CD image (.cue) dialog, also modal */
+            GL.result=0; gl_pick_cue(); continue;
         }
         SDL_UpdateTexture(tex,NULL,GL.px,GL_CW*4);
         SDL_SetRenderDrawColor(ren,0,0,0,255); SDL_RenderClear(ren); SDL_RenderCopy(ren,tex,NULL,NULL); SDL_RenderPresent(ren);
