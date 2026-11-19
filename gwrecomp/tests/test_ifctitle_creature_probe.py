@@ -251,11 +251,22 @@ def create_install_manifest()->tuple[Path,dict]:
     records.sort(key=lambda row:row["path"])
     if not records: raise SystemExit("GeneWars installation manifest is empty")
     body="".join(f"{row['sha256']}\t{row['path']}\n" for row in records)
+    # Language variants: the speech files of the six languages of the European CD (hashes only, committed in
+    # tools/rebuild/fixtures/language_variants.tsv). The VFS accepts a file when it matches any record of its path,
+    # so an installation made in another language is accepted for exactly these known files.
+    variants_path=ROOT/"tools"/"rebuild"/"fixtures"/"language_variants.tsv"
+    have={(row["sha256"],row["path"]) for row in records}; variants=[]
+    for line in variants_path.read_text(encoding="ascii").splitlines():
+        if not line or line.startswith("#"): continue
+        digest,rel,_lang=line.split("\t")
+        if len(digest)!=64 or not rel.startswith("speech/"): raise SystemExit(f"bad language variant row: {line}")
+        if (digest,rel) not in have: have.add((digest,rel)); variants.append((digest,rel))
+    body+="".join(f"{digest}\t{rel}\n" for digest,rel in sorted(variants,key=lambda v:(v[1],v[0])))
     manifest_tsv=ROOT/"work"/"genewars_1_1_install_manifest_creature_probe.tsv"
     manifest_tsv.write_text(body,encoding="ascii",newline="\n")
     manifest={"schema":"gwrecomp-vfs-install-manifest/v1","target_sha256":EXPECTED_TARGET,
         "root":str(root),"read_policy":"only existing regular files with matching SHA-256; writes are overlay-only",
-        "file_count":len(records),"files":records,
+        "file_count":len(records),"files":records,"language_variant_count":len(variants),
         "canonical_list_sha256":hashlib.sha256(body.encode("ascii")).hexdigest()}
     manifest_path=ROOT/"evidence"/"genewars_1_1_install_manifest_creature_probe.json"
     manifest_path.write_text(json.dumps(manifest,indent=2)+"\n",encoding="utf-8")

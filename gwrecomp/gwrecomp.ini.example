@@ -38,6 +38,7 @@ language = auto
 ; mission selected in the launcher's mission list (1..24)
 last_mission = 1
 ; .cue of your own Gene Wars CD image, for the CD music (else GENEWARS_CUE)
+; (also the launcher's PLAY tab, CD IMAGE button; without it, a .cue next to the GENEWARS folder is found by itself)
 ; cd_cue = C:\path\to\genewars.cue
 ; 1 = remove the 1-pixel slivers the original terrain drawing leaves on the planet's horizon (shown frame only)
 clean_horizon = 1

@@ -54,7 +54,7 @@ GitHub issues are kept in [gwrecomp/docs/issues-archive.md](gwrecomp/docs/issues
 - **Native Win32/SDL2 build** of the original executable: one `gwrecomp.exe` plus `SDL2.dll`, no DOSBox, no emulator.
 - **Deterministic regression check:** the A/B suite renders 56 frame captures at four points of mission 1 (after
   the landing, before a creature is ready, during construction, extractor selected) and compares them with reference
-  hashes; v1.1 matches all 56 bit for bit. The presentation extras (interpolation, water, audio) never write game
+  hashes; v1.2 matches all 56 bit for bit. The presentation extras (interpolation, water, audio) never write game
   memory, so they cannot change these frames.
 - **Three view modes:**
   - Classic `640×480` (the original frame),
@@ -77,10 +77,18 @@ GitHub issues are kept in [gwrecomp/docs/issues-archive.md](gwrecomp/docs/issues
 
 ## Installation (English)
 
+> **Version check.** GWRecomp is built on the `GW.EXE` of the official **1.1 patch** (built 26 Nov 1996). The European
+> CD itself, and the common "Genewars (Europe) (En,Fr,De,Es,It,Sv)" image, carry the original 1.0 `GW.EXE` (built
+> 2 Sep 1996, 1,265,994 bytes), which GWRecomp refuses ("GW.EXE is not the Gene Wars 1.1 one..."): install the game
+> from the CD and apply the 1.1 patch first. Installs in **English, French, German, Italian, Spanish or Swedish** are
+> accepted (speech files of the six languages are known). Only the Spanish 1.1 `TEXT.DAT` has been seen so far; the
+> other languages' 1.1 `TEXT.DAT` is accepted when it has the 1.1 layout (627 texts), and that case has not been tested
+> with a real installation yet.
+
 1. Have **Gene Wars 1.1 (European edition)** installed: the `GENEWARS` folder created by the original installer
    (`DATA`, `LEVELS`, `SOUND`, `INTRO`, `ANIMS`, `LDATA`, `S`, `SPEECH`, `SAVE` and the loose files such as `GW.EXE`).
    GWRecomp checks them with SHA-256 and only reads them.
-2. Download `GWRecomp-v1.1-win32.zip` from [Releases](https://github.com/Polocop/genewars/releases/latest) and unzip it anywhere you can write (saves and logs go next to the program).
+2. Download `GWRecomp-v1.2-win32.zip` from [Releases](https://github.com/Polocop/genewars/releases/latest) and unzip it anywhere you can write (saves and logs go next to the program).
 3. Double-click `gwrecomp.exe`. In the launcher press **CHANGE** and choose your `GENEWARS` folder; the four marks
    DATA / LEVELS / SOUND / INTRO turn green. The **ES / EN** buttons at the top switch the launcher's language.
 4. Start the game, continue the last game, or pick a mission.
@@ -105,7 +113,7 @@ them.
 | `water_effects` | animated water and GOOP (`1`/`0`) |
 | `enhanced_audio` | calibrated panning, pitch variation, music ducking (`1`/`0`) |
 | `language` | launcher language: `en`, `es` or `auto` (Windows display language) |
-| `cd_cue` | path to your own Gene Wars CD image `.cue`, for the CD music |
+| `cd_cue` | path to your own Gene Wars CD image `.cue`, for the CD music (launcher: PLAY → **CD IMAGE**) |
 | `data_dir` | your `GENEWARS` folder (the launcher fills it in) |
 
 In game: F7 filter, F8 turbo 1×/2×/4×, mouse wheel zoom, Home zoom 1×, F10 release the mouse, WASD / arrows / middle
@@ -116,10 +124,17 @@ Building from source (Windows, MSYS2 mingw32, Python, LLVM clang) is described i
 
 ## Instalación (español)
 
+> **Comprueba la versión.** GWRecomp está hecho sobre el `GW.EXE` del **parche oficial 1.1** (compilado el 26/11/1996).
+> El CD europeo, y la imagen habitual «Genewars (Europe) (En,Fr,De,Es,It,Sv)», traen el `GW.EXE` original 1.0
+> (02/09/1996, 1.265.994 bytes), que GWRecomp rechaza («GW.EXE no es el de Gene Wars 1.1…»): instala el juego desde el
+> CD y aplica antes el parche 1.1. Se aceptan instalaciones en **inglés, francés, alemán, italiano, español o sueco**.
+> Del `TEXT.DAT` 1.1 solo se conoce el español; el de los demás idiomas se acepta si tiene el formato 1.1 (627
+> textos), y ese caso aún no se ha probado con una instalación real.
+
 1. Ten instalado **Gene Wars 1.1 (edición europea)**: la carpeta `GENEWARS` que crea el instalador original
    (`DATA`, `LEVELS`, `SOUND`, `INTRO`, `ANIMS`, `LDATA`, `S`, `SPEECH`, `SAVE` y los archivos sueltos como `GW.EXE`).
    GWRecomp los comprueba con SHA-256 y solo los lee.
-2. Descarga `GWRecomp-v1.1-win32.zip` de [Releases](https://github.com/Polocop/genewars/releases/latest) y descomprímelo en una carpeta donde puedas escribir (ahí se guardan partidas y registros).
+2. Descarga `GWRecomp-v1.2-win32.zip` de [Releases](https://github.com/Polocop/genewars/releases/latest) y descomprímelo en una carpeta donde puedas escribir (ahí se guardan partidas y registros).
 3. Haz doble clic en `gwrecomp.exe`. En el lanzador pulsa **CAMBIAR** y elige tu carpeta `GENEWARS`; las cuatro
    marcas DATA / LEVELS / SOUND / INTRO se ponen en verde. Los botones **ES / EN** de arriba cambian el idioma del
    lanzador.
@@ -135,8 +150,8 @@ con el SHA-256 que se publica en cada versión.
 compartas.
 
 **Opciones:** todo lo que cambias en el lanzador se guarda en `gwrecomp.ini` (modo de vista, resolución, pantalla
-completa, 60/120 FPS, filtro, `water_effects`, `enhanced_audio`, `language` = `es` / `en` / `auto`). Para la música del CD añade
-`cd_cue = C:\ruta\a\tu\imagen\genewars.cue` con tu propia imagen del CD. `gwrecomp.ini.example` explica cada clave.
+completa, 60/120 FPS, filtro, `water_effects`, `enhanced_audio`, `language` = `es` / `en` / `auto`). Para la música del CD, en la pestaña
+JUGAR pulsa **IMAGEN DEL CD** y elige el `.cue` de tu propia imagen del CD (se guarda como `cd_cue`). `gwrecomp.ini.example` explica cada clave.
 
 ## Legal
 
