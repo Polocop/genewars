@@ -60,4 +60,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Good entry points are labelled in `docs/
 
 ## Credits and legal
 
-See [PROVENANCE.md](PROVENANCE.md). Gene Wars is © Bullfrog Productions / Electronic Arts. **No game executables, data, videos, audio, disc images or extracted game code are distributed here.** This project is unaffiliated with and unendorsed by the rights holders. **No license has been applied** to GWRecomp's original code yet (see PROVENANCE.md): until the authors choose one, default copyright applies. The upstream repository has no license file either.
+See [PROVENANCE.md](PROVENANCE.md). Gene Wars is © Bullfrog Productions / Electronic Arts. **No game executables, data, videos, audio, disc images or extracted game code are distributed here.** This project is unaffiliated with and unendorsed by the rights holders. GWRecomp's own work in this directory is under the **[MIT license](LICENSE)**; its scope (what it does not cover: the game, code derived from `GW.EXE`, third-party material) is stated there and in PROVENANCE.md, section 4. The upstream re-implementation keeps the GPL-2.0-or-later notice of its file headers.

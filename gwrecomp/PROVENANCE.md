@@ -59,7 +59,14 @@ Residual, **not resolved** and not changed: the last scan still finds 58 literal
 
 ### 4. License of GWRecomp itself
 
-No license has been chosen. Do not add one until items 1 to 3 are settled.
+MIT, chosen by the maintainer on 2026-11-19 ([LICENSE](LICENSE)), for the work written for GWRecomp in this
+directory only. MIT rather than a copyleft license because a built `gwrecomp.exe` combines that work with code lifted
+from `GW.EXE`, which nobody here can relicense: a copyleft license would require offering the whole combined program
+under its terms, which is impossible, while MIT puts no condition on the combination. The license is scoped so that
+items 1 to 3 stay outside it: it grants nothing over the game, code derived from it, the residual short literals and
+original names of item 1, or the third-party patches of item 2, each of which keeps its own status. Those items remain
+open as described above. The upstream re-implementation in the repository's other folders keeps the GPL-2.0-or-later
+notice in its file headers.
 
 ### 5. Consequences for reproducibility
 

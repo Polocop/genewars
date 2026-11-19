@@ -7,7 +7,7 @@ Thanks for helping. Please read this first.
 - **Never submit game material**: no executables, data files, Smacker videos, audio, disc images, memory snapshots/dumps, disassembly listings, or generated lifted C of the original binary. PRs containing them will be closed. Hashes and addresses are fine.
 - Short test vectors are welcome only when needed; prefer describing behaviour by address and observed values.
 - Be honest about verification: say what you ran, on what, and what you could not run.
-- No license has been assigned yet; by contributing you agree your contribution may be licensed under whatever license the maintainers later choose after discussion. Open an issue if that is a concern.
+- GWRecomp is under the MIT license ([LICENSE](LICENSE)); by contributing you agree that your contribution is licensed under it. Never contribute material taken from the game or its drivers (see PROVENANCE.md).
 
 ## Building and running
 
