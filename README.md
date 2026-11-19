@@ -44,9 +44,10 @@ ready to play with your own `GENEWARS` folder) · **Descarga:** [última versió
   </tr>
 </table>
 
-The source lives in [`gwrecomp/`](gwrecomp/README.md). This repository is a fork of
-[mefistotelis/genewars](https://github.com/mefistotelis/genewars); its unfinished engine re-implementation stays in
-the source folders of this repository, untouched.
+The source lives in [`gwrecomp/`](gwrecomp/README.md). This repository started as a fork of
+[mefistotelis/genewars](https://github.com/mefistotelis/genewars) and is now a standalone project; that unfinished
+engine re-implementation, with its history, stays in the source folders of this repository, untouched. Earlier
+GitHub issues are kept in [gwrecomp/docs/issues-archive.md](gwrecomp/docs/issues-archive.md).
 
 ## Features
 
