@@ -19408,54 +19408,62 @@ static void gl_start_mission(int m) {
 
 static void gl_draw_play(void) {
     const int ready=GL.data_all;
-    gl_panel((gl_rect){12,52,246,300},GLC_PANEL2,0x15142A,0);
-    if(gl_button((gl_rect){22,62,226,58},GWT(L"INICIAR JUEGO",L"START GAME"),ready?1:3,GL.f_head) && ready) { g_cli_skip_intro=g_ini_skip_intro; GL.result=1; }
-    gl_text_fit(GL.f_small,24,124,224,GLC_GREY,GWT(L"Menú de título original",L"Original title menu"));
+    gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
+    /* left: start and continue */
+    if(gl_button((gl_rect){22,64,290,72},GWT(L"INICIAR JUEGO",L"START GAME"),ready?1:3,GL.f_head) && ready) { g_cli_skip_intro=g_ini_skip_intro; GL.result=1; }
+    gl_text_fit(GL.f_small,24,140,286,GLC_GREY,GWT(L"Menú de título original",L"Original title menu"));
     const int can_cont=ready && GL.have_save;
-    if(gl_button((gl_rect){22,142,226,36},GWT(L"CONTINUAR ÚLTIMA PARTIDA",L"CONTINUE LAST GAME"),can_cont?0:3,GL.f_bold) && can_cont) {
-        char dst[MAX_PATH]; snprintf(dst,sizeof dst,"%s\\work\\launcher_continue.sav",GL.root);
+    if(gl_button((gl_rect){22,166,290,42},GWT(L"CONTINUAR ÚLTIMA PARTIDA",L"CONTINUE LAST GAME"),can_cont?0:3,GL.f_bold) && can_cont) {
+        char dst[MAX_PATH]; snprintf(dst,sizeof dst,"%s\work\launcher_continue.sav",GL.root);
         if(CopyFileA(GL.save_path,dst,FALSE) && strlen(dst)<sizeof g_cli_load_save_path) {
             strcpy(g_cli_load_save_path,dst); g_cli_load_save=1; g_cli_skip_intro=1; GL.result=1;
         } else gl_status(GWT("No se pudo preparar la partida guardada","The saved game could not be prepared"));
     }
     { wchar_t w[120]; if(GL.have_save) gl_wide(GL.save_label,w,120); else wcscpy(w,GWT(L"(todavía no hay partidas guardadas)",L"(no saved games yet)"));
-      gl_text_fit(GL.f_small,24,182,224,GL.have_save?GLC_DIMCYAN:GLC_GREY,w); }
-    gl_text_fit(GL.f_bold,24,206,224,GLC_AMBER,GWT(L"AL ARRANCAR",L"AT START"));
+      gl_text_fit(GL.f_small,24,212,286,GL.have_save?GLC_DIMCYAN:GLC_GREY,w); }
+    if(gl_button((gl_rect){22,252,290,30},GWT(L"ELEGIR UNA MISIÓN",L"CHOOSE A MISSION"),ready?0:3,GL.f_bold) && ready) GL.tab=1;
+    gl_text_fit(GL.f_small,24,286,286,GLC_GREY,GWT(L"Las 24 misiones sueltas: pestaña MISIONES",L"Any of the 24 missions: MISSIONS tab"));
+
+    /* right: start-up options and the picture settings in use */
+    gl_panel((gl_rect){330,62,288,170},0x2E2B4E,0x1E1C36,0);
+    gl_text_fit(GL.f_bold,342,70,264,GLC_AMBER,GWT(L"AL ARRANCAR",L"AT START"));
     const wchar_t *const yn[2]={L"NO",GWT(L"SÍ",L"YES")};
-    gl_text_fit(GL.f_body,24,226,120,GLC_TEXT,GWT(L"Saltar vídeos",L"Skip videos"));
-    int c=gl_choice(150,222,96,20,yn,2,g_ini_skip_intro,0u);
+    gl_text_fit(GL.f_body,342,98,124,GLC_TEXT,GWT(L"Saltar vídeos",L"Skip videos"));
+    int c=gl_choice(470,94,136,22,yn,2,g_ini_skip_intro,0u);
     if(c>=0 && c!=g_ini_skip_intro) { g_ini_skip_intro=c; gwrecomp_ini_set_int("skip_intro",c); }
-    gl_text_fit(GL.f_body,24,252,120,GLC_TEXT,GWT(L"Este lanzador",L"This launcher"));
-    c=gl_choice(150,248,96,20,yn,2,g_ini_launcher,0u);
+    gl_text_fit(GL.f_body,342,130,124,GLC_TEXT,GWT(L"Este lanzador",L"This launcher"));
+    c=gl_choice(470,126,136,22,yn,2,g_ini_launcher,0u);
     if(c>=0 && c!=g_ini_launcher) { g_ini_launcher=c; gwrecomp_ini_set_int("launcher",c); }
-    gl_text_fit(GL.f_small,24,274,224,GLC_GREY,GWT(L"Sin él, el doble clic arranca",L"Without it, a double click starts"));
-    gl_text_fit(GL.f_small,24,287,224,GLC_GREY,GWT(L"directo (--launcher lo muestra)",L"the game (--launcher shows it)"));
+    gl_text_fit(GL.f_small,342,162,264,GLC_GREY,GWT(L"Sin él, el doble clic arranca el juego",L"Without it, a double click starts"));
+    gl_text_fit(GL.f_small,342,176,264,GLC_GREY,GWT(L"directo (--launcher lo muestra).",L"the game directly (--launcher shows it)."));
+    gl_text_fit(GL.f_small,342,200,264,GLC_GREY,GWT(L"Saltar vídeos se aplica a INICIAR JUEGO.",L"Skip videos applies to START GAME."));
+    gl_panel((gl_rect){330,244,288,98},0x2E2B4E,0x1E1C36,0);
+    gl_text_fit(GL.f_bold,342,252,264,GLC_AMBER,GWT(L"IMAGEN",L"PICTURE"));
     {   wchar_t w[160]; const int ri=gl_res_index();
         swprintf(w,160,L"%ls · %u FPS · %ls",g_ws_canvas?L"Zoom out":g_ws_requested?GWT(L"Panorámico",L"Widescreen"):GWT(L"Clásico",L"Classic"),
             g_ini_fps?g_ini_fps:120u,g_cli_fullscreen?GWT(L"sin bordes",L"borderless"):ri==0?GWT(L"ventana",L"window"):GWT(L"ventana fija",L"fixed window"));
-        gl_text_fit(GL.f_small,24,316,224,GLC_DIMCYAN,w);
-        gl_text_fit(GL.f_small,24,330,224,GLC_GREY,GWT(L"Imagen: pestaña PANTALLA",L"Picture: DISPLAY tab")); }
-
-    /* mission select */
-    gl_panel((gl_rect){266,52,362,300},GLC_PANEL2,0x15142A,0);
-    gl_text_fit(GL.f_bold,278,58,340,GLC_AMBER,GWT(L"SELECCIÓN DE MISIÓN",L"MISSION SELECT"));
+        gl_text_fit(GL.f_body,342,276,264,GLC_DIMCYAN,w);
+        gl_text_fit(GL.f_small,342,300,264,GLC_GREY,GWT(L"Se cambia en la pestaña GRÁFICOS",L"Change it in the GRAPHICS tab")); }
+}
+static void gl_draw_missions(void) {
+    const int ready=GL.data_all;
+    gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
+    gl_text_fit(GL.f_bold,24,58,590,GLC_AMBER,GWT(L"SELECCIÓN DE MISIÓN",L"MISSION SELECT"));
     for(int m=1;m<=24;m++) {
-        const int col=(m-1)/8,row=(m-1)%8; gl_rect r={276+col*116,78+row*26,112,23};
+        const int col=(m-1)/8,row=(m-1)%8; gl_rect r={22+col*200,78+row*26,196,23};
         wchar_t w[48],nm[32]; gl_wide(GL.names[m][0]?GL.names[m]:"---",nm,32); swprintf(w,48,L"%02d %ls",m,nm);
         const int hot=gl_in(r);
         if(m==GL.sel) gl_panel(r,0x2E8A80,0x16504A,0); else gl_panel(r,hot?0x4A4678:0x2E2B4E,hot?0x2C2948:0x1E1C36,1);
-        gl_text_fit(GL.f_body,r.x+6,r.y+5,r.w-10,m==GL.sel?0xFFFFFF:hot?GLC_CYAN:GLC_TEXT,w);
+        gl_text_fit(GL.f_body,r.x+8,r.y+5,r.w-14,m==GL.sel?0xFFFFFF:hot?GLC_CYAN:GLC_TEXT,w);
         if(hot && GL.clicked) { GL.sel=m; if(GL.dbl && ready) gl_start_mission(m); }
     }
     {   wchar_t w[64],nm[32]; gl_wide(GL.names[GL.sel][0]?GL.names[GL.sel]:"",nm,32);
         swprintf(w,64,GWT(L"JUGAR MISIÓN %02d  %ls",L"PLAY MISSION %02d  %ls"),GL.sel,nm);
-        if(gl_button((gl_rect){276,294,342,30},w,ready?1:3,GL.f_bold) && ready) gl_start_mission(GL.sel); }
-    gl_text_fit(GL.f_small,278,328,340,GLC_GREY,GL.sel>1?GWT(L"Usa el código de niveles del juego: sus trucos",
-                                                             L"Uses the game's level code: its cheats stay"):
-                                                          GWT(L"Partida nueva normal desde la primera misión",
-                                                              L"A normal new game from the first mission"));
-    if(GL.sel>1) gl_text_fit(GL.f_small,278,340,340,GLC_GREY,GWT(L"siguen activos en esa sesión (guarda y vuelve a cargar)",
-                                                                 L"active in that session (save and load again)"));
+        if(gl_button((gl_rect){22,294,596,30},w,ready?1:3,GL.f_bold) && ready) gl_start_mission(GL.sel); }
+    gl_text_fit(GL.f_small,24,330,594,GLC_GREY,GL.sel>1?GWT(L"Usa el código de niveles del juego: sus trucos siguen activos en esa sesión (guarda y vuelve a cargar)",
+                                                            L"Uses the game's level code: its cheats stay active in that session (save and load again)"):
+                                                        GWT(L"Partida nueva normal desde la primera misión · doble clic en una misión para empezarla",
+                                                            L"A normal new game from the first mission · double-click a mission to start it"));
 }
 /* settings row: name and one-line description in the left column (x 24..216), choices from x = 228 */
 static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
@@ -19535,9 +19543,9 @@ static void gl_draw(void) {
         const int cur=gw_lang_en(),c=gl_choice(238,12,68,22,lang,2,cur,0u);
         if(c>=0 && c!=cur) { g_ini_lang=c; (void)gwrecomp_ini_set("language",c?"en":"es"); }
     }
-    const wchar_t *const tabs[3]={GWT(L"JUGAR",L"PLAY"),GWT(L"PANTALLA",L"DISPLAY"),GWT(L"CONTROLES",L"CONTROLS")};
-    for(int i=0;i<3;i++) if(gl_button((gl_rect){316+i*104,10,98,26},tabs[i],GL.tab==i?2:0,GL.f_bold)) GL.tab=i;
-    if(GL.tab==0) gl_draw_play(); else if(GL.tab==1) gl_draw_display(); else gl_draw_controls();
+    const wchar_t *const tabs[4]={GWT(L"JUGAR",L"PLAY"),GWT(L"MISIONES",L"MISSIONS"),GWT(L"GRÁFICOS",L"GRAPHICS"),GWT(L"CONTROLES",L"CONTROLS")};
+    for(int i=0;i<4;i++) if(gl_button((gl_rect){314+i*81,10,77,26},tabs[i],GL.tab==i?2:0,GL.f_bold)) GL.tab=i;
+    if(GL.tab==0) gl_draw_play(); else if(GL.tab==1) gl_draw_missions(); else if(GL.tab==2) gl_draw_display(); else gl_draw_controls();
     /* footer: the Gene Wars folder */
     gl_panel((gl_rect){0,358,GL_W,42},0x3A3660,0x1C1A32,1);
     {   wchar_t w[620]; gl_wide(GL.data_dir[0]?GL.data_dir:GWT("(no configurada)","(not set)"),w,620);
@@ -19615,8 +19623,8 @@ static int launcher_run(const char *data_dir,const char *root) {
                 const SDL_Keycode kc=ev.key.keysym.sym;
                 if(kc==SDLK_ESCAPE) GL.result=-1;
                 else if((kc==SDLK_RETURN || kc==SDLK_KP_ENTER) && GL.data_all) { g_cli_skip_intro=g_ini_skip_intro; GL.result=1; }
-                else if(kc==SDLK_TAB) GL.tab=(GL.tab+1)%3;
-                else if(GL.tab==0 && (kc==SDLK_UP || kc==SDLK_DOWN)) GL.sel=GL.sel+(kc==SDLK_UP?-1:1)<1?24:GL.sel+(kc==SDLK_UP?-1:1)>24?1:GL.sel+(kc==SDLK_UP?-1:1);
+                else if(kc==SDLK_TAB) GL.tab=(GL.tab+1)%4;
+                else if(GL.tab==1 && (kc==SDLK_UP || kc==SDLK_DOWN)) GL.sel=GL.sel+(kc==SDLK_UP?-1:1)<1?24:GL.sel+(kc==SDLK_UP?-1:1)>24?1:GL.sel+(kc==SDLK_UP?-1:1);
             }
         }
         if(GL.result) break;
@@ -19626,7 +19634,7 @@ static int launcher_run(const char *data_dir,const char *root) {
             SDL_Surface *s=SDL_CreateRGBSurfaceWithFormatFrom(GL.px,GL_CW,GL_CH,32,GL_CW*4,SDL_PIXELFORMAT_RGB888);
             if(s) { SDL_SaveBMP(s,p); SDL_FreeSurface(s); }
             gw_flag_trace("TRACE launcher shot tab=%d texts_shrunk_or_cut=%d%c",shot_tab,GL.overflow,10);
-            if(++shot_tab>=3) GL.result=-1; else GL.tab=shot_tab;
+            if(++shot_tab>=4) GL.result=-1; else GL.tab=shot_tab;
         }
         if(GL.result==2) {   /* folder dialog (modal, outside the SDL frame) */
             GL.result=0; gl_pick_folder(win); continue;

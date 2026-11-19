@@ -150,7 +150,8 @@ CÓMO EMPEZAR
   2. Haz doble clic en gwrecomp.exe. Se abre el lanzador.
   3. Pulsa CAMBIAR (abajo a la derecha) y elige tu carpeta GENEWARS. Las cuatro marcas DATA / LEVELS / SOUND / INTRO
      deben ponerse en verde.
-  4. INICIAR JUEGO (menú original), CONTINUAR ÚLTIMA PARTIDA, o elige una misión de la lista y JUGAR MISIÓN.
+  4. INICIAR JUEGO (menú original), CONTINUAR ÚLTIMA PARTIDA, o en la pestaña MISIONES elige una y JUGAR MISIÓN.
+     La imagen (modo de vista, resolución, filtro...) se ajusta en la pestaña GRÁFICOS.
   Todo lo que cambies en el lanzador se guarda en gwrecomp.ini, junto a gwrecomp.exe.
 
 TECLAS EN PARTIDA
@@ -174,6 +175,43 @@ AVISO
   gwrecomp.exe es una traducción a código nativo del programa original de Gene Wars; no contiene los archivos de datos
   del juego (gráficos, sonidos, vídeos, niveles), que se leen siempre de tu propia carpeta GENEWARS.
   Licencias de terceros en licenses\ (SDL2: zlib).
+
+
+GWRecomp - Gene Wars natively recompiled for Windows (English)
+==============================================================
+
+WHAT YOU NEED
+  Your own INSTALLED copy of Gene Wars 1.1 (Bullfrog / Electronic Arts, 1996): the GENEWARS folder made by the
+  game's original installer (European edition). GWRecomp includes none of the game's graphics, sounds, videos or
+  levels; it reads them from your folder, checks them with SHA-256 and never modifies them.
+  The whole folder is needed: DATA, LEVELS, SOUND, INTRO (checked by the launcher), ANIMS, LDATA, S, SPEECH, SAVE and
+  the loose files (GENEWARS.EXE, GW.EXE, CONFIG.INI, SOUND.INI, ...). With only the CD, install the game with its
+  INSTALL.BAT (for example in DOSBox) and use the resulting GENEWARS folder.
+
+HOW TO START
+  1. Unzip this folder anywhere you can write (your saves and logs go here).
+  2. Double-click gwrecomp.exe. The launcher opens; ES / EN at the top switches its language.
+  3. Press CHANGE (bottom right) and choose your GENEWARS folder. DATA / LEVELS / SOUND / INTRO must turn green.
+  4. START GAME (original menu), CONTINUE LAST GAME, or pick one in the MISSIONS tab and PLAY MISSION.
+     The picture (view mode, resolution, filter...) is set in the GRAPHICS tab.
+  Everything you change in the launcher is saved in gwrecomp.ini, next to gwrecomp.exe.
+
+IN-GAME KEYS
+  F7 filter (sharp / EPX / CRT)   F8 turbo 1x/2x/4x   TAB (hold) turbo 4x   Wheel zoom   Home zoom 1x
+  F10 release the mouse   WASD / arrows / middle button scroll the map   ESC game options
+
+CD MUSIC
+  Optional: add  cd_cue = C:\path\to\your\genewars.cue  (your own CD image) to gwrecomp.ini.
+
+FIRST START
+  The first time you enter the game, gwrecomp.exe makes two files in work\ from YOUR GW.EXE (checked by SHA-256).
+  It takes a moment and happens once. Those files come from your copy of the game: do not share them.
+
+NOTICE
+  gwrecomp.exe is a native-code translation of the original Gene Wars program; it contains none of the game's data
+  files (graphics, sounds, videos, levels), which are always read from your own GENEWARS folder. Gene Wars is
+  (c) Bullfrog Productions / Electronic Arts; GWRecomp is unaffiliated with them. Third-party licenses in licenses\
+  (SDL2: zlib).
 '@
 [IO.File]::WriteAllText((Join-Path $out 'README_INSTALL.txt'), ($readme -replace "`r?`n", "`r`n"), (New-Object Text.UTF8Encoding $true))
 
