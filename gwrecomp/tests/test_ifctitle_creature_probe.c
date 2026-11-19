@@ -19685,7 +19685,7 @@ static void gl_draw(void) {
     for(int i=0;i<4;i++) gl_text_fit(GL.f_small,346+i*44,380,42,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,GL.data_ok[i]?L"OK":GWT(L"FALTA",L"MISSING"));
     if(gl_button((gl_rect){526,364,52,28},GWT(L"CAMBIAR",L"CHANGE"),0,GL.f_small)) GL.result=2;   /* the folder dialog opens outside the frame */
     if(gl_button((gl_rect){582,364,52,28},GWT(L"SALIR",L"QUIT"),0,GL.f_small)) GL.result=-1;
-    if(GL.status[0] && SDL_GetTicks()<GL.status_until) { wchar_t w[170]; gl_wide(GL.status,w,170);
+    if(GL.status[0] && SDL_GetTicks()<GL.status_until) { wchar_t w[170]; if(!MultiByteToWideChar(CP_UTF8,0,GL.status,-1,w,170)) w[0]=0;   /* notices are UTF-8 source text */
         gl_panel((gl_rect){150,330,340,22},0x2E8A80,0x16504A,1); gl_text_c(GL.f_body,(gl_rect){150,330,340,22},0xFFFFFF,w); }
     GdiFlush();
 }
@@ -19902,8 +19902,16 @@ static int ensure_game_derived_inputs(const char *guest_path,const char *data_di
     char exe[700]; snprintf(exe,sizeof exe,"%s\\GW.EXE",data_dir);
     vfs_manifest_record want; memset(&want,0,sizeof want); snprintf(want.sha256,sizeof want.sha256,"%s",GW_TARGET_SHA256);
     if(!file_exists_a(exe)) { snprintf(err,errn,GWT("no se encuentra GW.EXE en la carpeta de Gene Wars (%s)","GW.EXE is not in the Gene Wars folder (%s)"),data_dir); return 0; }
-    if(!verify_manifest_file(&want,exe)) { snprintf(err,errn,GWT("GW.EXE no es el de Gene Wars 1.1 que usa esta versi\xF3n (SHA-256 distinto)",
-                                                                     "GW.EXE is not the Gene Wars 1.1 one this version uses (different SHA-256)")); return 0; }
+    if(!verify_manifest_file(&want,exe)) {
+        WIN32_FILE_ATTRIBUTE_DATA fa; const int cd10=GetFileAttributesExA(exe,GetFileExInfoStandard,&fa) && !fa.nFileSizeHigh &&
+            fa.nFileSizeLow==1265994u;   /* the original 1.0 GW.EXE of the European CD (built 2 Sep 1996) */
+        if(cd10) snprintf(err,errn,"%s",GWT("ese GW.EXE es la versi\xF3n 1.0 del CD original. GWRecomp necesita el GW.EXE del parche "
+                                             "oficial 1.1: instala el parche 1.1 sobre esa carpeta y vuelve a intentarlo.",
+                                             "that GW.EXE is version 1.0 from the original CD. GWRecomp needs the GW.EXE of the official "
+                                             "1.1 patch: apply the 1.1 patch to that folder and try again."));
+        else snprintf(err,errn,"%s",GWT("GW.EXE no es el de Gene Wars 1.1 que usa esta versi\xF3n (SHA-256 distinto)",
+                                         "GW.EXE is not the Gene Wars 1.1 one this version uses (different SHA-256)"));
+        return 0; }
     FILE *f=fopen(exe,"rb"); if(!f) { snprintf(err,errn,GWT("no se pudo leer GW.EXE","cannot read GW.EXE")); return 0; }
     fseek(f,0,SEEK_END); const long n=ftell(f); rewind(f);
     uint8_t *d=n>0?(uint8_t *)malloc((size_t)n):NULL;
