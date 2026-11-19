@@ -1,6 +1,6 @@
 # GWRecomp
 
-> **v1.1:** features, installation and the legal notice for players are in the [repository README](../README.md).
+> **v1.2:** features, installation and the legal notice for players are in the [repository README](../README.md).
 > This page covers building from source and the project's internals.
 
 **GWRecomp** is an experimental effort to run *Gene Wars* (Bullfrog Productions, 1996, v1.1 DOS4GW/Watcom LE executable) **natively on Windows, without DOSBox**, by statically lifting the original x86-32 code to C and running it on a modern host-platform layer (SDL2 video/audio/input, DOS/DPMI service emulation, a virtual SB16 for the original Miles mixer, CD-DA playback).

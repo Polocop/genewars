@@ -54,7 +54,7 @@ GitHub issues are kept in [gwrecomp/docs/issues-archive.md](gwrecomp/docs/issues
 - **Native Win32/SDL2 build** of the original executable: one `gwrecomp.exe` plus `SDL2.dll`, no DOSBox, no emulator.
 - **Deterministic regression check:** the A/B suite renders 56 frame captures at four points of mission 1 (after
   the landing, before a creature is ready, during construction, extractor selected) and compares them with reference
-  hashes; v1.1 matches all 56 bit for bit. The presentation extras (interpolation, water, audio) never write game
+  hashes; v1.2 matches all 56 bit for bit. The presentation extras (interpolation, water, audio) never write game
   memory, so they cannot change these frames.
 - **Three view modes:**
   - Classic `640×480` (the original frame),
@@ -88,7 +88,7 @@ GitHub issues are kept in [gwrecomp/docs/issues-archive.md](gwrecomp/docs/issues
 1. Have **Gene Wars 1.1 (European edition)** installed: the `GENEWARS` folder created by the original installer
    (`DATA`, `LEVELS`, `SOUND`, `INTRO`, `ANIMS`, `LDATA`, `S`, `SPEECH`, `SAVE` and the loose files such as `GW.EXE`).
    GWRecomp checks them with SHA-256 and only reads them.
-2. Download `GWRecomp-v1.1-win32.zip` from [Releases](https://github.com/Polocop/genewars/releases/latest) and unzip it anywhere you can write (saves and logs go next to the program).
+2. Download `GWRecomp-v1.2-win32.zip` from [Releases](https://github.com/Polocop/genewars/releases/latest) and unzip it anywhere you can write (saves and logs go next to the program).
 3. Double-click `gwrecomp.exe`. In the launcher press **CHANGE** and choose your `GENEWARS` folder; the four marks
    DATA / LEVELS / SOUND / INTRO turn green. The **ES / EN** buttons at the top switch the launcher's language.
 4. Start the game, continue the last game, or pick a mission.
@@ -134,7 +134,7 @@ Building from source (Windows, MSYS2 mingw32, Python, LLVM clang) is described i
 1. Ten instalado **Gene Wars 1.1 (edición europea)**: la carpeta `GENEWARS` que crea el instalador original
    (`DATA`, `LEVELS`, `SOUND`, `INTRO`, `ANIMS`, `LDATA`, `S`, `SPEECH`, `SAVE` y los archivos sueltos como `GW.EXE`).
    GWRecomp los comprueba con SHA-256 y solo los lee.
-2. Descarga `GWRecomp-v1.1-win32.zip` de [Releases](https://github.com/Polocop/genewars/releases/latest) y descomprímelo en una carpeta donde puedas escribir (ahí se guardan partidas y registros).
+2. Descarga `GWRecomp-v1.2-win32.zip` de [Releases](https://github.com/Polocop/genewars/releases/latest) y descomprímelo en una carpeta donde puedas escribir (ahí se guardan partidas y registros).
 3. Haz doble clic en `gwrecomp.exe`. En el lanzador pulsa **CAMBIAR** y elige tu carpeta `GENEWARS`; las cuatro
    marcas DATA / LEVELS / SOUND / INTRO se ponen en verde. Los botones **ES / EN** de arriba cambian el idioma del
    lanzador.
