@@ -116,8 +116,10 @@ clean_horizon = 1
 water_effects = 1
 enhanced_audio = 1
 launcher = 1
+; launcher language: es, en or auto (Windows display language); also the ES / EN buttons in the launcher
+language = auto
 skip_intro = 0
-; your Gene Wars 1.1 folder (the launcher's CAMBIAR button fills this in)
+; your Gene Wars 1.1 folder (the launcher's CHANGE / CAMBIAR button fills this in)
 ; data_dir = C:\Juegos\GENEWARS
 '@ -replace "`r?`n", "`r`n" | Set-Content -LiteralPath (Join-Path $out 'gwrecomp.ini') -Encoding ascii   # ends with a line break
 $sdlLicense = Join-Path (Split-Path -Parent $mingwBin) 'share\licenses\SDL2\LICENSE.txt'

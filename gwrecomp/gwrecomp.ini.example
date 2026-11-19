@@ -32,6 +32,9 @@ middle_drag = 1
 skip_intro = 0
 ; 1 = show the launcher when the program starts without arguments (--launcher always shows it, --fast-launch never)
 launcher = 1
+; language of the launcher and of GWRecomp's own messages: es (Spanish), en (English) or auto (follows the Windows
+; display language); also the ES / EN buttons at the top of the launcher. The game keeps its own texts.
+language = auto
 ; mission selected in the launcher's mission list (1..24)
 last_mission = 1
 ; .cue of your own Gene Wars CD image, for the CD music (else GENEWARS_CUE)
