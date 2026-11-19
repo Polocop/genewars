@@ -1,4 +1,4 @@
-# GWRecomp v1.0 — Gene Wars, natively on Windows
+# GWRecomp — Gene Wars, natively on Windows
 
 <p align="center">
   <img src="gwrecomp/docs/screenshots/widescreen.png" alt="Mission 1 in widescreen 854x480: an extractor built on the GOOP field and the translucent placement ghost of the next one" width="100%">
@@ -12,6 +12,9 @@ AI and mixer are the original code; the host only replaces the hardware and DOS 
 
 It needs **your own copy of Gene Wars 1.1**: no game files are included (see [Legal](#legal)).
 
+**Download:** [latest release](https://github.com/Polocop/genewars/releases/latest) (`GWRecomp-*-win32.zip`, Windows,
+ready to play with your own `GENEWARS` folder) · **Descarga:** [última versión](https://github.com/Polocop/genewars/releases/latest).
+
 ## Screenshots
 
 <table>
@@ -24,15 +27,20 @@ It needs **your own copy of Gene Wars 1.1**: no game files are included (see [Le
     <td align="center"><em>Classic 640×480, as in 1996</em></td>
   </tr>
   <tr>
-    <td width="50%"><img src="gwrecomp/docs/screenshots/launcher-play.png" alt="Native launcher: mission selection"></td>
-    <td width="50%"><img src="gwrecomp/docs/screenshots/launcher-display.png" alt="Native launcher: display options"></td>
+    <td width="50%"><img src="gwrecomp/docs/screenshots/launcher-play.png" alt="Native launcher: play tab"></td>
+    <td width="50%"><img src="gwrecomp/docs/screenshots/launcher-missions.png" alt="Native launcher: mission selection"></td>
   </tr>
   <tr>
-    <td align="center"><em>Native launcher: start, continue or pick any of the 24 missions</em></td>
-    <td align="center"><em>Display options: view mode, resolution, 60/120 FPS, filter, water and GOOP</em></td>
+    <td align="center"><em>Native launcher (English / Spanish): start, continue, start-up options</em></td>
+    <td align="center"><em>Missions: pick any of the 24 missions</em></td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><img src="gwrecomp/docs/screenshots/planet.png" alt="Planet system screen" width="60%"><br><em>The original planet-system screen, with its sounds</em></td>
+    <td width="50%"><img src="gwrecomp/docs/screenshots/launcher-graphics.png" alt="Native launcher: graphics options"></td>
+    <td width="50%"><img src="gwrecomp/docs/screenshots/planet.png" alt="Planet system screen"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Graphics: view mode, resolution, 60/120 FPS, filter, water and GOOP</em></td>
+    <td align="center"><em>The original planet-system screen, with its sounds</em></td>
   </tr>
 </table>
 
@@ -45,7 +53,7 @@ the source folders of this repository, untouched.
 - **Native Win32/SDL2 build** of the original executable: one `gwrecomp.exe` plus `SDL2.dll`, no DOSBox, no emulator.
 - **Deterministic regression check:** the A/B suite renders 56 frame captures at four points of mission 1 (after
   the landing, before a creature is ready, during construction, extractor selected) and compares them with reference
-  hashes; v1.0 matches all 56 bit for bit. The presentation extras (interpolation, water, audio) never write game
+  hashes; v1.1 matches all 56 bit for bit. The presentation extras (interpolation, water, audio) never write game
   memory, so they cannot change these frames.
 - **Three view modes:**
   - Classic `640×480` (the original frame),
@@ -63,17 +71,17 @@ the source folders of this repository, untouched.
   - stereo panning and distance fade calibrated to the visible map width,
   - subtle ±4.5 % pitch variation on effects (never on voices),
   - music ducking while a voice speaks.
-- **Native graphical launcher:** mission selector 1–24, Continue, view/resolution/filter/audio options, all saved
-  in `gwrecomp.ini`.
+- **Native graphical launcher in English and Spanish** (ES / EN buttons; by default it follows the Windows
+  language): mission selector 1–24, Continue, view/resolution/filter/audio options, all saved in `gwrecomp.ini`.
 
 ## Installation (English)
 
 1. Have **Gene Wars 1.1 (European edition)** installed: the `GENEWARS` folder created by the original installer
    (`DATA`, `LEVELS`, `SOUND`, `INTRO`, `ANIMS`, `LDATA`, `S`, `SPEECH`, `SAVE` and the loose files such as `GW.EXE`).
    GWRecomp checks them with SHA-256 and only reads them.
-2. Unzip `GWRecomp-v1.0-win32.zip` anywhere you can write (saves and logs go next to the program).
-3. Double-click `gwrecomp.exe`. In the launcher press **CAMBIAR** and choose your `GENEWARS` folder; the four marks
-   DATA / LEVELS / SOUND / INTRO turn green.
+2. Download `GWRecomp-v1.1-win32.zip` from [Releases](https://github.com/Polocop/genewars/releases/latest) and unzip it anywhere you can write (saves and logs go next to the program).
+3. Double-click `gwrecomp.exe`. In the launcher press **CHANGE** and choose your `GENEWARS` folder; the four marks
+   DATA / LEVELS / SOUND / INTRO turn green. The **ES / EN** buttons at the top switch the launcher's language.
 4. Start the game, continue the last game, or pick a mission.
 
 **First start:** the first time you enter the game, `gwrecomp.exe` prepares two files in `work\` from *your* `GW.EXE`
@@ -90,6 +98,7 @@ them.
 | `filter` | `sharp`, `epx` or `crt` (also F7 in game) |
 | `water_effects` | animated water and GOOP (`1`/`0`) |
 | `enhanced_audio` | calibrated panning, pitch variation, music ducking (`1`/`0`) |
+| `language` | launcher language: `en`, `es` or `auto` (Windows display language) |
 | `cd_cue` | path to your own Gene Wars CD image `.cue`, for the CD music |
 | `data_dir` | your `GENEWARS` folder (the launcher fills it in) |
 
@@ -104,9 +113,10 @@ Building from source (Windows, MSYS2 mingw32, Python, LLVM clang) is described i
 1. Ten instalado **Gene Wars 1.1 (edición europea)**: la carpeta `GENEWARS` que crea el instalador original
    (`DATA`, `LEVELS`, `SOUND`, `INTRO`, `ANIMS`, `LDATA`, `S`, `SPEECH`, `SAVE` y los archivos sueltos como `GW.EXE`).
    GWRecomp los comprueba con SHA-256 y solo los lee.
-2. Descomprime `GWRecomp-v1.0-win32.zip` en una carpeta donde puedas escribir (ahí se guardan partidas y registros).
+2. Descarga `GWRecomp-v1.1-win32.zip` de [Releases](https://github.com/Polocop/genewars/releases/latest) y descomprímelo en una carpeta donde puedas escribir (ahí se guardan partidas y registros).
 3. Haz doble clic en `gwrecomp.exe`. En el lanzador pulsa **CAMBIAR** y elige tu carpeta `GENEWARS`; las cuatro
-   marcas DATA / LEVELS / SOUND / INTRO se ponen en verde.
+   marcas DATA / LEVELS / SOUND / INTRO se ponen en verde. Los botones **ES / EN** de arriba cambian el idioma del
+   lanzador.
 4. Inicia el juego, continúa la última partida o elige una misión.
 
 **Primer arranque:** la primera vez que entras al juego, `gwrecomp.exe` prepara dos archivos en `work\` a partir de
@@ -114,7 +124,7 @@ Building from source (Windows, MSYS2 mingw32, Python, LLVM clang) is described i
 compartas.
 
 **Opciones:** todo lo que cambias en el lanzador se guarda en `gwrecomp.ini` (modo de vista, resolución, pantalla
-completa, 60/120 FPS, filtro, `water_effects`, `enhanced_audio`). Para la música del CD añade
+completa, 60/120 FPS, filtro, `water_effects`, `enhanced_audio`, `language` = `es` / `en` / `auto`). Para la música del CD añade
 `cd_cue = C:\ruta\a\tu\imagen\genewars.cue` con tu propia imagen del CD. `gwrecomp.ini.example` explica cada clave.
 
 ## Legal
