@@ -8462,6 +8462,11 @@ static int g_ini_clean_horizon=1;   /* clean_horizon: drop 1-pixel horizon slive
 static int g_ini_water_effects=1;   /* water_effects: animated water ripples/caustics and GOOP highlights (presented frame only) */
 static int g_ini_enhanced_audio=1;  /* enhanced_audio: positional sound fitted to the view, SFX pitch variation, CD-DA ducking */
 static char g_ini_cd_cue[600];
+/* language = es | en | auto: the launcher and the program's own message boxes (the game keeps its own texts);
+   auto (or no key) follows the Windows display language: Spanish -> es, anything else -> en */
+static int g_ini_lang=-1;
+static int gw_lang_en(void) { return g_ini_lang>=0?g_ini_lang:PRIMARYLANGID(GetUserDefaultUILanguage())!=LANG_SPANISH; }
+#define GWT(es,en) (gw_lang_en()?(en):(es))
 /* where the launcher writes: the file that was read, else gwrecomp.ini next to the executable */
 static void gwrecomp_ini_target(char *path,size_t n) {
     if(g_ini_path_used[0]) { snprintf(path,n,"%s",g_ini_path_used); return; }
@@ -8548,6 +8553,11 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"clean_horizon")) g_ini_clean_horizon=atoi(val)!=0;
         else if(!strcmp(key,"water_effects")) g_ini_water_effects=atoi(val)!=0;
         else if(!strcmp(key,"enhanced_audio")) g_ini_enhanced_audio=atoi(val)!=0;
+        else if(!strcmp(key,"language")) {
+            if(!_stricmp(val,"es")) g_ini_lang=0; else if(!_stricmp(val,"en")) g_ini_lang=1;
+            else if(!val[0] || !_stricmp(val,"auto")) g_ini_lang=-1;
+            else fprintf(stderr,"gwrecomp.ini: unknown language '%s' (es, en, auto)\n",val);
+        }
         else if(key[0]) fprintf(stderr,"gwrecomp.ini: unknown key '%s'\n",key);
     }
     fclose(f);
@@ -8958,13 +8968,16 @@ static void show_interactive_frontier_notice(const gw_recomp_context *context) {
     const uint32_t eip=context?context->eip:gw_recomp_last_guest_instruction();
     const uint32_t target=trap.reason==GW_PORT_IO_TRAP_UNRESOLVED_INDIRECT_CALL?
         trap.port:0u;
-    _snprintf(message,sizeof message-1,
+    _snprintf(message,sizeof message-1,GWT(
         "GeneWars pausó por una frontera de código aún no admitida.\n\n"
         "EIP original: 0x%08X\nDestino indirecto: 0x%08X\n"
-        "Se guardó el contexto en evidence\\last_interactive_crash.log.",eip,target);
+        "Se guardó el contexto en evidence\\last_interactive_crash.log.",
+        "Gene Wars stopped at a code boundary that is not supported yet.\n\n"
+        "Original EIP: 0x%08X\nIndirect target: 0x%08X\n"
+        "The context was saved to evidence\\last_interactive_crash.log."),eip,target);
     message[sizeof message-1]='\0';
     (void)SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
-        "Frontera de recompilación",message,g_ifclevel_demo_window);
+        GWT("Frontera de recompilación","Recompilation boundary"),message,g_ifclevel_demo_window);
 }
 
 static unsigned inject_interactive_stress_click(uint32_t frame) {
@@ -19372,13 +19385,15 @@ static void gl_pick_folder(SDL_Window *win) {
     free_fn cofree=ole?(free_fn)(void *)GetProcAddress(ole,"CoTaskMemFree"):NULL;
     if(browse && topath) {
         char disp[MAX_PATH]=""; BROWSEINFOA bi; memset(&bi,0,sizeof bi);
-        bi.pszDisplayName=disp; bi.lpszTitle="Carpeta GENEWARS de tu copia de Gene Wars 1.1 (con DATA, LEVELS, SOUND e INTRO)";
+        bi.pszDisplayName=disp; bi.lpszTitle=GWT("Carpeta GENEWARS de tu copia de Gene Wars 1.1 (con DATA, LEVELS, SOUND e INTRO)",
+                                         "The GENEWARS folder of your copy of Gene Wars 1.1 (with DATA, LEVELS, SOUND and INTRO)");
         bi.ulFlags=BIF_RETURNONLYFSDIRS|0x40u /* BIF_NEWDIALOGSTYLE */;
         LPITEMIDLIST id=browse(&bi);
         if(id) { char p[MAX_PATH]; if(topath(id,p)) {
                 snprintf(GL.data_dir,sizeof GL.data_dir,"%s",p); gl_scan_data();
                 if(gwrecomp_ini_set("data_dir",GL.data_dir)) snprintf(g_ini_data_dir,sizeof g_ini_data_dir,"%s",GL.data_dir);
-                gl_status(GL.data_all?"Carpeta guardada en gwrecomp.ini":"A esa carpeta le faltan subcarpetas del juego"); }
+                gl_status(GL.data_all?GWT("Carpeta guardada en gwrecomp.ini","Folder saved in gwrecomp.ini"):
+                                      GWT("A esa carpeta le faltan subcarpetas del juego","That folder lacks some of the game's subfolders")); }
             if(cofree) cofree(id); }
     }
     if(sh) FreeLibrary(sh); if(ole) FreeLibrary(ole);
@@ -19393,51 +19408,62 @@ static void gl_start_mission(int m) {
 
 static void gl_draw_play(void) {
     const int ready=GL.data_all;
-    gl_panel((gl_rect){12,52,246,300},GLC_PANEL2,0x15142A,0);
-    if(gl_button((gl_rect){22,62,226,58},L"INICIAR JUEGO",ready?1:3,GL.f_head) && ready) { g_cli_skip_intro=g_ini_skip_intro; GL.result=1; }
-    gl_text_fit(GL.f_small,24,124,224,GLC_GREY,L"Menú de título original");
+    gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
+    /* left: start and continue */
+    if(gl_button((gl_rect){22,64,290,72},GWT(L"INICIAR JUEGO",L"START GAME"),ready?1:3,GL.f_head) && ready) { g_cli_skip_intro=g_ini_skip_intro; GL.result=1; }
+    gl_text_fit(GL.f_small,24,140,286,GLC_GREY,GWT(L"Menú de título original",L"Original title menu"));
     const int can_cont=ready && GL.have_save;
-    if(gl_button((gl_rect){22,142,226,36},L"CONTINUAR ÚLTIMA PARTIDA",can_cont?0:3,GL.f_bold) && can_cont) {
-        char dst[MAX_PATH]; snprintf(dst,sizeof dst,"%s\\work\\launcher_continue.sav",GL.root);
+    if(gl_button((gl_rect){22,166,290,42},GWT(L"CONTINUAR ÚLTIMA PARTIDA",L"CONTINUE LAST GAME"),can_cont?0:3,GL.f_bold) && can_cont) {
+        char dst[MAX_PATH]; snprintf(dst,sizeof dst,"%s\work\launcher_continue.sav",GL.root);
         if(CopyFileA(GL.save_path,dst,FALSE) && strlen(dst)<sizeof g_cli_load_save_path) {
             strcpy(g_cli_load_save_path,dst); g_cli_load_save=1; g_cli_skip_intro=1; GL.result=1;
-        } else gl_status("No se pudo preparar la partida guardada");
+        } else gl_status(GWT("No se pudo preparar la partida guardada","The saved game could not be prepared"));
     }
-    { wchar_t w[120]; if(GL.have_save) gl_wide(GL.save_label,w,120); else wcscpy(w,L"(todavía no hay partidas guardadas)");
-      gl_text_fit(GL.f_small,24,182,224,GL.have_save?GLC_DIMCYAN:GLC_GREY,w); }
-    gl_text_fit(GL.f_bold,24,206,224,GLC_AMBER,L"AL ARRANCAR");
-    static const wchar_t *const yn[2]={L"NO",L"SÍ"};
-    gl_text_fit(GL.f_body,24,226,120,GLC_TEXT,L"Saltar vídeos");
-    int c=gl_choice(150,222,96,20,yn,2,g_ini_skip_intro,0u);
-    if(c>=0 && c!=g_ini_skip_intro) { g_ini_skip_intro=c; gwrecomp_ini_set_int("skip_intro",c); }
-    gl_text_fit(GL.f_body,24,252,120,GLC_TEXT,L"Este lanzador");
-    c=gl_choice(150,248,96,20,yn,2,g_ini_launcher,0u);
-    if(c>=0 && c!=g_ini_launcher) { g_ini_launcher=c; gwrecomp_ini_set_int("launcher",c); }
-    gl_text_fit(GL.f_small,24,274,224,GLC_GREY,L"Sin él, el doble clic arranca");
-    gl_text_fit(GL.f_small,24,287,224,GLC_GREY,L"directo (--launcher lo muestra)");
-    {   wchar_t w[160]; const int ri=gl_res_index();
-        swprintf(w,160,L"%ls · %u FPS · %ls",g_ws_canvas?L"Zoom out":g_ws_requested?L"Panorámico":L"Clásico",
-            g_ini_fps?g_ini_fps:120u,g_cli_fullscreen?L"sin bordes":ri==0?L"ventana":L"ventana fija");
-        gl_text_fit(GL.f_small,24,316,224,GLC_DIMCYAN,w);
-        gl_text_fit(GL.f_small,24,330,224,GLC_GREY,L"Imagen: pestaña PANTALLA"); }
+    { wchar_t w[120]; if(GL.have_save) gl_wide(GL.save_label,w,120); else wcscpy(w,GWT(L"(todavía no hay partidas guardadas)",L"(no saved games yet)"));
+      gl_text_fit(GL.f_small,24,212,286,GL.have_save?GLC_DIMCYAN:GLC_GREY,w); }
+    if(gl_button((gl_rect){22,252,290,30},GWT(L"ELEGIR UNA MISIÓN",L"CHOOSE A MISSION"),ready?0:3,GL.f_bold) && ready) GL.tab=1;
+    gl_text_fit(GL.f_small,24,286,286,GLC_GREY,GWT(L"Las 24 misiones sueltas: pestaña MISIONES",L"Any of the 24 missions: MISSIONS tab"));
 
-    /* mission select */
-    gl_panel((gl_rect){266,52,362,300},GLC_PANEL2,0x15142A,0);
-    gl_text_fit(GL.f_bold,278,58,340,GLC_AMBER,L"SELECCIÓN DE MISIÓN");
+    /* right: start-up options and the picture settings in use */
+    gl_panel((gl_rect){330,62,288,170},0x2E2B4E,0x1E1C36,0);
+    gl_text_fit(GL.f_bold,342,70,264,GLC_AMBER,GWT(L"AL ARRANCAR",L"AT START"));
+    const wchar_t *const yn[2]={L"NO",GWT(L"SÍ",L"YES")};
+    gl_text_fit(GL.f_body,342,98,124,GLC_TEXT,GWT(L"Saltar vídeos",L"Skip videos"));
+    int c=gl_choice(470,94,136,22,yn,2,g_ini_skip_intro,0u);
+    if(c>=0 && c!=g_ini_skip_intro) { g_ini_skip_intro=c; gwrecomp_ini_set_int("skip_intro",c); }
+    gl_text_fit(GL.f_body,342,130,124,GLC_TEXT,GWT(L"Este lanzador",L"This launcher"));
+    c=gl_choice(470,126,136,22,yn,2,g_ini_launcher,0u);
+    if(c>=0 && c!=g_ini_launcher) { g_ini_launcher=c; gwrecomp_ini_set_int("launcher",c); }
+    gl_text_fit(GL.f_small,342,162,264,GLC_GREY,GWT(L"Sin él, el doble clic arranca el juego",L"Without it, a double click starts"));
+    gl_text_fit(GL.f_small,342,176,264,GLC_GREY,GWT(L"directo (--launcher lo muestra).",L"the game directly (--launcher shows it)."));
+    gl_text_fit(GL.f_small,342,200,264,GLC_GREY,GWT(L"Saltar vídeos se aplica a INICIAR JUEGO.",L"Skip videos applies to START GAME."));
+    gl_panel((gl_rect){330,244,288,98},0x2E2B4E,0x1E1C36,0);
+    gl_text_fit(GL.f_bold,342,252,264,GLC_AMBER,GWT(L"IMAGEN",L"PICTURE"));
+    {   wchar_t w[160]; const int ri=gl_res_index();
+        swprintf(w,160,L"%ls · %u FPS · %ls",g_ws_canvas?L"Zoom out":g_ws_requested?GWT(L"Panorámico",L"Widescreen"):GWT(L"Clásico",L"Classic"),
+            g_ini_fps?g_ini_fps:120u,g_cli_fullscreen?GWT(L"sin bordes",L"borderless"):ri==0?GWT(L"ventana",L"window"):GWT(L"ventana fija",L"fixed window"));
+        gl_text_fit(GL.f_body,342,276,264,GLC_DIMCYAN,w);
+        gl_text_fit(GL.f_small,342,300,264,GLC_GREY,GWT(L"Se cambia en la pestaña GRÁFICOS",L"Change it in the GRAPHICS tab")); }
+}
+static void gl_draw_missions(void) {
+    const int ready=GL.data_all;
+    gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
+    gl_text_fit(GL.f_bold,24,58,590,GLC_AMBER,GWT(L"SELECCIÓN DE MISIÓN",L"MISSION SELECT"));
     for(int m=1;m<=24;m++) {
-        const int col=(m-1)/8,row=(m-1)%8; gl_rect r={276+col*116,78+row*26,112,23};
+        const int col=(m-1)/8,row=(m-1)%8; gl_rect r={22+col*200,78+row*26,196,23};
         wchar_t w[48],nm[32]; gl_wide(GL.names[m][0]?GL.names[m]:"---",nm,32); swprintf(w,48,L"%02d %ls",m,nm);
         const int hot=gl_in(r);
         if(m==GL.sel) gl_panel(r,0x2E8A80,0x16504A,0); else gl_panel(r,hot?0x4A4678:0x2E2B4E,hot?0x2C2948:0x1E1C36,1);
-        gl_text_fit(GL.f_body,r.x+6,r.y+5,r.w-10,m==GL.sel?0xFFFFFF:hot?GLC_CYAN:GLC_TEXT,w);
+        gl_text_fit(GL.f_body,r.x+8,r.y+5,r.w-14,m==GL.sel?0xFFFFFF:hot?GLC_CYAN:GLC_TEXT,w);
         if(hot && GL.clicked) { GL.sel=m; if(GL.dbl && ready) gl_start_mission(m); }
     }
     {   wchar_t w[64],nm[32]; gl_wide(GL.names[GL.sel][0]?GL.names[GL.sel]:"",nm,32);
-        swprintf(w,64,L"JUGAR MISIÓN %02d  %ls",GL.sel,nm);
-        if(gl_button((gl_rect){276,294,342,30},w,ready?1:3,GL.f_bold) && ready) gl_start_mission(GL.sel); }
-    gl_text_fit(GL.f_small,278,328,340,GLC_GREY,GL.sel>1?L"Usa el código de niveles del juego: sus trucos":
-                                                          L"Partida nueva normal desde la primera misión");
-    if(GL.sel>1) gl_text_fit(GL.f_small,278,340,340,GLC_GREY,L"siguen activos en esa sesión (guarda y vuelve a cargar)");
+        swprintf(w,64,GWT(L"JUGAR MISIÓN %02d  %ls",L"PLAY MISSION %02d  %ls"),GL.sel,nm);
+        if(gl_button((gl_rect){22,294,596,30},w,ready?1:3,GL.f_bold) && ready) gl_start_mission(GL.sel); }
+    gl_text_fit(GL.f_small,24,330,594,GLC_GREY,GL.sel>1?GWT(L"Usa el código de niveles del juego: sus trucos siguen activos en esa sesión (guarda y vuelve a cargar)",
+                                                            L"Uses the game's level code: its cheats stay active in that session (save and load again)"):
+                                                        GWT(L"Partida nueva normal desde la primera misión · doble clic en una misión para empezarla",
+                                                            L"A normal new game from the first mission · double-click a mission to start it"));
 }
 /* settings row: name and one-line description in the left column (x 24..216), choices from x = 228 */
 static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
@@ -19447,55 +19473,56 @@ static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
 static void gl_draw_display(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
     /* rows every 41 units: 60, 101, 142, 183, 224, 265, 306 (panel 52..352) */
-    static const wchar_t *const modes[3]={L"CLÁSICO 4:3",L"PANORÁMICO 854×480",L"ZOOM OUT 1152×640"};
-    gl_row_label(60,L"MODO DE VISTA",L"Zoom: rueda; Inicio = 1x");
+    const wchar_t *const modes[3]={GWT(L"CLÁSICO 4:3",L"CLASSIC 4:3"),GWT(L"PANORÁMICO 854×480",L"WIDESCREEN 854×480"),L"ZOOM OUT 1152×640"};
+    gl_row_label(60,GWT(L"MODO DE VISTA",L"VIEW MODE"),GWT(L"Zoom: rueda; Inicio = 1x",L"Zoom: wheel; Home = 1x"));
     int cur=g_ws_canvas?2:g_ws_requested?1:0;
     int c=gl_choice(228,60,390,24,modes,3,cur,0u);
     if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
     static const wchar_t *const res[5]={L"AUTO",L"900p",L"1080p",L"1440p",L"2160p"};
     unsigned dis=0u; for(int i=1;i<5;i++) if(GL.desk_w && (gl_res_w[i]>GL.desk_w || gl_res_h[i]>GL.desk_h)) dis|=1u<<i;
-    gl_row_label(101,L"RESOLUCIÓN",L"Tamaño de la ventana");
+    gl_row_label(101,GWT(L"RESOLUCIÓN",L"RESOLUTION"),GWT(L"Tamaño de la ventana",L"Window size"));
     cur=gl_res_index(); c=gl_choice(228,101,390,24,res,5,cur,dis);
     if(c>=0 && c!=cur) { g_cli_res_w=gl_res_w[c]; g_cli_res_h=gl_res_h[c]; (void)gwrecomp_ini_set("resolution",gl_res_ini[c]); }
-    static const wchar_t *const fs[2]={L"VENTANA",L"COMPLETA SIN BORDES"};
-    gl_row_label(142,L"PANTALLA",L"Sin bordes = escritorio");
+    const wchar_t *const fs[2]={GWT(L"VENTANA",L"WINDOW"),GWT(L"COMPLETA SIN BORDES",L"BORDERLESS FULLSCREEN")};
+    gl_row_label(142,GWT(L"PANTALLA",L"SCREEN"),GWT(L"Sin bordes = escritorio",L"Borderless = desktop size"));
     c=gl_choice(228,142,390,24,fs,2,g_cli_fullscreen,0u);
     if(c>=0 && c!=g_cli_fullscreen) { g_cli_fullscreen=c; gwrecomp_ini_set_int("fullscreen",c); }
-    static const wchar_t *const fps[2]={L"60 FPS CLÁSICO",L"120 FPS INTERPOLADO"};
-    gl_row_label(183,L"FOTOGRAMAS",L"El ritmo del juego no cambia");
+    const wchar_t *const fps[2]={GWT(L"60 FPS CLÁSICO",L"60 FPS CLASSIC"),GWT(L"120 FPS INTERPOLADO",L"120 FPS INTERPOLATED")};
+    gl_row_label(183,GWT(L"FOTOGRAMAS",L"FRAME RATE"),GWT(L"El ritmo del juego no cambia",L"The game speed stays the same"));
     cur=g_ini_fps==60u?0:1; c=gl_choice(228,183,390,24,fps,2,cur,0u);
     if(c>=0 && c!=cur) { g_ini_fps=c?120u:60u; gwrecomp_ini_set_int("fps",(int)g_ini_fps); }
-    static const wchar_t *const flt[3]={L"NÍTIDO",L"EPX SUAVE",L"CRT"};
-    gl_row_label(224,L"FILTRO (F7)",L"También con F7 al jugar");
+    const wchar_t *const flt[3]={GWT(L"NÍTIDO",L"SHARP"),GWT(L"EPX SUAVE",L"EPX SMOOTH"),L"CRT"};
+    gl_row_label(224,GWT(L"FILTRO (F7)",L"FILTER (F7)"),GWT(L"También con F7 al jugar",L"Also with F7 while playing"));
     cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,224,390,24,flt,3,cur,0u);
     if(c>=0 && c!=cur) { g_filter_mode=c; (void)gwrecomp_ini_set("filter",g_filter_names[c]); }
-    static const wchar_t *const hz[2]={L"ORIGINAL",L"LIMPIO"};
-    gl_row_label(265,L"HORIZONTE",L"Quita píxeles sueltos");
+    const wchar_t *const hz[2]={L"ORIGINAL",GWT(L"LIMPIO",L"CLEAN")};
+    gl_row_label(265,GWT(L"HORIZONTE",L"HORIZON"),GWT(L"Quita píxeles sueltos",L"Removes stray pixels"));
     c=gl_choice(228,265,390,24,hz,2,g_ini_clean_horizon,0u);
     if(c>=0 && c!=g_ini_clean_horizon) { g_ini_clean_horizon=c; gwrecomp_ini_set_int("clean_horizon",c); }
-    static const wchar_t *const fx[2]={L"NO",L"SÍ"};
-    gl_row_label(306,L"EFECTOS AGUA / GOOP",L"Olas y brillos animados");
+    const wchar_t *const fx[2]={L"NO",GWT(L"SÍ",L"YES")};
+    gl_row_label(306,GWT(L"EFECTOS AGUA / GOOP",L"WATER / GOOP EFFECTS"),GWT(L"Olas y brillos animados",L"Animated waves and glints"));
     c=gl_choice(228,306,390,24,fx,2,g_ini_water_effects,0u);
     if(c>=0 && c!=g_ini_water_effects) { g_ini_water_effects=c; gwrecomp_ini_set_int("water_effects",c); }
 }
 static void gl_draw_controls(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
-    static const wchar_t *const yn[2]={L"NO",L"SÍ"};
-    gl_row_label(62,L"CÁMARA CON TECLADO",L"WASD y flechas");
+    const wchar_t *const yn[2]={L"NO",GWT(L"SÍ",L"YES")};
+    gl_row_label(62,GWT(L"CÁMARA CON TECLADO",L"KEYBOARD CAMERA"),GWT(L"WASD y flechas",L"WASD and arrow keys"));
     int c=gl_choice(228,62,200,24,yn,2,g_ini_camera_keys,0u);
     if(c>=0 && c!=g_ini_camera_keys) { g_ini_camera_keys=c; gwrecomp_ini_set_int("camera_keys",c); }
-    gl_row_label(116,L"ARRASTRE CON RUEDA",L"Pulsa la rueda y arrastra");
+    gl_row_label(116,GWT(L"ARRASTRE CON RUEDA",L"WHEEL DRAG"),GWT(L"Pulsa la rueda y arrastra",L"Hold the wheel and drag"));
     c=gl_choice(228,116,200,24,yn,2,g_ini_middle_drag,0u);
     if(c>=0 && c!=g_ini_middle_drag) { g_ini_middle_drag=c; gwrecomp_ini_set_int("middle_drag",c); }
     static const wchar_t *const tb[3]={L"1x",L"2x",L"4x"};
     const LONG tl=g_turbo_level; const int cur=tl==4?2:tl==2?1:0;
-    gl_row_label(170,L"TURBO INICIAL (F8)",L"Velocidad al empezar");
+    gl_row_label(170,GWT(L"TURBO INICIAL (F8)",L"START TURBO (F8)"),GWT(L"Velocidad al empezar",L"Speed when a game starts"));
     c=gl_choice(228,170,200,24,tb,3,cur,0u);
     if(c>=0 && c!=cur) { g_turbo_level=c==2?4:c==1?2:1; gwrecomp_ini_set_int("turbo",(int)g_turbo_level); }
     gl_panel((gl_rect){444,58,176,166},0x2E2B4E,0x1E1C36,0);
-    gl_text_fit(GL.f_bold,454,66,160,GLC_AMBER,L"TECLAS EN PARTIDA");
-    static const wchar_t *const keys[][2]={{L"F7",L"filtro"},{L"F8",L"turbo 1x/2x/4x"},{L"TAB",L"turbo 4x (mantener)"},
-        {L"Rueda",L"zoom"},{L"Inicio",L"zoom 1x"},{L"F10",L"soltar el ratón"},{L"ESC",L"opciones del juego"}};
+    gl_text_fit(GL.f_bold,454,66,160,GLC_AMBER,GWT(L"TECLAS EN PARTIDA",L"IN-GAME KEYS"));
+    const wchar_t *const keys[][2]={{L"F7",GWT(L"filtro",L"filter")},{L"F8",L"turbo 1x/2x/4x"},{L"TAB",GWT(L"turbo 4x (mantener)",L"turbo 4x (hold)")},
+        {GWT(L"Rueda",L"Wheel"),L"zoom"},{GWT(L"Inicio",L"Home"),L"zoom 1x"},{L"F10",GWT(L"soltar el ratón",L"release the mouse")},
+        {L"ESC",GWT(L"opciones del juego",L"game options")}};
     for(int i=0;i<7;i++) { gl_text_fit(GL.f_body,454,88+i*19,44,GLC_CYAN,keys[i][0]); gl_text_fit(GL.f_body,500,88+i*19,114,GLC_TEXT,keys[i][1]); }
 }
 static void gl_draw(void) {
@@ -19510,25 +19537,30 @@ static void gl_draw(void) {
     /* header */
     gl_panel((gl_rect){0,0,GL_W,46},0x4A4678,0x23213C,1);
     gl_text_fit(GL.f_title,14,4,290,GLC_CYAN,L"GENE WARS");
-    gl_text_fit(GL.f_small,16,31,290,GLC_AMBER,L"RECOMPILACIÓN NATIVA · LANZADOR");
-    static const wchar_t *const tabs[3]={L"JUGAR",L"PANTALLA",L"CONTROLES"};
-    for(int i=0;i<3;i++) if(gl_button((gl_rect){316+i*104,10,98,26},tabs[i],GL.tab==i?2:0,GL.f_bold)) GL.tab=i;
-    if(GL.tab==0) gl_draw_play(); else if(GL.tab==1) gl_draw_display(); else gl_draw_controls();
+    gl_text_fit(GL.f_small,16,31,212,GLC_AMBER,GWT(L"RECOMPILACIÓN NATIVA · LANZADOR",L"NATIVE RECOMPILATION · LAUNCHER"));
+    {   /* language of the launcher and of the program's own messages (gwrecomp.ini language = es | en) */
+        static const wchar_t *const lang[2]={L"ES",L"EN"};
+        const int cur=gw_lang_en(),c=gl_choice(238,12,68,22,lang,2,cur,0u);
+        if(c>=0 && c!=cur) { g_ini_lang=c; (void)gwrecomp_ini_set("language",c?"en":"es"); }
+    }
+    const wchar_t *const tabs[4]={GWT(L"JUGAR",L"PLAY"),GWT(L"MISIONES",L"MISSIONS"),GWT(L"GRÁFICOS",L"GRAPHICS"),GWT(L"CONTROLES",L"CONTROLS")};
+    for(int i=0;i<4;i++) if(gl_button((gl_rect){314+i*81,10,77,26},tabs[i],GL.tab==i?2:0,GL.f_bold)) GL.tab=i;
+    if(GL.tab==0) gl_draw_play(); else if(GL.tab==1) gl_draw_missions(); else if(GL.tab==2) gl_draw_display(); else gl_draw_controls();
     /* footer: the Gene Wars folder */
     gl_panel((gl_rect){0,358,GL_W,42},0x3A3660,0x1C1A32,1);
-    {   wchar_t w[620]; gl_wide(GL.data_dir[0]?GL.data_dir:"(no configurada)",w,620);
+    {   wchar_t w[620]; gl_wide(GL.data_dir[0]?GL.data_dir:GWT("(no configurada)","(not set)"),w,620);
         /* a long path keeps its end (the GENEWARS folder) and loses its start */
         const wchar_t *p=w; static wchar_t cut[624];
         if(gl_text_w(GL.f_body,p)>316) {
             while(wcslen(p)>8) { p++; swprintf(cut,624,L"…%ls",p); if(gl_text_w(GL.f_body,cut)<=316) break; }
             p=cut;
         }
-        gl_text_fit(GL.f_small,12,362,316,GLC_GREY,L"CARPETA DE GENE WARS"); gl_text_fit(GL.f_body,12,377,316,GL.data_all?GLC_TEXT:GLC_REDHI,p); }
+        gl_text_fit(GL.f_small,12,362,316,GLC_GREY,GWT(L"CARPETA DE GENE WARS",L"GENE WARS FOLDER")); gl_text_fit(GL.f_body,12,377,316,GL.data_all?GLC_TEXT:GLC_REDHI,p); }
     static const wchar_t *const sub[4]={L"DATA",L"LEVELS",L"SOUND",L"INTRO"};
     for(int i=0;i<4;i++) gl_text_fit(GL.f_small,346+i*44,366,42,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,sub[i]);
-    for(int i=0;i<4;i++) gl_text_fit(GL.f_small,346+i*44,380,42,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,GL.data_ok[i]?L"OK":L"FALTA");
-    if(gl_button((gl_rect){526,364,52,28},L"CAMBIAR",0,GL.f_small)) GL.result=2;   /* the folder dialog opens outside the frame */
-    if(gl_button((gl_rect){582,364,52,28},L"SALIR",0,GL.f_small)) GL.result=-1;
+    for(int i=0;i<4;i++) gl_text_fit(GL.f_small,346+i*44,380,42,GL.data_ok[i]?GLC_GREEN:GLC_REDHI,GL.data_ok[i]?L"OK":GWT(L"FALTA",L"MISSING"));
+    if(gl_button((gl_rect){526,364,52,28},GWT(L"CAMBIAR",L"CHANGE"),0,GL.f_small)) GL.result=2;   /* the folder dialog opens outside the frame */
+    if(gl_button((gl_rect){582,364,52,28},GWT(L"SALIR",L"QUIT"),0,GL.f_small)) GL.result=-1;
     if(GL.status[0] && SDL_GetTicks()<GL.status_until) { wchar_t w[170]; gl_wide(GL.status,w,170);
         gl_panel((gl_rect){150,330,340,22},0x2E8A80,0x16504A,1); gl_text_c(GL.f_body,(gl_rect){150,330,340,22},0xFFFFFF,w); }
     GdiFlush();
@@ -19591,8 +19623,8 @@ static int launcher_run(const char *data_dir,const char *root) {
                 const SDL_Keycode kc=ev.key.keysym.sym;
                 if(kc==SDLK_ESCAPE) GL.result=-1;
                 else if((kc==SDLK_RETURN || kc==SDLK_KP_ENTER) && GL.data_all) { g_cli_skip_intro=g_ini_skip_intro; GL.result=1; }
-                else if(kc==SDLK_TAB) GL.tab=(GL.tab+1)%3;
-                else if(GL.tab==0 && (kc==SDLK_UP || kc==SDLK_DOWN)) GL.sel=GL.sel+(kc==SDLK_UP?-1:1)<1?24:GL.sel+(kc==SDLK_UP?-1:1)>24?1:GL.sel+(kc==SDLK_UP?-1:1);
+                else if(kc==SDLK_TAB) GL.tab=(GL.tab+1)%4;
+                else if(GL.tab==1 && (kc==SDLK_UP || kc==SDLK_DOWN)) GL.sel=GL.sel+(kc==SDLK_UP?-1:1)<1?24:GL.sel+(kc==SDLK_UP?-1:1)>24?1:GL.sel+(kc==SDLK_UP?-1:1);
             }
         }
         if(GL.result) break;
@@ -19602,7 +19634,7 @@ static int launcher_run(const char *data_dir,const char *root) {
             SDL_Surface *s=SDL_CreateRGBSurfaceWithFormatFrom(GL.px,GL_CW,GL_CH,32,GL_CW*4,SDL_PIXELFORMAT_RGB888);
             if(s) { SDL_SaveBMP(s,p); SDL_FreeSurface(s); }
             gw_flag_trace("TRACE launcher shot tab=%d texts_shrunk_or_cut=%d%c",shot_tab,GL.overflow,10);
-            if(++shot_tab>=3) GL.result=-1; else GL.tab=shot_tab;
+            if(++shot_tab>=4) GL.result=-1; else GL.tab=shot_tab;
         }
         if(GL.result==2) {   /* folder dialog (modal, outside the SDL frame) */
             GL.result=0; gl_pick_folder(win); continue;
@@ -19735,25 +19767,26 @@ static int ensure_game_derived_inputs(const char *guest_path,const char *data_di
         for(unsigned i=0;i<sizeof parts/sizeof parts[0];i++) for(unsigned k=0;k<parts[i].n;k++) {
             unsigned v=0; sscanf(parts[i].hex+2u*k,"%2x",&v); lm[parts[i].at+k]=(uint8_t)v; }
         const int ok=write_file_atomic(lowmem_path,lm,0x10000u); free(lm);
-        if(!ok) { snprintf(err,errn,"no se pudo escribir %s (\xBF" "carpeta de solo lectura?)",lowmem_path); return 0; }
+        if(!ok) { snprintf(err,errn,GWT("no se pudo escribir %s (\xBF" "carpeta de solo lectura?)","cannot write %s (read-only folder?)"),lowmem_path); return 0; }
         gw_flag_trace("TRACE first_start made %s%c",lowmem_path,10);
     }
     if(file_exists_a(guest_path)) return 1;
-    if(!data_dir || !data_dir[0] || !strcmp(data_dir,"-")) { snprintf(err,errn,"falta la carpeta de Gene Wars"); return 0; }
+    if(!data_dir || !data_dir[0] || !strcmp(data_dir,"-")) { snprintf(err,errn,GWT("falta la carpeta de Gene Wars","the Gene Wars folder is missing")); return 0; }
     char exe[700]; snprintf(exe,sizeof exe,"%s\\GW.EXE",data_dir);
     vfs_manifest_record want; memset(&want,0,sizeof want); snprintf(want.sha256,sizeof want.sha256,"%s",GW_TARGET_SHA256);
-    if(!file_exists_a(exe)) { snprintf(err,errn,"no se encuentra GW.EXE en la carpeta de Gene Wars (%s)",data_dir); return 0; }
-    if(!verify_manifest_file(&want,exe)) { snprintf(err,errn,"GW.EXE no es el de Gene Wars 1.1 que usa esta versi\xF3n (SHA-256 distinto)"); return 0; }
-    FILE *f=fopen(exe,"rb"); if(!f) { snprintf(err,errn,"no se pudo leer GW.EXE"); return 0; }
+    if(!file_exists_a(exe)) { snprintf(err,errn,GWT("no se encuentra GW.EXE en la carpeta de Gene Wars (%s)","GW.EXE is not in the Gene Wars folder (%s)"),data_dir); return 0; }
+    if(!verify_manifest_file(&want,exe)) { snprintf(err,errn,GWT("GW.EXE no es el de Gene Wars 1.1 que usa esta versi\xF3n (SHA-256 distinto)",
+                                                                     "GW.EXE is not the Gene Wars 1.1 one this version uses (different SHA-256)")); return 0; }
+    FILE *f=fopen(exe,"rb"); if(!f) { snprintf(err,errn,GWT("no se pudo leer GW.EXE","cannot read GW.EXE")); return 0; }
     fseek(f,0,SEEK_END); const long n=ftell(f); rewind(f);
     uint8_t *d=n>0?(uint8_t *)malloc((size_t)n):NULL;
     const int rd=d && fread(d,1,(size_t)n,f)==(size_t)n; fclose(f);
-    if(!rd) { free(d); snprintf(err,errn,"no se pudo leer GW.EXE"); return 0; }
+    if(!rd) { free(d); snprintf(err,errn,GWT("no se pudo leer GW.EXE","cannot read GW.EXE")); return 0; }
     uint8_t *img=NULL; size_t img_n=0; char why[160]="";
     const int built=le_build_image(d,(size_t)n,&img,&img_n,why,sizeof why); free(d);
     if(!built) { snprintf(err,errn,"GW.EXE: %s",why); return 0; }
     const int ok=write_file_atomic(guest_path,img,img_n); free(img);
-    if(!ok) { snprintf(err,errn,"no se pudo escribir %s",guest_path); return 0; }
+    if(!ok) { snprintf(err,errn,GWT("no se pudo escribir %s","cannot write %s"),guest_path); return 0; }
     gw_flag_trace("TRACE first_start made %s from %s bytes=%lu%c",guest_path,exe,(unsigned long)img_n,10);
     return 1;
 }
@@ -19771,8 +19804,10 @@ static int standalone_setup(int *pargc,char ***pargv,char *root,size_t root_n) {
     snprintf(tsv,sizeof tsv,"%s\\work\\genewars_1_1_install_manifest_creature_probe.tsv",root);
     snprintf(guest,sizeof guest,"%s\\work\\ifctitle_creature_probe_guest.bin",root);
     if(GetFileAttributesA(tsv)==INVALID_FILE_ATTRIBUTES) {
-        MessageBoxA(NULL,"No se encuentran los datos de GWRecomp (work\\genewars_1_1_install_manifest_creature_probe.tsv).\n"
-            "Ejecuta el programa desde una carpeta de GWRecomp completa (con su carpeta work).","Gene Wars - GWRecomp",MB_ICONERROR);
+        MessageBoxA(NULL,GWT("No se encuentran los datos de GWRecomp (work\\genewars_1_1_install_manifest_creature_probe.tsv).\n"
+            "Ejecuta el programa desde una carpeta de GWRecomp completa (con su carpeta work).",
+            "GWRecomp's data cannot be found (work\\genewars_1_1_install_manifest_creature_probe.tsv).\n"
+            "Run the program from a complete GWRecomp folder (with its work folder)."),"Gene Wars - GWRecomp",MB_ICONERROR);
         return 0;
     }
     (void)SetCurrentDirectoryA(root);
@@ -19856,14 +19891,16 @@ int main(int argc,char **argv) {
     } else if(g_cli_play_mode && g_ini_skip_intro) g_cli_skip_intro=1;
     if(g_cli_play_mode && !strcmp(argv[2],"-")) {
         fprintf(stderr,"no Gene Wars folder: set data_dir in gwrecomp.ini (or choose it in the launcher)\n");
-        if(launcher_wanted==1) MessageBoxA(NULL,"Falta la carpeta de Gene Wars. Abre el lanzador y elige la carpeta GENEWARS.","Gene Wars - GWRecomp",MB_ICONERROR);
+        if(launcher_wanted==1) MessageBoxA(NULL,GWT("Falta la carpeta de Gene Wars. Abre el lanzador y elige la carpeta GENEWARS.",
+                                                  "The Gene Wars folder is missing. Open the launcher and choose the GENEWARS folder."),"Gene Wars - GWRecomp",MB_ICONERROR);
         return 2;
     }
     if(g_cli_play_mode) {   /* first start of a release folder: make the game-derived inputs from the player's GW.EXE */
         char why[400]="";
         if(!ensure_game_derived_inputs(argv[1],argv[2],why,sizeof why)) {
             fprintf(stderr,"first start: %s\n",why); gw_flag_trace("TRACE first_start failed %s%c",why,10);
-            if(launcher_wanted) { char m[600]; snprintf(m,sizeof m,"No se pudo preparar el juego en el primer arranque:\n%s",why);
+            if(launcher_wanted) { char m[600]; snprintf(m,sizeof m,GWT("No se pudo preparar el juego en el primer arranque:\n%s",
+                                                                       "The game could not be prepared on the first start:\n%s"),why);
                 MessageBoxA(NULL,m,"Gene Wars - GWRecomp",MB_ICONERROR); }
             return 2;
         }
