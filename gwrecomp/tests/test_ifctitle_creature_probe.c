@@ -9600,6 +9600,7 @@ static struct {
     void (APIENTRYP GetIntegerv)(GLenum,GLint *);
     void (APIENTRYP PixelStorei)(GLenum,GLint);
     void (APIENTRYP ClearColor)(GLclampf,GLclampf,GLclampf,GLclampf);
+    void (APIENTRYP GetFloatv)(GLenum,GLfloat *);
     void (APIENTRYP Clear)(GLbitfield);
     void (APIENTRYP DrawArrays)(GLenum,GLint,GLsizei);
     GLenum (APIENTRYP GetError)(void);
@@ -9649,7 +9650,7 @@ static int bloom_load_gl(void) {
     BGL(TexImage2D,glTexImage2D); BGL(TexSubImage2D,glTexSubImage2D); BGL(TexParameteri,glTexParameteri);
     BGL(Viewport,glViewport); BGL(Scissor,glScissor); BGL(Enable,glEnable); BGL(Disable,glDisable);
     BGL(IsEnabled,glIsEnabled); BGL(GetIntegerv,glGetIntegerv); BGL(PixelStorei,glPixelStorei);
-    BGL(ClearColor,glClearColor); BGL(Clear,glClear); BGL(DrawArrays,glDrawArrays); BGL(GetError,glGetError);
+    BGL(ClearColor,glClearColor); BGL(GetFloatv,glGetFloatv); BGL(Clear,glClear); BGL(DrawArrays,glDrawArrays); BGL(GetError,glGetError);
     BGL(ActiveTexture,glActiveTexture); BGL(GenBuffers,glGenBuffers); BGL(BindBuffer,glBindBuffer); BGL(BufferData,glBufferData);
     BGL(CreateShader,glCreateShader); BGL(DeleteShader,glDeleteShader); BGL(ShaderSource,glShaderSource);
     BGL(CompileShader,glCompileShader); BGL(GetShaderiv,glGetShaderiv); BGL(GetShaderInfoLog,glGetShaderInfoLog);
@@ -10234,6 +10235,8 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     GLint prev_fbo=0,prev_prog=0,prev_act=0,prev_vbo=0,prev_vp[4]={0},prev_sc[4]={0},prev_align=4,prev_rl=0;
     GLint prev_tex0=0,prev_tex1=0,prev_tex2=0,prev_bsrc_r=0,prev_bdst_r=0,prev_bsrc_a=0,prev_bdst_a=0;
     GLboolean prev_sc_en=0,prev_bl_en=0;
+    GLfloat prev_clear[4]={0.0f,0.0f,0.0f,1.0f};   /* SDL caches its clear colour: it must find it unchanged */
+    g_bloom.GetFloatv(GL_COLOR_CLEAR_VALUE,prev_clear);
     g_bloom.GetIntegerv(GL_FRAMEBUFFER_BINDING,&prev_fbo);
     g_bloom.GetIntegerv(GL_CURRENT_PROGRAM,&prev_prog);
     g_bloom.GetIntegerv(GL_ACTIVE_TEXTURE,&prev_act);
@@ -10389,6 +10392,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.BlendFuncSeparate((GLenum)prev_bsrc_r,(GLenum)prev_bdst_r,(GLenum)prev_bsrc_a,(GLenum)prev_bdst_a);
     g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,prev_align);
     g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,prev_rl);
+    g_bloom.ClearColor(prev_clear[0],prev_clear[1],prev_clear[2],prev_clear[3]);
     return 1;
 }
 
@@ -18943,6 +18947,36 @@ static unsigned clean_horizon_pixels(uint8_t *buf,uint32_t pitch,uint32_t x0,uin
     for(size_t i=0;i<n;i++) buf[marks[i]]=0u;
     return (unsigned)n;
 }
+/* QA probe (opt-in, read-only): GW_WRITE_PROBE=1. Counts, per guest instruction, the instrumented writes into the
+   frame (lbDisplay.WScreen) during mission frames 30..90 (the Ethereal ship lands) and 600..660 (after), and writes
+   both lists to gw_flags.log, to find which routine draws the shadows. Never changes a write. */
+static uint32_t g_wp_va[4096],g_wp_n[2][4096],g_wp_used,g_wp_lo,g_wp_hi; static int g_wp_phase=-1;
+static void write_probe_observer(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
+    (void)seg; (void)sel; (void)base; (void)width; (void)user;
+    if(g_wp_phase<0 || lin<g_wp_lo || lin>=g_wp_hi) return;
+    uint32_t h=(va*2654435761u)>>20, k=0;
+    for(;k<4096u;k++,h=(h+1u)&4095u) { if(g_wp_va[h]==va) break; if(!g_wp_va[h]) { g_wp_va[h]=va; g_wp_used++; break; } }
+    if(k<4096u) g_wp_n[g_wp_phase][h]++;
+}
+static void write_probe_frame(uint8_t *memory,int in_mission) {
+    static int state=-1; static uint32_t frames;
+    if(state<0) { const char *e=getenv("GW_WRITE_PROBE"); state=e && e[0]=='1'?0:9; }
+    if(state==9 || !in_mission) return;
+    frames++;
+    const uint32_t ws=*(const uint32_t *)(memory+0x00376A5Cu),w=*(const uint32_t *)(memory+0x00376A78u),h=*(const uint32_t *)(memory+0x00376A7Cu);
+    g_wp_lo=ws; g_wp_hi=ws+w*h;
+    if(frames==30u || frames==600u) { g_wp_phase=frames==30u?0:1; recomp_set_guest_write_observer(write_probe_observer,NULL); }
+    if(frames==90u || frames==660u) { recomp_set_guest_write_observer(NULL,NULL); g_wp_phase=-1; }
+    if(frames==660u) {
+        for(int ph=0;ph<2;ph++) for(int r=0;r<40;r++) {
+            uint32_t best=0,bi=0; for(uint32_t i=0;i<4096u;i++) if(g_wp_n[ph][i]>best) { best=g_wp_n[ph][i]; bi=i; }
+            if(!best) break;
+            gw_flag_trace("TRACE write_probe phase=%d va=%05x writes=%u other_phase=%u%c",ph,g_wp_va[bi],best,g_wp_n[1-ph][bi],10);
+            g_wp_n[ph][bi]=0;
+        }
+        state=9;
+    }
+}
 static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen_guest,
                                                 uint64_t generation) {
     const uint32_t world_guest=0x002F4F86u,map_guest=0x00346D70u;
@@ -19040,6 +19074,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         const int in_ifc_main=*(const uint32_t *)(memory+0x002EF7E8u)==0x0035FE9Au && !*(const uint32_t *)(memory+0x002EF7ECu) &&
             *(const uint16_t *)(memory+map_guest+0x1Du)==128u;
         g_interactive_published_snapshot.in_mission=in_ifc_main;
+        if(g_cli_play_mode) write_probe_frame(memory,in_ifc_main);
         g_interactive_published_snapshot.fx_ring_valid=0; g_interactive_published_snapshot.th_valid=0;
         if(g_cli_play_mode && (g_ini_water_effects || g_ini_emissive_bloom || g_ini_terrain_ao || g_ini_soft_shadows) && ring && ring<=GUEST_LIMIT-rw*rh &&
            rw*rh<=sizeof g_interactive_published_snapshot.fx_ring && in_ifc_main) {

@@ -4655,18 +4655,24 @@ def main()->None:
     # terrain_ao: FUN_00065F20 stores each mesh vertex's projected y (flat y - (cell height >> 6) * scale) right
     # after reading its map cell (ebx = cell, word +2 = height). The host records (y, height) there, read-only, so the
     # triangle hook above can give every vertex its height (host buffer only; guest memory is never written).
+    # FUN_000665B0, the other terrain mesh producer (used for some scroll directions), builds its nodes the same way
     for site,store in ((0x6603E,"MEM32(DS_BASE + (edx)) = eax;"),(0x660B7,"MEM32(DS_BASE + (esi)) = edx;"),
-                       (0x66178,"MEM32(DS_BASE + (ecx)) = edx;"),(0x6639A,"MEM32(SS_BASE + (ebp)) = edx;")):
+                       (0x66178,"MEM32(DS_BASE + (ecx)) = edx;"),(0x6639A,"MEM32(SS_BASE + (ebp)) = edx;"),
+                       (0x66702,"MEM32(DS_BASE + (edx)) = eax;"),(0x66796,"MEM32(DS_BASE + (esi)) = edx;"),
+                       (0x66871,"MEM32(DS_BASE + (ecx)) = edx;"),(0x66B21,"MEM32(DS_BASE + (edx)) = eax;")):
         marker=f"{store} /* 0x{site:08X}: "
         if lifted_text.count(marker)!=1:
             raise SystemExit(f"terrain height capture expected one vertex store at 0x{site:X}")
-        y_reg="eax" if site==0x6603E else "edx"
-        node_reg={0x6603E:"edx",0x660B7:"esi",0x66178:"ecx",0x6639A:"ebp"}[site]
+        y_reg="eax" if site in (0x6603E,0x66702,0x66B21) else "edx"
+        node_reg={0x6603E:"edx",0x660B7:"esi",0x66178:"ecx",0x6639A:"ebp",
+                  0x66702:"edx",0x66796:"esi",0x66871:"ecx",0x66B21:"edx"}[site]
         lifted_text=lifted_text.replace(marker,f"gw_terrain_vertex_height({y_reg},ebx,{node_reg}); {marker}",1)
     # ...and E19C0's three 20-byte vertex records (esp+0x30/0x44/0x58) copy each node's y at these six stores, where
     # the node pointer is known: the record takes that node's height (exact, no matching by content)
     for site,off,node in ((0x6621C,0x34,"MEM32(SS_BASE + (esp + 0x94))"),(0x66245,0x48,"ecx"),(0x6626B,0x5C,"esi"),
-                          (0x66431,0x34,"esi"),(0x66453,0x48,"ecx"),(0x6647A,0x5C,"ebp")):
+                          (0x66431,0x34,"esi"),(0x66453,0x48,"ecx"),(0x6647A,0x5C,"ebp"),
+                          (0x6693E,0x5C,"MEM32(SS_BASE + (esp + 0x9C))"),(0x6696A,0x48,"ecx"),(0x6698D,0x34,"esi"),
+                          (0x66BF8,0x5C,"esi"),(0x66C1D,0x48,"ecx"),(0x66C47,0x34,"MEM32(SS_BASE + (esp + 0xA4))")):
         marker=f"MEM32(SS_BASE + (esp + 0x{off:02X})) = eax; /* 0x{site:08X}: "
         if lifted_text.count(marker)!=1:
             raise SystemExit(f"terrain height capture expected one vertex-record store at 0x{site:X}")
