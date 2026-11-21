@@ -9348,6 +9348,77 @@ static inline int dp_ao_at(int rx,int ry) {
     const int top=a*256+(b-a)*wx,bot=c*256+(d-c)*wx;
     return (top*256+(bot-top)*wy+32768)>>16;
 }
+/* per-pixel pass of depth_update over rows [y0,y1): writes g_dp_idx/g_dp_fac of those rows, marks shadow candidates
+   in g_dp_mask and lists them in cand[] (count in *count). Rows are independent, so bands run on worker threads. */
+static int g_dp_rxm[1152],g_dp_qx0m[1152],g_dp_qx1m[1152],g_dp_wxm[1152];
+static struct { const gw_interactive_visual_snapshot *v; const uint8_t *src,*lum; int pitch,rows,qw,qh,ao; } g_dpj;
+static void dp_rows(int y0,int y1,int *cand,int *count) {
+    const gw_interactive_visual_snapshot *v=g_dpj.v; const uint8_t *src=g_dpj.src,*lum=g_dpj.lum;
+    const int pitch=g_dpj.pitch,rows=g_dpj.rows,qw=g_dpj.qw,qh=g_dpj.qh,ao=g_dpj.ao,left=128,shadows=g_ini_soft_shadows;
+    int nc=0;
+    for(int y=y0;y<y1;y++) {
+        int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
+        const uint8_t *srow=src+(size_t)y*pitch,*rrow=v->fx_ring+(size_t)ry*pitch+left;
+        uint8_t *irow=g_dp_idx+(size_t)y*pitch,*frow=g_dp_fac+(size_t)y*pitch;
+        memcpy(irow,srow,(size_t)pitch); memset(frow,128,(size_t)pitch);
+        const uint16_t *qa=NULL,*qb=NULL; int wy=0;
+        if(ao) { const int py=ry*64-96; const int a=py>>8; wy=py&255; qa=g_dp_ao+((a%qh+qh)%qh)*qw; qb=g_dp_ao+(((a+1)%qh+qh)%qh)*qw; }
+        for(int x=176;x<pitch;x++) {
+            const int rx=g_dp_rxm[x]; const uint8_t g=rrow[rx],c=srow[x];
+            if(c==g) {
+                if(ao && g_fx_kind[g]==FX_NONE) {
+                    const int x0=g_dp_qx0m[x],x1=g_dp_qx1m[x],wx=g_dp_wxm[x];
+                    const int top=qa[x0]*256+(qa[x1]-qa[x0])*wx,bot=qb[x0]*256+(qb[x1]-qb[x0])*wx;
+                    frow[x]=(uint8_t)((top*256+(bot-top)*wy+32768)>>16);
+                }
+                continue;
+            }
+            if(shadows && lum[g]>10 && (int)lum[c]*100<=(int)lum[g]*62 && g_fx_kind[g]!=FX_WATER &&
+               y>0 && y<rows-1 && x>176 && x<pitch-1) { const int i=y*pitch+x; g_dp_mask[i]=1; cand[nc++]=i; }
+        }
+    }
+    *count=nc;
+}
+enum { DP_MAX_THREADS=4 };
+static int g_dp_threads=-1;
+static SDL_sem *g_dp_go[DP_MAX_THREADS],*g_dp_done;
+static int g_dp_band0[DP_MAX_THREADS+1],g_dp_band1[DP_MAX_THREADS+1],g_dp_bandn[DP_MAX_THREADS+1];
+static int dp_worker(void *arg) {
+    const int t=(int)(intptr_t)arg;
+    for(;;) {
+        SDL_SemWait(g_dp_go[t]);
+        dp_rows(g_dp_band0[t],g_dp_band1[t],g_dp_cand+(size_t)g_dp_band0[t]*(size_t)g_dpj.pitch,&g_dp_bandn[t]);
+        SDL_SemPost(g_dp_done);
+    }
+    return 0;
+}
+/* runs dp_rows over all rows on the workers plus this thread; returns the candidate count, listed from g_dp_cand[0] */
+static int dp_rows_parallel(void) {
+    if(g_dp_threads<0) {
+        g_dp_threads=0;
+        int want=SDL_GetCPUCount()-1; if(want>DP_MAX_THREADS) want=DP_MAX_THREADS;
+        g_dp_done=want>0?SDL_CreateSemaphore(0):NULL;
+        for(int t=0;t<want && g_dp_done;t++) {
+            g_dp_go[t]=SDL_CreateSemaphore(0);
+            if(!g_dp_go[t] || !SDL_CreateThread(dp_worker,"gw_depth",(void *)(intptr_t)t)) break;
+            g_dp_threads++;
+        }
+        gw_flag_trace("TRACE depth worker_threads=%d%c",g_dp_threads,10);
+    }
+    const int rows=g_dpj.rows,parts=g_dp_threads+1;
+    for(int t=0;t<parts;t++) { g_dp_band0[t]=rows*t/parts; g_dp_band1[t]=rows*(t+1)/parts; }
+    for(int t=0;t<g_dp_threads;t++) SDL_SemPost(g_dp_go[t]);
+    const int me=g_dp_threads;
+    dp_rows(g_dp_band0[me],g_dp_band1[me],g_dp_cand+(size_t)g_dp_band0[me]*(size_t)g_dpj.pitch,&g_dp_bandn[me]);
+    for(int t=0;t<g_dp_threads;t++) SDL_SemWait(g_dp_done);
+    int nc=0;   /* compact the bands' candidate lists (each band's list starts at band0*pitch >= nc) */
+    for(int t=0;t<parts;t++) {
+        const int *from=g_dp_cand+(size_t)g_dp_band0[t]*(size_t)g_dpj.pitch;
+        if(from!=g_dp_cand+nc) memmove(g_dp_cand+nc,from,(size_t)g_dp_bandn[t]*sizeof(int));
+        nc+=g_dp_bandn[t];
+    }
+    return nc;
+}
 static void depth_update(const gw_interactive_visual_snapshot *v,const uint8_t *src,int pitch,int rows,const uint8_t lum[256]) {
     const size_t n=(size_t)pitch*(size_t)rows;
     if(!g_dp_idx) {
@@ -9385,35 +9456,14 @@ static void depth_update(const gw_interactive_visual_snapshot *v,const uint8_t *
         }
     }
     const int ao=g_ini_terrain_ao && g_dp_qw==qw && g_dp_qh==qh;
-    static int rxm[1152];
-    static int qx0m[1152],qx1m[1152],wxm[1152];
+    int *const rxm=g_dp_rxm,*const qx0m=g_dp_qx0m,*const qx1m=g_dp_qx1m,*const wxm=g_dp_wxm;
     for(int x=176;x<pitch;x++) {
         int rx=(x-left)+(v->ring_x-left); rx%=rw; if(rx<0) rx+=rw; rxm[x]=rx;
         if(ao) { const int px=rx*64-96; int a=px>>8; wxm[x]=px&255; qx0m[x]=(a%qw+qw)%qw; qx1m[x]=((a+1)%qw+qw)%qw; }
     }
-    /* 2. per source pixel: index and factor; shadow candidates listed */
-    int nc=0;
-    for(int y=0;y<rows;y++) {
-        int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
-        const uint8_t *srow=src+(size_t)y*pitch,*rrow=v->fx_ring+(size_t)ry*pitch+left;
-        uint8_t *irow=g_dp_idx+(size_t)y*pitch,*frow=g_dp_fac+(size_t)y*pitch;
-        memcpy(irow,srow,(size_t)pitch); memset(frow,128,(size_t)pitch);
-        const uint16_t *qa=NULL,*qb=NULL; int wy=0;
-        if(ao) { const int py=ry*64-96; int a=py>>8; wy=py&255; qa=g_dp_ao+((a%qh+qh)%qh)*qw; qb=g_dp_ao+(((a+1)%qh+qh)%qh)*qw; }
-        for(int x=176;x<pitch;x++) {
-            const int rx=rxm[x]; const uint8_t g=rrow[rx],c=srow[x];
-            if(c==g) {
-                if(ao && g_fx_kind[g]==FX_NONE) {
-                    const int x0=qx0m[x],x1=qx1m[x],wx=wxm[x];
-                    const int top=qa[x0]*256+(qa[x1]-qa[x0])*wx,bot=qb[x0]*256+(qb[x1]-qb[x0])*wx;
-                    frow[x]=(uint8_t)((top*256+(bot-top)*wy+32768)>>16);
-                }
-                continue;
-            }
-            if(g_ini_soft_shadows && lum[g]>10 && (int)lum[c]*100<=(int)lum[g]*62 && g_fx_kind[g]!=FX_WATER &&
-               y>0 && y<rows-1 && x>176 && x<pitch-1) { const int i=y*pitch+x; g_dp_mask[i]=1; g_dp_cand[nc++]=i; }
-        }
-    }
+    /* 2. per source pixel: index and factor; shadow candidates listed (rows split over the worker threads) */
+    g_dpj.v=v; g_dpj.src=src; g_dpj.lum=lum; g_dpj.pitch=pitch; g_dpj.rows=rows; g_dpj.qw=qw; g_dpj.qh=qh; g_dpj.ao=ao;
+    const int nc=dp_rows_parallel();
     /* 3. soft shadows: keep candidates touching only ground or other candidates, blur, redraw from the terrain */
     if(nc) {
         int sx0=pitch,sx1=-1,sy0=rows,sy1=-1;
