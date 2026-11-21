@@ -52,3 +52,9 @@ enhanced_audio = 1
 emissive_bloom = 1
 ; bloom strength (0.0 .. 1.5, default 0.65)
 bloom_intensity = 0.65
+; 1 = terrain relief: valleys, creases and shaded slopes a little darker, taken from the terrain's own shading
+;     (missions only, presented frame only); terrain_ao_strength = darkest step, 0.0 .. 0.5 (default 0.22)
+terrain_ao = 1
+terrain_ao_strength = 0.22
+; 1 = soft shadows: the game's hard shadows (ships, flyers, buildings) redrawn from the terrain with soft edges
+soft_shadows = 1

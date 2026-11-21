@@ -8465,6 +8465,9 @@ static int g_ini_water_effects=1;   /* water_effects: animated water ripples/cau
 static int g_ini_enhanced_audio=1;  /* enhanced_audio: positional sound fitted to the view, SFX pitch variation, CD-DA ducking */
 static int g_ini_emissive_bloom=1;  /* emissive_bloom: selective GPU Dual Kawase bloom in missions */
 static float g_ini_bloom_intensity=0.65f; /* bloom_intensity: 0.0..1.5 */
+static int g_ini_terrain_ao=1;            /* terrain_ao: relief from the terrain shading (missions, presented frame only) */
+static float g_ini_terrain_ao_strength=0.22f; /* terrain_ao_strength: 0.0..0.5, darkest relief factor */
+static int g_ini_soft_shadows=1;          /* soft_shadows: the game's hard shadows redrawn with soft edges */
 static char g_ini_cd_cue[600];
 /* language = es | en | auto: the launcher and the program's own message boxes (the game keeps its own texts);
    auto (or no key) follows the Windows display language: Spanish -> es, anything else -> en */
@@ -8559,6 +8562,9 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"enhanced_audio")) g_ini_enhanced_audio=atoi(val)!=0;
         else if(!strcmp(key,"emissive_bloom")) g_ini_emissive_bloom=atoi(val)!=0;
         else if(!strcmp(key,"bloom_intensity")) { float v=(float)atof(val); if(v<0.0f) v=0.0f; if(v>1.5f) v=1.5f; g_ini_bloom_intensity=v; }
+        else if(!strcmp(key,"terrain_ao")) g_ini_terrain_ao=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_ao_strength")) { float v=(float)atof(val); if(v<0.0f) v=0.0f; if(v>0.5f) v=0.5f; g_ini_terrain_ao_strength=v; }
+        else if(!strcmp(key,"soft_shadows")) g_ini_soft_shadows=atoi(val)!=0;
         else if(!strcmp(key,"language")) {
             if(!_stricmp(val,"es")) g_ini_lang=0; else if(!_stricmp(val,"en")) g_ini_lang=1;
             else if(!val[0] || !_stricmp(val,"auto")) g_ini_lang=-1;
@@ -9276,14 +9282,166 @@ static void fx_row(uint32_t *out,int x0,int x1,int y,const gw_interactive_visual
         }
     }
 }
+/* ---- terrain_ao + soft_shadows (gwrecomp.ini, launcher GRÁFICOS): presentation-only depth, on the host's copy of
+   the published frame like water_effects (never guest memory, so batch/replay frames and the A/B suite are unchanged).
+   Both are computed once per published game frame (generation) into two buffers in source coordinates, then applied
+   on every presented frame in the same pass as the water:
+   - terrain_ao: relief from the terrain's own shading. The map ring (terrain only, world-anchored) is turned into
+     luminance and compared with a soft local average (two box passes of radius 5, wrapping like the ring); a pixel
+     darker than its surroundings (valley floors, creases, foot of slopes, shaded flanks) is darkened by up to
+     terrain_ao_strength, never to black; a pixel brighter than them gets at most +6 %. Water and GOOP are left alone.
+     The game's height grid exists in guest memory, but drawing it on screen would mean re-implementing the engine's
+     projection, so the shading it already baked into the terrain is used instead.
+   - soft_shadows: the game draws shadows (DrawMyShadowSprite/Frame: Ethereal ships, flyers, buildings) as terrain
+     remapped darker, partly to black, with hard edges. A map pixel is taken as shadow when it differs from the ring,
+     is at most 62 % as bright as the terrain under it, and touches only ground or other shadow pixels (so the dark
+     outline of a sprite, which touches the sprite's own pixels, is never taken). The shadow mask is blurred (two box
+     passes of radius 2) and the area is redrawn from the clean terrain darkened by that smooth mask: same shape and
+     place as the game's shadow, soft edges, no black dither, no double shadow. */
+static uint8_t *g_dp_idx,*g_dp_fac;       /* per source pixel: palette index to draw, factor (128 = 1.0) */
+static uint16_t *g_dp_ao;                 /* per ring pixel: ao factor (Q7) */
+static uint8_t *g_dp_ring_copy;           /* ring content the ao map was made from */
+static uint16_t *g_dp_tmp,*g_dp_tmp2;
+static uint8_t *g_dp_mask;
+static uint64_t g_dp_generation;
+static int g_dp_valid,g_dp_pitch,g_dp_rows;
+static float g_dp_ao_strength_used=-1.0f;
+static int depth_active(const gw_interactive_visual_snapshot *v) {
+    return g_cli_play_mode && (g_ini_terrain_ao || g_ini_soft_shadows) && v && v->valid && v->fx_ring_valid &&
+           v->in_mission && !g_terrain_modern_backend && g_tex_scale==1 && v->ring_left==128;
+}
+/* box blur of radius r along rows (wrap over [x0,x0+w) when wrap) or columns, uint16 in -> out */
+static void dp_box_h(const uint16_t *in,uint16_t *out,int pitch,int rows,int x0,int w,int r,int wrap) {
+    for(int y=0;y<rows;y++) {
+        const uint16_t *s=in+(size_t)y*pitch+x0; uint16_t *d=out+(size_t)y*pitch+x0; uint32_t acc=0;
+        for(int k=-r;k<=r;k++) { int i=k; if(wrap) { i%=w; if(i<0) i+=w; } else i=i<0?0:i>=w?w-1:i; acc+=s[i]; }
+        for(int x=0;x<w;x++) {
+            d[x]=(uint16_t)(acc/(uint32_t)(2*r+1));
+            int a=x-r,b=x+r+1;
+            if(wrap) { a%=w; if(a<0) a+=w; b%=w; } else { a=a<0?0:a; b=b>=w?w-1:b; }
+            acc+=s[b]; acc-=s[a];
+        }
+    }
+}
+static void dp_box_v(const uint16_t *in,uint16_t *out,int pitch,int rows,int x0,int w,int r,int wrap) {
+    for(int x=x0;x<x0+w;x++) {
+        uint32_t acc=0;
+        for(int k=-r;k<=r;k++) { int i=k; if(wrap) { i%=rows; if(i<0) i+=rows; } else i=i<0?0:i>=rows?rows-1:i; acc+=in[(size_t)i*pitch+x]; }
+        for(int y=0;y<rows;y++) {
+            out[(size_t)y*pitch+x]=(uint16_t)(acc/(uint32_t)(2*r+1));
+            int a=y-r,b=y+r+1;
+            if(wrap) { a%=rows; if(a<0) a+=rows; b%=rows; } else { a=a<0?0:a; b=b>=rows?rows-1:b; }
+            acc+=in[(size_t)b*pitch+x]; acc-=in[(size_t)a*pitch+x];
+        }
+    }
+}
+static void depth_update(const gw_interactive_visual_snapshot *v,const uint8_t *src,int pitch,int rows,const uint8_t lum[256]) {
+    const size_t n=(size_t)pitch*(size_t)rows;
+    if(!g_dp_idx) {
+        g_dp_idx=(uint8_t *)malloc(1152u*640u); g_dp_fac=(uint8_t *)malloc(1152u*640u); g_dp_ao=(uint16_t *)malloc(1152u*640u*2u);
+        g_dp_ring_copy=(uint8_t *)calloc(1152u*640u,1); g_dp_tmp=(uint16_t *)malloc(1152u*640u*2u); g_dp_tmp2=(uint16_t *)malloc(1152u*640u*2u);
+        g_dp_mask=(uint8_t *)malloc(1152u*640u);
+        if(!g_dp_idx||!g_dp_fac||!g_dp_ao||!g_dp_ring_copy||!g_dp_tmp||!g_dp_tmp2||!g_dp_mask) { g_ini_terrain_ao=g_ini_soft_shadows=0; return; }
+    }
+    const int left=128,rw=pitch-left;
+    /* 1. ao map on the ring, remade only when the terrain (or its palette or strength) changed */
+    static uint8_t ao_pal[768]; static int ao_pal_ok;
+    const int geom_changed=pitch!=g_dp_pitch || rows!=g_dp_rows;
+    if(g_ini_terrain_ao && (geom_changed || !ao_pal_ok || memcmp(ao_pal,v->palette,768) || g_dp_ao_strength_used!=g_ini_terrain_ao_strength ||
+                            memcmp(g_dp_ring_copy,v->fx_ring,n))) {
+        memcpy(g_dp_ring_copy,v->fx_ring,n); memcpy(ao_pal,v->palette,768); ao_pal_ok=1; g_dp_ao_strength_used=g_ini_terrain_ao_strength;
+        for(int y=0;y<rows;y++) for(int x=left;x<pitch;x++) g_dp_tmp[(size_t)y*pitch+x]=(uint16_t)(lum[v->fx_ring[(size_t)y*pitch+x]]*16u);
+        dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,left,rw,5,1); dp_box_v(g_dp_tmp2,g_dp_ao,pitch,rows,left,rw,5,1);
+        dp_box_h(g_dp_ao,g_dp_tmp2,pitch,rows,left,rw,5,1); dp_box_v(g_dp_tmp2,g_dp_ao,pitch,rows,left,rw,5,1);   /* g_dp_ao = local average */
+        const int smax=(int)(g_ini_terrain_ao_strength*128.0f+0.5f);
+        for(int y=0;y<rows;y++) for(int x=left;x<pitch;x++) {
+            const size_t i=(size_t)y*pitch+x; const uint8_t k=v->fx_ring[i];
+            const int l=g_dp_tmp[i],b=g_dp_ao[i]; int f=128;
+            if(g_fx_kind[k]==FX_NONE && b>16*4) {
+                if(l<b) { int dk=(b-l)*128*5/(b*2); if(dk>128) dk=128; f=128-smax*dk/128; }       /* darker than around */
+                else { int up=(l-b)*128/(b*4); if(up>8) up=8; f=128+up; }                          /* lit ridge: <= +6 % */
+            }
+            g_dp_ao[i]=(uint16_t)f;
+        }
+    }
+    /* 2. per source pixel: index and factor (ground pixels get the ao of their ring pixel) */
+    int sx0=pitch,sx1=-1,sy0=rows,sy1=-1;
+    if(g_ini_soft_shadows) memset(g_dp_mask,0,n);
+    for(int y=0;y<rows;y++) {
+        int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
+        for(int x=0;x<pitch;x++) {
+            const size_t i=(size_t)y*pitch+x; const uint8_t c=src[i];
+            g_dp_idx[i]=c; g_dp_fac[i]=128;
+            if(x<176) continue;
+            int rx=(x-left)+(v->ring_x-left); rx%=rw; if(rx<0) rx+=rw;
+            const size_t ri=(size_t)ry*pitch+left+rx; const uint8_t g=v->fx_ring[ri];
+            if(c==g) { if(g_ini_terrain_ao) g_dp_fac[i]=(uint8_t)g_dp_ao[ri]; continue; }
+            /* shadow candidate: darker remap of the terrain under it */
+            if(g_ini_soft_shadows && lum[g]>10 && (int)lum[c]*100<=(int)lum[g]*62 && g_fx_kind[g]!=FX_WATER) g_dp_mask[i]=1;
+        }
+    }
+    if(g_ini_soft_shadows) {
+        /* keep candidates that touch only ground or other candidates (never a sprite's own pixels) */
+        for(int y=1;y<rows-1;y++) for(int x=177;x<pitch-1;x++) {
+            const size_t i=(size_t)y*pitch+x; if(!g_dp_mask[i]) continue;
+            int ok=1;
+            for(int dy=-1;dy<=1 && ok;dy++) for(int dx=-1;dx<=1;dx++) {
+                const size_t j=i+(ptrdiff_t)dy*pitch+dx; if(g_dp_mask[j]) continue;
+                const int xx=x+dx,yy=y+dy; int ry=(yy+v->ring_y)%rows; if(ry<0) ry+=rows;
+                int rx=(xx-left)+(v->ring_x-left); rx%=rw; if(rx<0) rx+=rw;
+                if(src[j]!=v->fx_ring[(size_t)ry*pitch+left+rx]) { ok=0; break; }
+            }
+            g_dp_mask[i]=ok?2:0;
+        }
+        for(size_t i=0;i<n;i++) if(g_dp_mask[i]==1) g_dp_mask[i]=0;
+        for(int y=0;y<rows;y++) for(int x=176;x<pitch;x++) if(g_dp_mask[(size_t)y*pitch+x]) {
+            if(x<sx0) sx0=x; if(x>sx1) sx1=x; if(y<sy0) sy0=y; if(y>sy1) sy1=y; }
+        if(sx1>=sx0) {
+            const int pad=6; sx0=sx0-pad<176?176:sx0-pad; sx1=sx1+pad>=pitch?pitch-1:sx1+pad; sy0=sy0-pad<0?0:sy0-pad; sy1=sy1+pad>=rows?rows-1:sy1+pad;
+            const int bw=sx1-sx0+1;
+            for(int y=0;y<rows;y++) for(int x=sx0;x<=sx1;x++) g_dp_tmp[(size_t)y*pitch+x]=g_dp_mask[(size_t)y*pitch+x]?255u*16u:0u;
+            dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,sx0,bw,2,0); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,sx0,bw,2,0);
+            dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,sx0,bw,2,0); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,sx0,bw,2,0);
+            for(int y=sy0;y<=sy1;y++) {
+                int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
+                for(int x=sx0;x<=sx1;x++) {
+                    const size_t i=(size_t)y*pitch+x;
+                    int rx=(x-left)+(v->ring_x-left); rx%=rw; if(rx<0) rx+=rw;
+                    const size_t ri=(size_t)ry*pitch+left+rx; const uint8_t g=v->fx_ring[ri];
+                    if(!g_dp_mask[i] && src[i]!=g) continue;                       /* a sprite pixel: untouched */
+                    const int m=g_dp_tmp[i]/16;                                      /* 0..255 smooth shadow */
+                    const int base=g_ini_terrain_ao?(int)g_dp_ao[ri]:128;
+                    g_dp_idx[i]=g; g_dp_fac[i]=(uint8_t)(base*(255*100-m*58)/(255*100));   /* up to 58 % darker */
+                }
+            }
+        }
+    }
+    g_dp_pitch=pitch; g_dp_rows=rows; g_dp_generation=v->generation; g_dp_valid=1;
+    {   static int traced; if(!traced) { traced=1; gw_flag_trace("TRACE depth on terrain_ao=%d strength=%.2f soft_shadows=%d%c",
+            g_ini_terrain_ao,g_ini_terrain_ao_strength,g_ini_soft_shadows,10); } }
+}
+static inline uint32_t dp_apply(uint32_t p,int f) {
+    if(f==128) return p;
+    int r=(int)((p>>16)&255u)*f/128,g=(int)((p>>8)&255u)*f/128,b=(int)(p&255u)*f/128;
+    if(r>255) r=255; if(g>255) g=255; if(b>255) b=255;
+    return 0xFF000000u|((uint32_t)r<<16)|((uint32_t)g<<8)|(uint32_t)b;
+}
 /* Re-converts the map area (source x >= 176) of the current frame textures with the effect at the present time.
    x < 176 (HUD, panel art and its overlay split) is never written. */
 static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view_tex,int view_w,
                        SDL_Texture *canvas_tex,int canvas_ready) {
-    if(!fx_active(v)) { g_fx_have_anchor=0; return; }
+    const int water=fx_active(v),depth=depth_active(v);
+    if(!water) g_fx_have_anchor=0;
+    if(!water && !depth) { g_dp_valid=0; return; }
     const uint8_t *src; int pitch,rows;
     if(!fx_source(v,&src,&pitch,&rows)) return;
     fx_classify(v->palette);
+    if(depth && (!g_dp_valid || v->generation!=g_dp_generation)) {
+        uint8_t lum[256];
+        for(int k=0;k<256;k++) lum[k]=(uint8_t)(((int)v->palette[k*3]*77+(int)v->palette[k*3+1]*150+(int)v->palette[k*3+2]*29)*255/(63*256));
+        depth_update(v,src,pitch,rows,lum);
+    }
+    const int dp=depth && g_dp_valid && g_dp_pitch==pitch && g_dp_rows==rows;
     if(v->generation!=g_fx_last_generation) {
         if(g_fx_have_anchor) {
             const int rw=pitch-128;
@@ -9305,8 +9463,9 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
         const int w=view_w-176;
         for(int y=0;y<480;y++) {
             uint32_t *o=g_fx_row+(size_t)y*(size_t)w; const uint8_t *row=(v->canvas_valid?v->wscreen+(size_t)y*v->wscreen_pitch:src+(size_t)y*pitch);
-            for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
-            fx_row(o,176,view_w,y,v,src,pitch,rows,lut,tq);
+            if(dp) { const uint8_t *di=g_dp_idx+(size_t)y*pitch+176,*df=g_dp_fac+(size_t)y*pitch+176; for(int x=0;x<w;x++) o[x]=dp_apply(lut[di[x]],df[x]); }
+            else for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
+            if(water) fx_row(o,176,view_w,y,v,src,pitch,rows,lut,tq);
         }
         const SDL_Rect r={176,0,w,480};
         (void)SDL_UpdateTexture(view_tex,&r,g_fx_row,w*(int)sizeof(uint32_t));
@@ -9316,8 +9475,9 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
         const int w=(int)GW_CANVAS_W-176;
         for(int y=0;y<(int)GW_CANVAS_H;y++) {
             uint32_t *o=g_fx_row+(size_t)y*(size_t)w; const uint8_t *row=v->canvas+(size_t)y*GW_CANVAS_W;
-            for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
-            fx_row(o,176,(int)GW_CANVAS_W,y,v,src,pitch,rows,lut,tq);
+            if(dp) { const uint8_t *di=g_dp_idx+(size_t)y*pitch+176,*df=g_dp_fac+(size_t)y*pitch+176; for(int x=0;x<w;x++) o[x]=dp_apply(lut[di[x]],df[x]); }
+            else for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
+            if(water) fx_row(o,176,(int)GW_CANVAS_W,y,v,src,pitch,rows,lut,tq);
         }
         const SDL_Rect r={176-128,0,w,(int)GW_CANVAS_H};
         (void)SDL_UpdateTexture(canvas_tex,&r,g_fx_row,w*(int)sizeof(uint32_t));
@@ -18532,7 +18692,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
             *(const uint16_t *)(memory+map_guest+0x1Du)==128u;
         g_interactive_published_snapshot.in_mission=in_ifc_main;
         g_interactive_published_snapshot.fx_ring_valid=0;
-        if(g_cli_play_mode && (g_ini_water_effects || g_ini_emissive_bloom) && ring && ring<=GUEST_LIMIT-rw*rh &&
+        if(g_cli_play_mode && (g_ini_water_effects || g_ini_emissive_bloom || g_ini_terrain_ao || g_ini_soft_shadows) && ring && ring<=GUEST_LIMIT-rw*rh &&
            rw*rh<=sizeof g_interactive_published_snapshot.fx_ring && in_ifc_main) {
             memcpy(g_interactive_published_snapshot.fx_ring,memory+ring,(size_t)rw*rh);
             g_interactive_published_snapshot.fx_ring_w=rw; g_interactive_published_snapshot.fx_ring_h=rh;
@@ -20367,40 +20527,46 @@ static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
 }
 static void gl_draw_display(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
-    /* rows every 36 units: 58, 94, 130, 166, 202, 238, 274, 310 (panel 52..352) */
+    /* rows every 29 units: 56, 85, 114, 143, 172, 201, 230, 259, 288, 317 (panel 52..352) */
     const wchar_t *const modes[3]={GWT(L"CLÁSICO 4:3",L"CLASSIC 4:3"),GWT(L"PANORÁMICO 854×480",L"WIDESCREEN 854×480"),L"ZOOM OUT 1152×640"};
-    gl_row_label(58,GWT(L"MODO DE VISTA",L"VIEW MODE"),GWT(L"Zoom: rueda; Inicio = 1x",L"Zoom: wheel; Home = 1x"));
+    gl_row_label(56,GWT(L"MODO DE VISTA",L"VIEW MODE"),GWT(L"Zoom: rueda; Inicio = 1x",L"Zoom: wheel; Home = 1x"));
     int cur=g_ws_canvas?2:g_ws_requested?1:0;
-    int c=gl_choice(228,58,390,22,modes,3,cur,0u);
+    int c=gl_choice(228,56,390,22,modes,3,cur,0u);
     if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
     static const wchar_t *const res[5]={L"AUTO",L"900p",L"1080p",L"1440p",L"2160p"};
     unsigned dis=0u; for(int i=1;i<5;i++) if(GL.desk_w && (gl_res_w[i]>GL.desk_w || gl_res_h[i]>GL.desk_h)) dis|=1u<<i;
-    gl_row_label(94,GWT(L"RESOLUCIÓN",L"RESOLUTION"),GWT(L"Tamaño de la ventana",L"Window size"));
-    cur=gl_res_index(); c=gl_choice(228,94,390,22,res,5,cur,dis);
+    gl_row_label(85,GWT(L"RESOLUCIÓN",L"RESOLUTION"),GWT(L"Tamaño de la ventana",L"Window size"));
+    cur=gl_res_index(); c=gl_choice(228,85,390,22,res,5,cur,dis);
     if(c>=0 && c!=cur) { g_cli_res_w=gl_res_w[c]; g_cli_res_h=gl_res_h[c]; (void)gwrecomp_ini_set("resolution",gl_res_ini[c]); }
     const wchar_t *const fs[2]={GWT(L"VENTANA",L"WINDOW"),GWT(L"COMPLETA SIN BORDES",L"BORDERLESS FULLSCREEN")};
-    gl_row_label(130,GWT(L"PANTALLA",L"SCREEN"),GWT(L"Sin bordes = escritorio",L"Borderless = desktop size"));
-    c=gl_choice(228,130,390,22,fs,2,g_cli_fullscreen,0u);
+    gl_row_label(114,GWT(L"PANTALLA",L"SCREEN"),GWT(L"Sin bordes = escritorio",L"Borderless = desktop size"));
+    c=gl_choice(228,114,390,22,fs,2,g_cli_fullscreen,0u);
     if(c>=0 && c!=g_cli_fullscreen) { g_cli_fullscreen=c; gwrecomp_ini_set_int("fullscreen",c); }
     const wchar_t *const fps[2]={GWT(L"60 FPS CLÁSICO",L"60 FPS CLASSIC"),GWT(L"120 FPS INTERPOLADO",L"120 FPS INTERPOLATED")};
-    gl_row_label(166,GWT(L"FOTOGRAMAS",L"FRAME RATE"),GWT(L"El ritmo del juego no cambia",L"The game speed stays the same"));
-    cur=g_ini_fps==60u?0:1; c=gl_choice(228,166,390,22,fps,2,cur,0u);
+    gl_row_label(143,GWT(L"FOTOGRAMAS",L"FRAME RATE"),GWT(L"El ritmo del juego no cambia",L"The game speed stays the same"));
+    cur=g_ini_fps==60u?0:1; c=gl_choice(228,143,390,22,fps,2,cur,0u);
     if(c>=0 && c!=cur) { g_ini_fps=c?120u:60u; gwrecomp_ini_set_int("fps",(int)g_ini_fps); }
     const wchar_t *const flt[3]={GWT(L"NÍTIDO",L"SHARP"),GWT(L"EPX SUAVE",L"EPX SMOOTH"),L"CRT"};
-    gl_row_label(202,GWT(L"FILTRO (F7)",L"FILTER (F7)"),GWT(L"También con F7 al jugar",L"Also with F7 while playing"));
-    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,202,390,22,flt,3,cur,0u);
+    gl_row_label(172,GWT(L"FILTRO (F7)",L"FILTER (F7)"),GWT(L"También con F7 al jugar",L"Also with F7 while playing"));
+    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,172,390,22,flt,3,cur,0u);
     if(c>=0 && c!=cur) { g_filter_mode=c; (void)gwrecomp_ini_set("filter",g_filter_names[c]); }
     const wchar_t *const hz[2]={L"ORIGINAL",GWT(L"LIMPIO",L"CLEAN")};
-    gl_row_label(238,GWT(L"HORIZONTE",L"HORIZON"),GWT(L"Quita píxeles sueltos",L"Removes stray pixels"));
-    c=gl_choice(228,238,390,22,hz,2,g_ini_clean_horizon,0u);
+    gl_row_label(201,GWT(L"HORIZONTE",L"HORIZON"),GWT(L"Quita píxeles sueltos",L"Removes stray pixels"));
+    c=gl_choice(228,201,390,22,hz,2,g_ini_clean_horizon,0u);
     if(c>=0 && c!=g_ini_clean_horizon) { g_ini_clean_horizon=c; gwrecomp_ini_set_int("clean_horizon",c); }
     const wchar_t *const fx[2]={L"NO",GWT(L"SÍ",L"YES")};
-    gl_row_label(274,GWT(L"EFECTOS AGUA / GOOP",L"WATER / GOOP EFFECTS"),GWT(L"Olas y brillos animados",L"Animated waves and glints"));
-    c=gl_choice(228,274,390,22,fx,2,g_ini_water_effects,0u);
+    gl_row_label(230,GWT(L"EFECTOS AGUA / GOOP",L"WATER / GOOP EFFECTS"),GWT(L"Olas y brillos animados",L"Animated waves and glints"));
+    c=gl_choice(228,230,390,22,fx,2,g_ini_water_effects,0u);
     if(c>=0 && c!=g_ini_water_effects) { g_ini_water_effects=c; gwrecomp_ini_set_int("water_effects",c); }
-    gl_row_label(310,GWT(L"BLOOM EMISIVO",L"EMISSIVE BLOOM"),GWT(L"Halo en energía, explosiones y GOOP",L"Soft glow on energy, blasts and GOOP"));
-    c=gl_choice(228,310,390,22,fx,2,g_ini_emissive_bloom,0u);
+    gl_row_label(259,GWT(L"BLOOM EMISIVO",L"EMISSIVE BLOOM"),GWT(L"Halo en energía, explosiones y GOOP",L"Soft glow on energy, blasts and GOOP"));
+    c=gl_choice(228,259,390,22,fx,2,g_ini_emissive_bloom,0u);
     if(c>=0 && c!=g_ini_emissive_bloom) { g_ini_emissive_bloom=c; gwrecomp_ini_set_int("emissive_bloom",c); }
+    gl_row_label(288,GWT(L"RELIEVE DEL TERRENO",L"TERRAIN RELIEF"),GWT(L"Sombreado suave en valles y laderas",L"Soft shading in valleys and slopes"));
+    c=gl_choice(228,288,390,22,fx,2,g_ini_terrain_ao,0u);
+    if(c>=0 && c!=g_ini_terrain_ao) { g_ini_terrain_ao=c; gwrecomp_ini_set_int("terrain_ao",c); }
+    gl_row_label(317,GWT(L"SOMBRAS SUAVES",L"SOFT SHADOWS"),GWT(L"Bordes suaves en las sombras",L"Soft edges on shadows"));
+    c=gl_choice(228,317,390,22,fx,2,g_ini_soft_shadows,0u);
+    if(c>=0 && c!=g_ini_soft_shadows) { g_ini_soft_shadows=c; gwrecomp_ini_set_int("soft_shadows",c); }
 }
 static void gl_draw_controls(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
