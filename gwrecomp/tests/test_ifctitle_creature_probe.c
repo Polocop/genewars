@@ -9287,8 +9287,8 @@ static void fx_row(uint32_t *out,int x0,int x1,int y,const gw_interactive_visual
    Both are computed once per published game frame (generation) into two buffers in source coordinates, then applied
    on every presented frame in the same pass as the water:
    - terrain_ao: relief from the terrain's own shading. The map ring (terrain only, world-anchored) is turned into
-     luminance and compared with a soft local average (two box passes of radius 5, wrapping like the ring); a pixel
-     darker than its surroundings (valley floors, creases, foot of slopes, shaded flanks) is darkened by up to
+     luminance; its shading without the grass texture (box radius 3, twice) is compared with a wide average (radius
+     14, twice, wrapping like the ring); a pixel darker than its surroundings (valley floors, creases, foot of slopes, shaded flanks) is darkened by up to
      terrain_ao_strength, never to black; a pixel brighter than them gets at most +6 %. Water and GOOP are left alone.
      The game's height grid exists in guest memory, but drawing it on screen would mean re-implementing the engine's
      projection, so the shading it already baked into the terrain is used instead.
@@ -9296,7 +9296,7 @@ static void fx_row(uint32_t *out,int x0,int x1,int y,const gw_interactive_visual
      remapped darker, partly to black, with hard edges. A map pixel is taken as shadow when it differs from the ring,
      is at most 62 % as bright as the terrain under it, and touches only ground or other shadow pixels (so the dark
      outline of a sprite, which touches the sprite's own pixels, is never taken). The shadow mask is blurred (two box
-     passes of radius 2) and the area is redrawn from the clean terrain darkened by that smooth mask: same shape and
+     passes of radius 1) and the area is redrawn from the clean terrain darkened by that smooth mask (up to 68 %): same shape and
      place as the game's shadow, soft edges, no black dither, no double shadow. */
 static uint8_t *g_dp_idx,*g_dp_fac;       /* per source pixel: palette index to draw, factor (128 = 1.0) */
 static uint16_t *g_dp_ao;                 /* per ring pixel: ao factor (Q7) */
@@ -9351,14 +9351,18 @@ static void depth_update(const gw_interactive_visual_snapshot *v,const uint8_t *
                             memcmp(g_dp_ring_copy,v->fx_ring,n))) {
         memcpy(g_dp_ring_copy,v->fx_ring,n); memcpy(ao_pal,v->palette,768); ao_pal_ok=1; g_dp_ao_strength_used=g_ini_terrain_ao_strength;
         for(int y=0;y<rows;y++) for(int x=left;x<pitch;x++) g_dp_tmp[(size_t)y*pitch+x]=(uint16_t)(lum[v->fx_ring[(size_t)y*pitch+x]]*16u);
-        dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,left,rw,5,1); dp_box_v(g_dp_tmp2,g_dp_ao,pitch,rows,left,rw,5,1);
-        dp_box_h(g_dp_ao,g_dp_tmp2,pitch,rows,left,rw,5,1); dp_box_v(g_dp_tmp2,g_dp_ao,pitch,rows,left,rw,5,1);   /* g_dp_ao = local average */
+        /* g_dp_ao = the terrain shading without the grass texture (radius 3, twice); g_dp_tmp = the wide average
+           (radius 14, twice): shaded flanks, valley floors and crater bottoms are darker than the wide average */
+        dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,left,rw,3,1); dp_box_v(g_dp_tmp2,g_dp_ao,pitch,rows,left,rw,3,1);
+        dp_box_h(g_dp_ao,g_dp_tmp2,pitch,rows,left,rw,3,1); dp_box_v(g_dp_tmp2,g_dp_ao,pitch,rows,left,rw,3,1);
+        dp_box_h(g_dp_ao,g_dp_tmp2,pitch,rows,left,rw,14,1); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,left,rw,14,1);
+        dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,left,rw,14,1); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,left,rw,14,1);
         const int smax=(int)(g_ini_terrain_ao_strength*128.0f+0.5f);
         for(int y=0;y<rows;y++) for(int x=left;x<pitch;x++) {
             const size_t i=(size_t)y*pitch+x; const uint8_t k=v->fx_ring[i];
-            const int l=g_dp_tmp[i],b=g_dp_ao[i]; int f=128;
+            const int l=g_dp_ao[i],b=g_dp_tmp[i]; int f=128;
             if(g_fx_kind[k]==FX_NONE && b>16*4) {
-                if(l<b) { int dk=(b-l)*128*5/(b*2); if(dk>128) dk=128; f=128-smax*dk/128; }       /* darker than around */
+                if(l<b) { int dk=(b-l)*128*4/b; if(dk>128) dk=128; f=128-smax*dk/128; }            /* full at 25 % darker */
                 else { int up=(l-b)*128/(b*4); if(up>8) up=8; f=128+up; }                          /* lit ridge: <= +6 % */
             }
             g_dp_ao[i]=(uint16_t)f;
@@ -9400,8 +9404,8 @@ static void depth_update(const gw_interactive_visual_snapshot *v,const uint8_t *
             const int pad=6; sx0=sx0-pad<176?176:sx0-pad; sx1=sx1+pad>=pitch?pitch-1:sx1+pad; sy0=sy0-pad<0?0:sy0-pad; sy1=sy1+pad>=rows?rows-1:sy1+pad;
             const int bw=sx1-sx0+1;
             for(int y=0;y<rows;y++) for(int x=sx0;x<=sx1;x++) g_dp_tmp[(size_t)y*pitch+x]=g_dp_mask[(size_t)y*pitch+x]?255u*16u:0u;
-            dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,sx0,bw,2,0); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,sx0,bw,2,0);
-            dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,sx0,bw,2,0); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,sx0,bw,2,0);
+            dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,sx0,bw,1,0); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,sx0,bw,1,0);
+            dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,sx0,bw,1,0); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,sx0,bw,1,0);
             for(int y=sy0;y<=sy1;y++) {
                 int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
                 for(int x=sx0;x<=sx1;x++) {
@@ -9411,7 +9415,7 @@ static void depth_update(const gw_interactive_visual_snapshot *v,const uint8_t *
                     if(!g_dp_mask[i] && src[i]!=g) continue;                       /* a sprite pixel: untouched */
                     const int m=g_dp_tmp[i]/16;                                      /* 0..255 smooth shadow */
                     const int base=g_ini_terrain_ao?(int)g_dp_ao[ri]:128;
-                    g_dp_idx[i]=g; g_dp_fac[i]=(uint8_t)(base*(255*100-m*58)/(255*100));   /* up to 58 % darker */
+                    g_dp_idx[i]=g; g_dp_fac[i]=(uint8_t)(base*(255*100-m*68)/(255*100));   /* up to 68 % darker */
                 }
             }
         }
