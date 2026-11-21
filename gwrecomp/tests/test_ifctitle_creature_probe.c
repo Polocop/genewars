@@ -15829,6 +15829,79 @@ void gw_hybrid_capture_terrain_entry(uint32_t eax,uint32_t ebx,uint32_t ecx,
     }
 }
 
+/* ---- terrain_ao height capture: a host-only height buffer parallel to the map ring --------------------------------
+   FUN_00065F20 builds each terrain mesh vertex from its map cell: y = flat y - (height >> 6) * [0x184AB4]. The lifted
+   code calls gw_terrain_vertex_height(y, cell) at the four vertex stores, and the triangle hook (gw_hybrid_capture_
+   primitive, before every submission to the 0xE19C0 rasterizer) gives each of the triangle's vertices the height of
+   the most recent vertex with the same y, then rasterizes the heights into g_th_ring at the same ring pixels E19C0
+   fills (destination = [0x2DA100] + y * [0x2DA110] + x, relative to the ring at [0x2EECA0]). The buffer stores the
+   height in screen pixels ((height >> 6) * scale, the displacement the projection applied). Read-only on the guest;
+   the rasterizer and the ring are untouched, so frames are identical with or without it. */
+static int16_t g_th_ring[1152u*640u];
+static uint8_t g_th_have[1152u*640u];       /* 1 where a terrain triangle wrote a height */
+static int g_th_force=-1;
+static struct { int32_t y; int32_t h; } g_th_recent[16];
+static unsigned g_th_recent_n;
+static uint32_t g_th_tris,g_th_unmatched;
+static void th_dump(void) {   /* QA (GW_TH_DUMP=<file>): heights, coverage and the ring, written at exit */
+    const char *path=getenv("GW_TH_DUMP"); if(!path || !path[0] || !guest_memory) return;
+    FILE *f=fopen(path,"wb"); if(!f) return;
+    const uint32_t ring=*(const uint32_t *)(guest_memory+0x002EECA0u);
+    const uint32_t w=*(const uint32_t *)(guest_memory+0x00376A78u),h=*(const uint32_t *)(guest_memory+0x00376A7Cu);
+    const uint32_t hdr[6]={0x48544752u,w,h,g_th_tris,g_th_unmatched,g_th_recent_n};
+    fwrite(hdr,4,6,f);
+    if((size_t)w*h<=sizeof g_th_have && ring && ring<=GUEST_LIMIT-w*h) {
+        fwrite(g_th_ring,2,(size_t)w*h,f); fwrite(g_th_have,1,(size_t)w*h,f); fwrite(guest_memory+ring,1,(size_t)w*h,f); }
+    fclose(f);
+}
+static int th_capture_on(void) {
+    if(g_th_force<0) { const char *e=getenv("GW_TH_CAPTURE"); g_th_force=e && e[0]=='1'; if(g_th_force) atexit(th_dump); }
+    return g_th_force || (g_cli_play_mode && g_ini_terrain_ao);
+}
+void gw_terrain_vertex_height(unsigned int y,unsigned int cell) {
+    if(!guest_memory || !th_capture_on()) return;
+    const uint64_t a=(uint64_t)g_ds_base+cell+2u; if(a>GUEST_LIMIT-2u) return;
+    const int32_t h=(int32_t)*(int16_t *)(guest_memory+a);
+    g_th_recent[g_th_recent_n&15u].y=(int32_t)y; g_th_recent[g_th_recent_n&15u].h=h; g_th_recent_n++;
+}
+static int th_lookup(int32_t y,int32_t *h) {
+    for(unsigned k=0;k<16u && k<g_th_recent_n;k++) { const unsigned i=(g_th_recent_n-1u-k)&15u; if(g_th_recent[i].y==y) { *h=g_th_recent[i].h; return 1; } }
+    return 0;
+}
+static void th_triangle(uint32_t va,uint32_t vb,uint32_t vc) {
+    const uint32_t ring=*(const uint32_t *)(guest_memory+0x002EECA0u);
+    const uint32_t w=*(const uint32_t *)(guest_memory+0x00376A78u),hgt=*(const uint32_t *)(guest_memory+0x00376A7Cu);
+    const uint32_t dst=*(uint32_t *)(guest_memory+g_ds_base+0x002DA100u),pitch=*(uint32_t *)(guest_memory+g_ds_base+0x002DA110u);
+    if(!ring || pitch!=w || (size_t)w*hgt>sizeof g_th_ring/sizeof g_th_ring[0]) return;
+    const int64_t off0=(int64_t)((uint64_t)g_ds_base+dst)-(int64_t)ring;   /* ring index of destination (0,0) */
+    const uint32_t p[3]={va,vb,vc}; int32_t x[3],y[3],h[3]; int found=0,sum=0;
+    for(int k=0;k<3;k++) {
+        const uint64_t a=(uint64_t)g_ds_base+p[k]; if(a>GUEST_LIMIT-8u) return;
+        x[k]=*(int32_t *)(guest_memory+a); y[k]=*(int32_t *)(guest_memory+a+4u);
+        if(th_lookup(y[k],&h[k])) { found|=1<<k; sum+=h[k]; } }
+    g_th_tris++;
+    if(found!=7) { g_th_unmatched++; if(!found) return; const int n=(found&1)+((found>>1)&1)+((found>>2)&1); for(int k=0;k<3;k++) if(!(found>>k&1)) h[k]=sum/n; }
+    /* heights in game units >> 6 (the projection's step); pixel coverage like a top-left fill */
+    int minx=x[0],maxx=x[0],miny=y[0],maxy=y[0];
+    for(int k=1;k<3;k++) { if(x[k]<minx) minx=x[k]; if(x[k]>maxx) maxx=x[k]; if(y[k]<miny) miny=y[k]; if(y[k]>maxy) maxy=y[k]; }
+    const int64_t area=(int64_t)(x[1]-x[0])*(y[2]-y[0])-(int64_t)(x[2]-x[0])*(y[1]-y[0]);
+    if(!area) return;
+    for(int py=miny;py<=maxy;py++) {
+        const int64_t rowi=off0+(int64_t)py*pitch; if(rowi<0 || rowi>=(int64_t)w*hgt) continue;
+        for(int px=minx;px<=maxx;px++) {
+            if(px<0 || px>=(int)w) continue;
+            /* barycentric weights at the pixel centre, x2 to stay integral */
+            const int64_t cx=2*px+1,cy=2*py+1;
+            const int64_t w0=(int64_t)(2*x[1]-cx)*(2*y[2]-cy)-(int64_t)(2*x[2]-cx)*(2*y[1]-cy);
+            const int64_t w1=(int64_t)(2*x[2]-cx)*(2*y[0]-cy)-(int64_t)(2*x[0]-cx)*(2*y[2]-cy);
+            const int64_t w2=(int64_t)(2*x[0]-cx)*(2*y[1]-cy)-(int64_t)(2*x[1]-cx)*(2*y[0]-cy);
+            if(area>0 ? (w0<0||w1<0||w2<0) : (w0>0||w1>0||w2>0)) continue;
+            const int64_t tot=w0+w1+w2; if(!tot) continue;
+            const int64_t hv=((int64_t)(h[0]>>6)*w0+(int64_t)(h[1]>>6)*w1+(int64_t)(h[2]>>6)*w2)/tot;
+            const size_t i=(size_t)(rowi+px); g_th_ring[i]=(int16_t)hv; g_th_have[i]=1;
+        }
+    }
+}
 /* QA probe (opt-in, read-only): GW_TERRAIN_PROBE=<turn>. From that game turn on, records every terrain triangle
    submitted to 0xE19C0 (its three 20-byte vertex records and the raster globals) and the projection nodes, for one
    turn, then writes them with the map ring to work\terrain_probe.bin. Never writes guest memory. Local analysis. */
@@ -15874,6 +15947,7 @@ void gw_hybrid_capture_primitive(uint32_t callsite,uint32_t va,uint32_t vb,
 	uint8_t *mem=guest_memory;
 	uint32_t limit=GUEST_LIMIT;
 	if(g_tprobe_state!=2 && g_tprobe_state!=3 && g_cli_play_mode && mem) terrain_probe_prim(callsite,va,vb,vc);
+	if(mem && th_capture_on()) th_triangle(va,vb,vc);
 	if(!g_hybrid_primitive_capture_enabled || !mem) return;
     g_hybrid_primitive_total++;
     if(g_hybrid_primitive_count>=4096u) return;

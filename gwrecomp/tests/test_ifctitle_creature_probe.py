@@ -4652,6 +4652,17 @@ def main()->None:
         capture=(f"gw_hybrid_capture_primitive(0x{site:08X}u,"
                  "eax,ebx,edx,esp);\n    ")
         lifted_text=lifted_text.replace(call_marker,capture+call_marker,1)
+    # terrain_ao: FUN_00065F20 stores each mesh vertex's projected y (flat y - (cell height >> 6) * scale) right
+    # after reading its map cell (ebx = cell, word +2 = height). The host records (y, height) there, read-only, so the
+    # triangle hook above can give every vertex its height (host buffer only; guest memory is never written).
+    for site,store in ((0x6603E,"MEM32(DS_BASE + (edx)) = eax;"),(0x660B7,"MEM32(DS_BASE + (esi)) = edx;"),
+                       (0x66178,"MEM32(DS_BASE + (ecx)) = edx;"),(0x6639A,"MEM32(SS_BASE + (ebp)) = edx;")):
+        marker=f"{store} /* 0x{site:08X}: "
+        if lifted_text.count(marker)!=1:
+            raise SystemExit(f"terrain height capture expected one vertex store at 0x{site:X}")
+        y_reg="eax" if site==0x6603E else "edx"
+        lifted_text=lifted_text.replace(marker,f"gw_terrain_vertex_height({y_reg},ebx); {marker}",1)
+    lifted_text="void gw_terrain_vertex_height(unsigned int,unsigned int);\n"+lifted_text
     terrain_entry_marker="RECOMP_ENTER(0x00065F20u);"
     if lifted_text.count(terrain_entry_marker)!=1:
         raise SystemExit("hybrid terrain producer entry marker 0x65F20 missing or ambiguous")
