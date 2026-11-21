@@ -16034,7 +16034,7 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
     }
     {   static double acc; static uint32_t n;
         acc+=(double)(SDL_GetPerformanceCounter()-t0)*1e6/(double)SDL_GetPerformanceFrequency();
-        if(++n==20000u) { gw_flag_trace("TRACE terrain_ao height raster avg=%.2f us per triangle (20000 triangles)%c",acc/n,10); }
+        if(++n==2000u) { gw_flag_trace("TRACE terrain_ao height raster avg=%.2f us per triangle, %.2f ms per 2000 triangles (a full map redraw)%c",acc/n,acc/1000.0,10); }
     }
 }
 /* QA probe (opt-in, read-only): GW_TERRAIN_PROBE=<turn>. From that game turn on, records every terrain triangle
