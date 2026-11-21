@@ -7931,6 +7931,9 @@ typedef struct gw_interactive_visual_snapshot {
     /* terrain_ao: host height buffer parallel to the ring (game height >> 6), from the terrain mesh */
     int16_t th_ring[1152u*640u];
     int th_valid;
+    /* soft_shadows: 1 where a sprite routine wrote the frame this game frame (instrumented writes) */
+    uint8_t spr_mask[1152u*640u];
+    int spr_valid;
     int in_mission;
     gw_info_overlay info;
     uint64_t generation;
@@ -9372,7 +9375,7 @@ static void dp_rows(int y0,int y1,int *cand,int *count) {
                 }
                 continue;
             }
-            if(shadows && lum[g]>10 && (int)lum[c]*100<=(int)lum[g]*62 && g_fx_kind[g]!=FX_WATER &&
+            if(shadows && !(v->spr_valid && v->spr_mask[(size_t)y*pitch+x]) && lum[g]>10 && (int)lum[c]*100<=(int)lum[g]*62 && g_fx_kind[g]!=FX_WATER &&
                y>0 && y<rows-1 && x>176 && x<pitch-1) { const int i=y*pitch+x; g_dp_mask[i]=1; cand[nc++]=i; }
         }
     }
@@ -15956,6 +15959,17 @@ void gw_terrain_record_node(unsigned int rec,unsigned int node) {
     for(unsigned k=0;k<rn;k++) if(g_th_rec[k].addr==rec) { g_th_rec[k].h=ok?h:INT32_MIN; return; }
     g_th_rec[g_th_rec_n&7u].addr=rec; g_th_rec[g_th_rec_n&7u].h=ok?h:INT32_MIN; g_th_rec_n++;
 }
+/* FUN_0007BC40 (one map cell redrawn): a corner projected from world coordinates on the cell grid takes the height of
+   that cell (cell = 0x11AF86 + (y >> 8 & 127) * 0x700 + (x >> 8 & 127) * 14, height at +2) */
+void gw_terrain_record_world(unsigned int rec,unsigned int x,unsigned int y) {
+    if(!guest_memory || !th_capture_on()) return;
+    const uint32_t cell=0x0011AF86u+(((uint32_t)(int16_t)y>>8)&127u)*0x700u+(((uint32_t)(int16_t)x>>8)&127u)*14u;
+    const uint64_t a=(uint64_t)g_ds_base+cell+2u; if(a>GUEST_LIMIT-2u) return;
+    const int32_t h=(int32_t)*(int16_t *)(guest_memory+a);
+    const unsigned rn=g_th_rec_n<8u?g_th_rec_n:8u;
+    for(unsigned k=0;k<rn;k++) if(g_th_rec[k].addr==rec) { g_th_rec[k].h=h; return; }
+    g_th_rec[g_th_rec_n&7u].addr=rec; g_th_rec[g_th_rec_n&7u].h=h; g_th_rec_n++;
+}
 static int th_record_height(uint32_t rec,int32_t *h) {
     const unsigned rn=g_th_rec_n<8u?g_th_rec_n:8u;
     for(unsigned k=0;k<rn;k++) if(g_th_rec[k].addr==rec && g_th_rec[k].h!=INT32_MIN) { *h=g_th_rec[k].h; return 1; }
@@ -18955,8 +18969,18 @@ static unsigned clean_horizon_pixels(uint8_t *buf,uint32_t pitch,uint32_t x0,uin
    frame (lbDisplay.WScreen) during mission frames 30..90 (the Ethereal ship lands) and 600..660 (after), and writes
    both lists to gw_flags.log, to find which routine draws the shadows. Never changes a write. */
 static uint32_t g_wp_va[4096],g_wp_n[2][4096],g_wp_used,g_wp_lo,g_wp_hi; static int g_wp_phase=-1;
+/* soft_shadows: pixels the sprite routines wrote into the frame during this game frame. The game's shadows and the
+   terrain copy are not instrumented writes, so they never mark it; units, buildings, the Ethereal ship and its beam
+   always do, so a soft shadow can never cover a sprite pixel. Host memory only. */
+static uint8_t g_spr_mask[1152u*640u];
+static uint32_t g_spr_lo,g_spr_hi,g_spr_writes;
+static int g_spr_on;
 static void write_probe_observer(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
-    (void)seg; (void)sel; (void)base; (void)width; (void)user;
+    (void)seg; (void)sel; (void)base; (void)user;
+    if(g_spr_on && lin>=g_spr_lo && lin<g_spr_hi) {
+        uint32_t n=width?width:1u; if(lin+n>g_spr_hi) n=g_spr_hi-lin;
+        memset(g_spr_mask+(lin-g_spr_lo),1,n); g_spr_writes++;
+    }
     if(g_wp_phase<0 || lin<g_wp_lo || lin>=g_wp_hi) return;
     uint32_t h=(va*2654435761u)>>20, k=0;
     for(;k<4096u;k++,h=(h+1u)&4095u) { if(g_wp_va[h]==va) break; if(!g_wp_va[h]) { g_wp_va[h]=va; g_wp_used++; break; } }
@@ -18970,7 +18994,7 @@ static void write_probe_frame(uint8_t *memory,int in_mission) {
     const uint32_t ws=*(const uint32_t *)(memory+0x00376A5Cu),w=*(const uint32_t *)(memory+0x00376A78u),h=*(const uint32_t *)(memory+0x00376A7Cu);
     g_wp_lo=ws; g_wp_hi=ws+w*h;
     if(frames==30u || frames==600u) { g_wp_phase=frames==30u?0:1; recomp_set_guest_write_observer(write_probe_observer,NULL); }
-    if(frames==90u || frames==660u) { recomp_set_guest_write_observer(NULL,NULL); g_wp_phase=-1; }
+    if(frames==90u || frames==660u) { if(!g_spr_on) recomp_set_guest_write_observer(NULL,NULL); g_wp_phase=-1; }
     if(frames==660u) {
         for(int ph=0;ph<2;ph++) for(int r=0;r<40;r++) {
             uint32_t best=0,bi=0; for(uint32_t i=0;i<4096u;i++) if(g_wp_n[ph][i]>best) { best=g_wp_n[ph][i]; bi=i; }
@@ -19079,6 +19103,21 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
             *(const uint16_t *)(memory+map_guest+0x1Du)==128u;
         g_interactive_published_snapshot.in_mission=in_ifc_main;
         if(g_cli_play_mode) write_probe_frame(memory,in_ifc_main);
+        g_interactive_published_snapshot.spr_valid=0;
+        if(g_cli_play_mode && g_ini_soft_shadows) {
+            const uint32_t ws=*(const uint32_t *)(memory+0x00376A5Cu),sw=*(const uint32_t *)(memory+0x00376A78u),sh=*(const uint32_t *)(memory+0x00376A7Cu);
+            if(g_spr_on && in_ifc_main && (size_t)sw*sh<=sizeof g_spr_mask && g_spr_lo==ws && g_spr_hi==ws+sw*sh) {
+                memcpy(g_interactive_published_snapshot.spr_mask,g_spr_mask,(size_t)sw*sh);
+                g_interactive_published_snapshot.spr_valid=1;
+            }
+            if((size_t)sw*sh<=sizeof g_spr_mask) {
+                memset(g_spr_mask,0,(size_t)sw*sh); g_spr_lo=ws; g_spr_hi=ws+sw*sh;
+                if(!g_spr_on) { g_spr_on=1; recomp_set_guest_write_observer(write_probe_observer,NULL);
+                    gw_flag_trace("TRACE soft_shadows sprite mask on (write observer)%c",10); }
+            }
+            {   static uint32_t f,acc; acc+=g_spr_writes; g_spr_writes=0;
+                if(++f==600u) gw_flag_trace("TRACE soft_shadows sprite writes per game frame avg=%u%c",acc/600u,10); }
+        }
         {   static uint32_t pubs; if(g_th_force && ++pubs%300u==0u) th_dump(); }
         g_interactive_published_snapshot.fx_ring_valid=0; g_interactive_published_snapshot.th_valid=0;
         if(g_cli_play_mode && (g_ini_water_effects || g_ini_emissive_bloom || g_ini_terrain_ao || g_ini_soft_shadows) && ring && ring<=GUEST_LIMIT-rw*rh &&
