@@ -118,7 +118,7 @@ enhanced_audio = 1
 emissive_bloom = 1
 bloom_intensity = 0.65
 terrain_ao = 1
-terrain_ao_strength = 0.22
+terrain_ao_strength = 0.40
 soft_shadows = 1
 launcher = 1
 ; launcher language: es, en or auto (Windows display language); also the ES / EN buttons in the launcher
