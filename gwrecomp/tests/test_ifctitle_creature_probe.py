@@ -4661,8 +4661,9 @@ def main()->None:
         if lifted_text.count(marker)!=1:
             raise SystemExit(f"terrain height capture expected one vertex store at 0x{site:X}")
         y_reg="eax" if site==0x6603E else "edx"
-        lifted_text=lifted_text.replace(marker,f"gw_terrain_vertex_height({y_reg},ebx); {marker}",1)
-    lifted_text="void gw_terrain_vertex_height(unsigned int,unsigned int);\n"+lifted_text
+        node_reg={0x6603E:"edx",0x660B7:"esi",0x66178:"ecx",0x6639A:"ebp"}[site]
+        lifted_text=lifted_text.replace(marker,f"gw_terrain_vertex_height({y_reg},ebx,{node_reg}); {marker}",1)
+    lifted_text="void gw_terrain_vertex_height(unsigned int,unsigned int,unsigned int);\n"+lifted_text
     terrain_entry_marker="RECOMP_ENTER(0x00065F20u);"
     if lifted_text.count(terrain_entry_marker)!=1:
         raise SystemExit("hybrid terrain producer entry marker 0x65F20 missing or ambiguous")

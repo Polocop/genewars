@@ -15899,26 +15899,27 @@ void gw_hybrid_capture_terrain_entry(uint32_t eax,uint32_t ebx,uint32_t ecx,
 
 /* ---- terrain_ao height capture: a host-only height buffer parallel to the map ring --------------------------------
    FUN_00065F20 builds each terrain mesh vertex from its map cell: y = flat y - (height >> 6) * [0x184AB4]. The lifted
-   code calls gw_terrain_vertex_height(y, cell) at the four vertex stores, and the triangle hook (gw_hybrid_capture_
-   primitive, before every submission to the 0xE19C0 rasterizer) gives each of the triangle's vertices the height of
-   the most recent vertex with the same y, then rasterizes the heights into g_th_ring at the same ring pixels E19C0
-   fills (destination = [0x2DA100] + y * [0x2DA110] + x, relative to the ring at [0x2EECA0]). The buffer stores the
-   height in screen pixels ((height >> 6) * scale, the displacement the projection applied). Read-only on the guest;
+   code calls gw_terrain_vertex_height(y, cell, node) at the four vertex stores, and the triangle hook (gw_hybrid_
+   capture_primitive, before every submission to the 0xE19C0 rasterizer) gives each vertex the height of the node that
+   holds exactly its y and light, then rasterizes the heights into g_th_ring at the same ring pixels E19C0 fills
+   (destination = [0x2DA100] + y * [0x2DA110] + x, relative to the ring at [0x2EECA0]). The buffer stores the height in
+   the projection's step (game height >> 6). Read-only on the guest;
    the rasterizer and the ring are untouched, so frames are identical with or without it. */
 static int16_t g_th_ring[1152u*640u];
 static uint8_t g_th_have[1152u*640u];       /* 1 where a terrain triangle wrote a height */
 static int g_th_force=-1;
-static struct { int32_t y; int32_t h; int32_t col; } g_th_recent[16];
-static struct { int32_t x,col; } g_th_xcol[8];   /* screen column x -> map column, learnt from unambiguous vertices */
-static unsigned g_th_xcol_n;
-static unsigned g_th_recent_n;
+/* the vertex records E19C0 receives copy y (node +0) and the light (node +4) from 12-byte mesh nodes; the height is
+   recorded per node address when the node's y is stored, and a vertex takes the height of the node that holds exactly
+   its y and light at submission time */
+static struct { uint32_t addr; int32_t h; } g_th_node[16];
+static unsigned g_th_node_n;
 static uint32_t g_th_tris,g_th_unmatched;
 static void th_dump(void) {   /* QA (GW_TH_DUMP=<file>): heights, coverage and the ring, written at exit */
     const char *path=getenv("GW_TH_DUMP"); if(!path || !path[0] || !guest_memory) return;
     FILE *f=fopen(path,"wb"); if(!f) return;
     const uint32_t ring=*(const uint32_t *)(guest_memory+0x002EECA0u);
     const uint32_t w=*(const uint32_t *)(guest_memory+0x00376A78u),h=*(const uint32_t *)(guest_memory+0x00376A7Cu);
-    const uint32_t hdr[6]={0x48544752u,w,h,g_th_tris,g_th_unmatched,g_th_recent_n};
+    const uint32_t hdr[6]={0x48544752u,w,h,g_th_tris,g_th_unmatched,g_th_node_n};
     fwrite(hdr,4,6,f);
     if((size_t)w*h<=sizeof g_th_have && ring && ring<=GUEST_LIMIT-w*h) {
         fwrite(g_th_ring,2,(size_t)w*h,f); fwrite(g_th_have,1,(size_t)w*h,f); fwrite(guest_memory+ring,1,(size_t)w*h,f); }
@@ -15928,26 +15929,23 @@ static int th_capture_on(void) {
     if(g_th_force<0) { const char *e=getenv("GW_TH_CAPTURE"); g_th_force=e && e[0]=='1'; }
     return g_th_force || (g_cli_play_mode && g_ini_terrain_ao);
 }
-void gw_terrain_vertex_height(unsigned int y,unsigned int cell) {
+void gw_terrain_vertex_height(unsigned int y,unsigned int cell,unsigned int node) {
     if(!guest_memory || !th_capture_on()) return;
+    (void)y;
     const uint64_t a=(uint64_t)g_ds_base+cell+2u; if(a>GUEST_LIMIT-2u) return;
     const int32_t h=(int32_t)*(int16_t *)(guest_memory+a);
-    const uint32_t rel=cell-0x0011AF86u;   /* cell = 0x11AF86 + row*0x700 + col*14 (data link address) */
-    g_th_recent[g_th_recent_n&15u].y=(int32_t)y; g_th_recent[g_th_recent_n&15u].h=h;
-    g_th_recent[g_th_recent_n&15u].col=(int32_t)((rel%0x700u)/14u); g_th_recent_n++;
+    const uint32_t na=(uint32_t)((uint64_t)g_ds_base+node);
+    const unsigned n=g_th_node_n<16u?g_th_node_n:16u;
+    for(unsigned k=0;k<n;k++) if(g_th_node[k].addr==na) { g_th_node[k].h=h; return; }
+    g_th_node[g_th_node_n&15u].addr=na; g_th_node[g_th_node_n&15u].h=h; g_th_node_n++;
 }
-/* height of the vertex at screen (x,y): the most recent vertex store with the same y. When stores of both mesh
-   columns share that y, the map column already seen at this screen x (from an unambiguous vertex) decides. */
-static int th_lookup(int32_t x,int32_t y,int32_t *h) {
-    int cand[16],nc=0;
-    for(unsigned k=0;k<16u && k<g_th_recent_n;k++) { const unsigned i=(g_th_recent_n-1u-k)&15u; if(g_th_recent[i].y==y) cand[nc++]=(int)i; }
-    if(!nc) return 0;
-    int col=-1; for(unsigned k=0;k<8u && k<g_th_xcol_n;k++) { const unsigned j=(g_th_xcol_n-1u-k)&7u; if(g_th_xcol[j].x==x) { col=g_th_xcol[j].col; break; } }
-    int pick=cand[0];
-    if(nc>1 && col>=0) { for(int k=0;k<nc;k++) if(g_th_recent[cand[k]].col==col) { pick=cand[k]; break; } }
-    int same=1; for(int k=1;k<nc;k++) if(g_th_recent[cand[k]].col!=g_th_recent[cand[0]].col) same=0;
-    if(same && col!=g_th_recent[cand[0]].col) { g_th_xcol[g_th_xcol_n&7u].x=x; g_th_xcol[g_th_xcol_n&7u].col=g_th_recent[cand[0]].col; g_th_xcol_n++; }
-    *h=g_th_recent[pick].h; return 1;
+static int th_lookup(int32_t y,int32_t light,int32_t *h) {
+    const unsigned n=g_th_node_n<16u?g_th_node_n:16u;
+    for(unsigned k=0;k<n;k++) {
+        const uint32_t na=g_th_node[k].addr; if(na>GUEST_LIMIT-8u) continue;
+        if(*(int32_t *)(guest_memory+na)==y && *(int32_t *)(guest_memory+na+4u)==light) { *h=g_th_node[k].h; return 1; }
+    }
+    return 0;
 }
 static void th_triangle(uint32_t va,uint32_t vb,uint32_t vc) {
     const uint32_t ring=*(const uint32_t *)(guest_memory+0x002EECA0u);
@@ -15959,7 +15957,7 @@ static void th_triangle(uint32_t va,uint32_t vb,uint32_t vc) {
     for(int k=0;k<3;k++) {
         const uint64_t a=(uint64_t)g_ds_base+p[k]; if(a>GUEST_LIMIT-8u) return;
         x[k]=*(int32_t *)(guest_memory+a); y[k]=*(int32_t *)(guest_memory+a+4u);
-        if(th_lookup(x[k],y[k],&h[k])) { found|=1<<k; sum+=h[k]; } }
+        if(th_lookup(y[k],*(int32_t *)(guest_memory+a+16u),&h[k])) { found|=1<<k; sum+=h[k]; } }
     g_th_tris++;
     if(g_th_force && g_th_tris%500u==0u) th_dump();
     if(found!=7) { g_th_unmatched++; if(!found) return; const int n=(found&1)+((found>>1)&1)+((found>>2)&1); for(int k=0;k<3;k++) if(!(found>>k&1)) h[k]=sum/n; }
