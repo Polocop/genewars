@@ -15829,10 +15829,51 @@ void gw_hybrid_capture_terrain_entry(uint32_t eax,uint32_t ebx,uint32_t ecx,
     }
 }
 
+/* QA probe (opt-in, read-only): GW_TERRAIN_PROBE=<turn>. From that game turn on, records every terrain triangle
+   submitted to 0xE19C0 (its three 20-byte vertex records and the raster globals) and the projection nodes, for one
+   turn, then writes them with the map ring to work\terrain_probe.bin. Never writes guest memory. Local analysis. */
+static int g_tprobe_state=-1; static uint32_t g_tprobe_turn,g_tprobe_start_turn,g_tprobe_n;
+typedef struct { uint32_t callsite,g118,g110,g100,g124,g114,v[3][5]; } gw_tprobe_rec;
+static gw_tprobe_rec *g_tprobe_recs;
+static void terrain_probe_dump(void) {
+    FILE *f=fopen("work\\terrain_probe.bin","wb"); if(!f) return;
+    const uint32_t ring=*(const uint32_t *)(guest_memory+0x002EECA0u);
+    const uint32_t w=*(const uint32_t *)(guest_memory+0x00376A78u),h=*(const uint32_t *)(guest_memory+0x00376A7Cu);
+    const int16_t rx=*(int16_t *)(guest_memory+0x00346D70u+0x08u),ry=*(int16_t *)(guest_memory+0x00346D70u+0x0Au);
+    const uint32_t hdr[8]={0x50525447u,g_tprobe_n,g_projection_node_count,ring,w,h,(uint32_t)(int32_t)rx,(uint32_t)(int32_t)ry};
+    fwrite(hdr,4,8,f); fwrite(g_tprobe_recs,sizeof *g_tprobe_recs,g_tprobe_n,f);
+    for(uint32_t i=0;i<g_projection_node_count;i++) {
+        const gw_projection_node_event *e=&g_projection_nodes[i];
+        fwrite(&e->eip,4,1,f); fwrite(&e->node_guest,4,1,f); fwrite(&e->source_cell_guest,4,1,f); fwrite(e->node,1,12,f); fwrite(e->source,1,14,f);
+    }
+    if(ring && w*h && ring<=GUEST_LIMIT-w*h) fwrite(guest_memory+ring,1,(size_t)w*h,f);
+    fclose(f);
+    gw_flag_trace("TRACE terrain_probe written prims=%u nodes=%u ring=%08x %ux%u ring_xy=%d,%d%c",g_tprobe_n,g_projection_node_count,ring,w,h,rx,ry,10);
+}
+static void terrain_probe_prim(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
+    if(g_tprobe_state<0) { const char *e=getenv("GW_TERRAIN_PROBE"); g_tprobe_state=e && e[0]?0:3; if(!g_tprobe_state) g_tprobe_start_turn=(uint32_t)strtoul(e,NULL,10); }
+    if(g_tprobe_state>=2) return;
+    const uint32_t turn=*(uint32_t *)(guest_memory+g_ds_base+0x002F1472u);
+    if(g_tprobe_state==0) {
+        if(turn<g_tprobe_start_turn) return;
+        g_tprobe_recs=(gw_tprobe_rec *)calloc(30000,sizeof *g_tprobe_recs); if(!g_tprobe_recs) { g_tprobe_state=3; return; }
+        g_tprobe_state=1; g_tprobe_turn=turn; g_projection_node_count=g_projection_node_overflow=0u; g_projection_capture_active=1u;
+    } else if(turn!=g_tprobe_turn || g_tprobe_n>=30000u) {
+        g_projection_capture_active=0u; g_tprobe_state=2; terrain_probe_dump(); return;
+    }
+    gw_tprobe_rec *r=&g_tprobe_recs[g_tprobe_n++];
+    r->callsite=callsite;
+    r->g118=*(uint32_t *)(guest_memory+g_ds_base+0x002DA118u); r->g110=*(uint32_t *)(guest_memory+g_ds_base+0x002DA110u);
+    r->g100=*(uint32_t *)(guest_memory+g_ds_base+0x002DA100u); r->g124=*(uint32_t *)(guest_memory+g_ds_base+0x002DA124u);
+    r->g114=*(uint32_t *)(guest_memory+g_ds_base+0x002DA114u);
+    const uint32_t p[3]={va,vb,vc};
+    for(int k=0;k<3;k++) if(g_ds_base+p[k]<=GUEST_LIMIT-20u) memcpy(r->v[k],guest_memory+g_ds_base+p[k],20);
+}
 void gw_hybrid_capture_primitive(uint32_t callsite,uint32_t va,uint32_t vb,
 		uint32_t vc,uint32_t esp) {
 	uint8_t *mem=guest_memory;
 	uint32_t limit=GUEST_LIMIT;
+	if(g_tprobe_state!=2 && g_tprobe_state!=3 && g_cli_play_mode && mem) terrain_probe_prim(callsite,va,vb,vc);
 	if(!g_hybrid_primitive_capture_enabled || !mem) return;
     g_hybrid_primitive_total++;
     if(g_hybrid_primitive_count>=4096u) return;
