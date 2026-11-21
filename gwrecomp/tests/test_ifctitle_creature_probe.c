@@ -12,6 +12,7 @@
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
 #include <windows.h>
+#include <SDL_opengl.h>
 #include <mmsystem.h>
 #include <bcrypt.h>
 #include <errno.h>
@@ -7927,6 +7928,7 @@ typedef struct gw_interactive_visual_snapshot {
     uint8_t fx_ring[1152u*640u];
     uint32_t fx_ring_w,fx_ring_h;
     int fx_ring_valid;
+    int in_mission;
     gw_info_overlay info;
     uint64_t generation;
     uint64_t captured_at;
@@ -8461,6 +8463,8 @@ static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launch
 static int g_ini_clean_horizon=1;   /* clean_horizon: drop 1-pixel horizon slivers from the presented frame */
 static int g_ini_water_effects=1;   /* water_effects: animated water ripples/caustics and GOOP highlights (presented frame only) */
 static int g_ini_enhanced_audio=1;  /* enhanced_audio: positional sound fitted to the view, SFX pitch variation, CD-DA ducking */
+static int g_ini_emissive_bloom=1;  /* emissive_bloom: selective GPU Dual Kawase bloom in missions */
+static float g_ini_bloom_intensity=0.65f; /* bloom_intensity: 0.0..1.5 */
 static char g_ini_cd_cue[600];
 /* language = es | en | auto: the launcher and the program's own message boxes (the game keeps its own texts);
    auto (or no key) follows the Windows display language: Spanish -> es, anything else -> en */
@@ -8553,6 +8557,8 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"clean_horizon")) g_ini_clean_horizon=atoi(val)!=0;
         else if(!strcmp(key,"water_effects")) g_ini_water_effects=atoi(val)!=0;
         else if(!strcmp(key,"enhanced_audio")) g_ini_enhanced_audio=atoi(val)!=0;
+        else if(!strcmp(key,"emissive_bloom")) g_ini_emissive_bloom=atoi(val)!=0;
+        else if(!strcmp(key,"bloom_intensity")) { float v=(float)atof(val); if(v<0.0f) v=0.0f; if(v>1.5f) v=1.5f; g_ini_bloom_intensity=v; }
         else if(!strcmp(key,"language")) {
             if(!_stricmp(val,"es")) g_ini_lang=0; else if(!_stricmp(val,"en")) g_ini_lang=1;
             else if(!val[0] || !_stricmp(val,"auto")) g_ini_lang=-1;
@@ -9319,6 +9325,745 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
 }
 #undef FX_S
 
+/* ---- emissive_bloom (gwrecomp.ini, launcher GRÁFICOS): GPU Dual Kawase Selective Emissive Bloom
+   Runs strictly on the host's OpenGL presentation layer during active missions (IFCMain) only.
+   Never reads or writes guest memory during ticks; never affects IFCTitle, IFCLevel, .SMK, or HUD/panel pixels. */
+static int g_bloom_env_disable=-1;
+static struct {
+    int loaded,ready,failed,logged_init,last_active;
+    int view_w,fbo_w,fbo_h,half_w,half_h,qtr_w,qtr_h,eig_w,eig_h;
+    int fbo_is_16f;
+    GLuint lut_tex,hud_tex;
+    GLuint view_tex[2];   /* [0] prev, [1] cur (GL_RG8: R=index, G=flags) */
+    GLuint canvas_tex[2]; /* [0] prev, [1] cur (GL_RG8: R=index, G=flags) */
+    int canvas_ready;
+    uint8_t pal_cache[768];
+    int pal_ok;
+    GLuint fbo_half_a,tex_half_a,fbo_half_b,tex_half_b;
+    GLuint fbo_qtr_a,tex_qtr_a,fbo_qtr_b,tex_qtr_b;
+    GLuint fbo_eig,tex_eig;
+    GLuint vbo;
+    GLuint prog_extract,prog_down,prog_up,prog_comp;
+    GLint u_ext_idx,u_ext_lut,u_ext_hud,u_ext_texel;
+    GLint u_down_tex,u_down_hp;
+    GLint u_up_tex,u_up_prev,u_up_hp;
+    GLint u_comp_base,u_comp_bloom,u_comp_hud,u_comp_int;
+    uint8_t *up_buf;
+    uint8_t *hud_buf;
+    /* GL entry points resolved via SDL_GL_GetProcAddress (no -lopengl32 link needed) */
+    void (APIENTRYP GenTextures)(GLsizei,GLuint *);
+    void (APIENTRYP DeleteTextures)(GLsizei,const GLuint *);
+    void (APIENTRYP BindTexture)(GLenum,GLuint);
+    void (APIENTRYP TexImage2D)(GLenum,GLint,GLint,GLsizei,GLsizei,GLint,GLenum,GLenum,const void *);
+    void (APIENTRYP TexSubImage2D)(GLenum,GLint,GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,const void *);
+    void (APIENTRYP TexParameteri)(GLenum,GLenum,GLint);
+    void (APIENTRYP Viewport)(GLint,GLint,GLsizei,GLsizei);
+    void (APIENTRYP Scissor)(GLint,GLint,GLsizei,GLsizei);
+    void (APIENTRYP Enable)(GLenum);
+    void (APIENTRYP Disable)(GLenum);
+    GLboolean (APIENTRYP IsEnabled)(GLenum);
+    void (APIENTRYP GetIntegerv)(GLenum,GLint *);
+    void (APIENTRYP PixelStorei)(GLenum,GLint);
+    void (APIENTRYP ClearColor)(GLclampf,GLclampf,GLclampf,GLclampf);
+    void (APIENTRYP Clear)(GLbitfield);
+    void (APIENTRYP DrawArrays)(GLenum,GLint,GLsizei);
+    GLenum (APIENTRYP GetError)(void);
+    PFNGLACTIVETEXTUREPROC ActiveTexture;
+    PFNGLGENBUFFERSPROC GenBuffers;
+    PFNGLBINDBUFFERPROC BindBuffer;
+    PFNGLBUFFERDATAPROC BufferData;
+    PFNGLCREATESHADERPROC CreateShader;
+    PFNGLDELETESHADERPROC DeleteShader;
+    PFNGLSHADERSOURCEPROC ShaderSource;
+    PFNGLCOMPILESHADERPROC CompileShader;
+    PFNGLGETSHADERIVPROC GetShaderiv;
+    PFNGLGETSHADERINFOLOGPROC GetShaderInfoLog;
+    PFNGLCREATEPROGRAMPROC CreateProgram;
+    PFNGLDELETEPROGRAMPROC DeleteProgram;
+    PFNGLATTACHSHADERPROC AttachShader;
+    PFNGLLINKPROGRAMPROC LinkProgram;
+    PFNGLGETPROGRAMIVPROC GetProgramiv;
+    PFNGLGETPROGRAMINFOLOGPROC GetProgramInfoLog;
+    PFNGLUSEPROGRAMPROC UseProgram;
+    PFNGLGETUNIFORMLOCATIONPROC GetUniformLocation;
+    PFNGLUNIFORM1IPROC Uniform1i;
+    PFNGLUNIFORM1FPROC Uniform1f;
+    PFNGLUNIFORM2FPROC Uniform2f;
+    PFNGLENABLEVERTEXATTRIBARRAYPROC EnableVertexAttribArray;
+    PFNGLDISABLEVERTEXATTRIBARRAYPROC DisableVertexAttribArray;
+    PFNGLVERTEXATTRIBPOINTERPROC VertexAttribPointer;
+    PFNGLGENFRAMEBUFFERSPROC GenFramebuffers;
+    PFNGLDELETEFRAMEBUFFERSPROC DeleteFramebuffers;
+    PFNGLBINDFRAMEBUFFERPROC BindFramebuffer;
+    PFNGLFRAMEBUFFERTEXTURE2DPROC FramebufferTexture2D;
+    PFNGLCHECKFRAMEBUFFERSTATUSPROC CheckFramebufferStatus;
+    PFNGLBLENDFUNCSEPARATEPROC BlendFuncSeparate;
+} g_bloom;
+
+static int bloom_load_gl(void) {
+    if(g_bloom.loaded) return g_bloom.ready;
+    g_bloom.loaded=1;
+    if(!g_ifclevel_demo_renderer) return 0;
+    SDL_RendererInfo ri; memset(&ri,0,sizeof ri);
+    if(SDL_GetRendererInfo(g_ifclevel_demo_renderer,&ri)!=0 || !ri.name || strcmp(ri.name,"opengl")!=0) {
+        gw_flag_trace("TRACE emissive_bloom disabled renderer=%s%c",ri.name?ri.name:"unknown",10);
+        g_bloom.failed=1; return 0;
+    }
+    #define BGL(field,sym) do { void *p=SDL_GL_GetProcAddress(#sym); if(!p) { gw_flag_trace("TRACE emissive_bloom missing %s%c",#sym,10); g_bloom.failed=1; return 0; } *(void **)&g_bloom.field=p; } while(0)
+    BGL(GenTextures,glGenTextures); BGL(DeleteTextures,glDeleteTextures); BGL(BindTexture,glBindTexture);
+    BGL(TexImage2D,glTexImage2D); BGL(TexSubImage2D,glTexSubImage2D); BGL(TexParameteri,glTexParameteri);
+    BGL(Viewport,glViewport); BGL(Scissor,glScissor); BGL(Enable,glEnable); BGL(Disable,glDisable);
+    BGL(IsEnabled,glIsEnabled); BGL(GetIntegerv,glGetIntegerv); BGL(PixelStorei,glPixelStorei);
+    BGL(ClearColor,glClearColor); BGL(Clear,glClear); BGL(DrawArrays,glDrawArrays); BGL(GetError,glGetError);
+    BGL(ActiveTexture,glActiveTexture); BGL(GenBuffers,glGenBuffers); BGL(BindBuffer,glBindBuffer); BGL(BufferData,glBufferData);
+    BGL(CreateShader,glCreateShader); BGL(DeleteShader,glDeleteShader); BGL(ShaderSource,glShaderSource);
+    BGL(CompileShader,glCompileShader); BGL(GetShaderiv,glGetShaderiv); BGL(GetShaderInfoLog,glGetShaderInfoLog);
+    BGL(CreateProgram,glCreateProgram); BGL(DeleteProgram,glDeleteProgram); BGL(AttachShader,glAttachShader);
+    BGL(LinkProgram,glLinkProgram); BGL(GetProgramiv,glGetProgramiv); BGL(GetProgramInfoLog,glGetProgramInfoLog);
+    BGL(UseProgram,glUseProgram); BGL(GetUniformLocation,glGetUniformLocation);
+    BGL(Uniform1i,glUniform1i); BGL(Uniform1f,glUniform1f); BGL(Uniform2f,glUniform2f);
+    BGL(EnableVertexAttribArray,glEnableVertexAttribArray); BGL(DisableVertexAttribArray,glDisableVertexAttribArray);
+    BGL(VertexAttribPointer,glVertexAttribPointer); BGL(GenFramebuffers,glGenFramebuffers);
+    BGL(DeleteFramebuffers,glDeleteFramebuffers); BGL(BindFramebuffer,glBindFramebuffer);
+    BGL(FramebufferTexture2D,glFramebufferTexture2D); BGL(CheckFramebufferStatus,glCheckFramebufferStatus);
+    BGL(BlendFuncSeparate,glBlendFuncSeparate);
+    #undef BGL
+    return 1;
+}
+
+static GLuint bloom_compile_shader(GLenum type,const char *src) {
+    GLuint s=g_bloom.CreateShader(type);
+    if(!s) return 0;
+    g_bloom.ShaderSource(s,1,&src,NULL);
+    g_bloom.CompileShader(s);
+    GLint ok=0; g_bloom.GetShaderiv(s,GL_COMPILE_STATUS,&ok);
+    if(!ok) {
+        char log[512]; GLsizei n=0; g_bloom.GetShaderInfoLog(s,sizeof log,&n,log);
+        gw_flag_trace("TRACE emissive_bloom shader_err: %s%c",log,10);
+        g_bloom.DeleteShader(s); return 0;
+    }
+    return s;
+}
+
+static GLuint bloom_link_program(const char *vs_src,const char *fs_src) {
+    GLuint vs=bloom_compile_shader(GL_VERTEX_SHADER,vs_src);
+    GLuint fs=bloom_compile_shader(GL_FRAGMENT_SHADER,fs_src);
+    if(!vs || !fs) { if(vs) g_bloom.DeleteShader(vs); if(fs) g_bloom.DeleteShader(fs); return 0; }
+    GLuint p=g_bloom.CreateProgram();
+    g_bloom.AttachShader(p,vs); g_bloom.AttachShader(p,fs);
+    /* bind attribs 0=a_pos, 1=a_uv, 2=a_suv */
+    typedef void (APIENTRYP PFN_BAL)(GLuint,GLuint,const GLchar *);
+    PFN_BAL bal=(PFN_BAL)SDL_GL_GetProcAddress("glBindAttribLocation");
+    if(bal) { bal(p,0,"a_pos"); bal(p,1,"a_uv"); bal(p,2,"a_suv"); }
+    g_bloom.LinkProgram(p);
+    g_bloom.DeleteShader(vs); g_bloom.DeleteShader(fs);
+    GLint ok=0; g_bloom.GetProgramiv(p,GL_LINK_STATUS,&ok);
+    if(!ok) {
+        char log[512]; GLsizei n=0; g_bloom.GetProgramInfoLog(p,sizeof log,&n,log);
+        gw_flag_trace("TRACE emissive_bloom link_err: %s%c",log,10);
+        g_bloom.DeleteProgram(p); return 0;
+    }
+    return p;
+}
+
+static int bloom_make_fbo(GLuint *fbo,GLuint *tex,int w,int h,GLenum ifmt) {
+    g_bloom.GenTextures(1,tex);
+    g_bloom.BindTexture(GL_TEXTURE_2D,*tex);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+    g_bloom.TexImage2D(GL_TEXTURE_2D,0,(GLint)ifmt,w,h,0,GL_RGBA,ifmt==GL_RGBA16F?GL_HALF_FLOAT:GL_UNSIGNED_BYTE,NULL);
+    g_bloom.GenFramebuffers(1,fbo);
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,*fbo);
+    g_bloom.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,*tex,0);
+    return g_bloom.CheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
+}
+
+static void bloom_free_fbos(void) {
+    GLuint fbos[5]={g_bloom.fbo_half_a,g_bloom.fbo_half_b,g_bloom.fbo_qtr_a,g_bloom.fbo_qtr_b,g_bloom.fbo_eig};
+    GLuint texs[5]={g_bloom.tex_half_a,g_bloom.tex_half_b,g_bloom.tex_qtr_a,g_bloom.tex_qtr_b,g_bloom.tex_eig};
+    for(int i=0;i<5;i++) { if(fbos[i]) g_bloom.DeleteFramebuffers(1,&fbos[i]); if(texs[i]) g_bloom.DeleteTextures(1,&texs[i]); }
+    g_bloom.fbo_half_a=g_bloom.fbo_half_b=g_bloom.fbo_qtr_a=g_bloom.fbo_qtr_b=g_bloom.fbo_eig=0;
+    g_bloom.tex_half_a=g_bloom.tex_half_b=g_bloom.tex_qtr_a=g_bloom.tex_qtr_b=g_bloom.tex_eig=0;
+}
+
+static int bloom_ensure_init(int logical_w) {
+    if(g_bloom.failed) return 0;
+    if(!g_bloom.loaded && !bloom_load_gl()) return 0;
+    if(g_bloom.ready && g_bloom.fbo_w==logical_w && g_bloom.fbo_h==480) return 1;
+
+    GLint prev_fbo=0,prev_tex=0,prev_prog=0,prev_vbo=0;
+    g_bloom.GetIntegerv(GL_FRAMEBUFFER_BINDING,&prev_fbo);
+    g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&prev_tex);
+    g_bloom.GetIntegerv(GL_CURRENT_PROGRAM,&prev_prog);
+    g_bloom.GetIntegerv(GL_ARRAY_BUFFER_BINDING,&prev_vbo);
+
+    if(!g_bloom.prog_extract) {
+        static const char *vs_quad=
+            "#version 120\n"
+            "attribute vec2 a_pos;\n"
+            "attribute vec2 a_uv;\n"
+            "attribute vec2 a_suv;\n"
+            "varying vec2 v_uv;\n"
+            "varying vec2 v_suv;\n"
+            "void main(){ v_uv=a_uv; v_suv=a_suv; gl_Position=vec4(a_pos,0.0,1.0); }\n";
+        static const char *fs_extract=
+            "#version 120\n"
+            "uniform sampler2D u_idx_tex;\n"
+            "uniform sampler2D u_lut;\n"
+            "uniform sampler2D u_hud_mask;\n"
+            "uniform vec2 u_texel;\n"
+            "varying vec2 v_uv;\n"
+            "varying vec2 v_suv;\n"
+            "vec3 sample_emissive(vec2 uv){\n"
+            "  vec2 rg=texture2D(u_idx_tex,uv).rg;\n"
+            "  float idx_u=(floor(rg.r*255.0+0.5)+0.5)/256.0;\n"
+            "  int flags=int(floor(rg.g*255.0+0.5));\n"
+            "  int is_map=flags-(flags/2)*2;\n"
+            "  if(is_map==0) return vec3(0.0);\n"
+            "  int is_gnd=(flags/2)-((flags/4)*2);\n"
+            "  vec3 col=texture2D(u_lut,vec2(idx_u,0.25)).rgb;\n"
+            "  vec3 meta=texture2D(u_lut,vec2(idx_u,0.75)).rgb;\n"
+            "  float w=is_gnd!=0?meta.g:meta.r;\n"
+            "  if(w<=0.001) return vec3(0.0);\n"
+            "  float boost=meta.b*(255.0/64.0);\n"
+            "  vec3 lin=pow(col,vec3(2.2));\n"
+            "  float lum=dot(lin,vec3(0.2126,0.7152,0.0722));\n"
+            "  float soft=smoothstep(0.04,0.22,lum*w+w*0.15);\n"
+            "  return lin*(w*soft*boost);\n"
+            "}\n"
+            "void main(){\n"
+            "  if(texture2D(u_hud_mask,v_suv).r>0.5){ gl_FragColor=vec4(0.0,0.0,0.0,1.0); return; }\n"
+            "  vec2 o=u_texel*0.5;\n"
+            "  vec3 acc=sample_emissive(v_uv+vec2(-o.x,-o.y))\n"
+            "          +sample_emissive(v_uv+vec2( o.x,-o.y))\n"
+            "          +sample_emissive(v_uv+vec2(-o.x, o.y))\n"
+            "          +sample_emissive(v_uv+vec2( o.x, o.y));\n"
+            "  gl_FragColor=vec4(acc*0.25,1.0);\n"
+            "}\n";
+        static const char *fs_down=
+            "#version 120\n"
+            "uniform sampler2D u_tex;\n"
+            "uniform vec2 u_halfpixel;\n"
+            "varying vec2 v_uv;\n"
+            "void main(){\n"
+            "  vec3 sum=texture2D(u_tex,v_uv).rgb*4.0;\n"
+            "  sum+=texture2D(u_tex,v_uv-u_halfpixel).rgb;\n"
+            "  sum+=texture2D(u_tex,v_uv+u_halfpixel).rgb;\n"
+            "  sum+=texture2D(u_tex,v_uv+vec2(u_halfpixel.x,-u_halfpixel.y)).rgb;\n"
+            "  sum+=texture2D(u_tex,v_uv-vec2(u_halfpixel.x,-u_halfpixel.y)).rgb;\n"
+            "  gl_FragColor=vec4(sum/8.0,1.0);\n"
+            "}\n";
+        static const char *fs_up=
+            "#version 120\n"
+            "uniform sampler2D u_tex;\n"
+            "uniform sampler2D u_prev;\n"
+            "uniform vec2 u_halfpixel;\n"
+            "varying vec2 v_uv;\n"
+            "void main(){\n"
+            "  vec2 hp=u_halfpixel*1.25;\n"
+            "  vec3 sum=texture2D(u_tex,v_uv+vec2(-hp.x*2.0,0.0)).rgb;\n"
+            "  sum+=texture2D(u_tex,v_uv+vec2(-hp.x, hp.y)).rgb*2.0;\n"
+            "  sum+=texture2D(u_tex,v_uv+vec2(0.0, hp.y*2.0)).rgb;\n"
+            "  sum+=texture2D(u_tex,v_uv+vec2( hp.x, hp.y)).rgb*2.0;\n"
+            "  sum+=texture2D(u_tex,v_uv+vec2( hp.x*2.0,0.0)).rgb;\n"
+            "  sum+=texture2D(u_tex,v_uv+vec2( hp.x,-hp.y)).rgb*2.0;\n"
+            "  sum+=texture2D(u_tex,v_uv+vec2(0.0,-hp.y*2.0)).rgb;\n"
+            "  sum+=texture2D(u_tex,v_uv+vec2(-hp.x,-hp.y)).rgb*2.0;\n"
+            "  vec3 up=sum/12.0;\n"
+            "  vec3 prev=texture2D(u_prev,v_uv).rgb;\n"
+            "  gl_FragColor=vec4(up*0.85+prev*0.35,1.0);\n"
+            "}\n";
+        static const char *fs_comp=
+            "#version 120\n"
+            "uniform sampler2D u_base;\n"
+            "uniform sampler2D u_bloom;\n"
+            "uniform sampler2D u_hud_mask;\n"
+            "uniform float u_intensity;\n"
+            "varying vec2 v_uv;\n"
+            "varying vec2 v_suv;\n"
+            "void main(){\n"
+            "  vec3 base=texture2D(u_base,v_uv).rgb;\n"
+            "  if(texture2D(u_hud_mask,v_suv).r>0.5){ gl_FragColor=vec4(base,1.0); return; }\n"
+            "  vec3 b=texture2D(u_bloom,v_suv).rgb*u_intensity;\n"
+            "  if(dot(b,vec3(1.0))<1e-5){ gl_FragColor=vec4(base,1.0); return; }\n"
+            "  vec3 base_lin=pow(max(base,0.0),vec3(2.2));\n"
+            "  vec3 b_soft=b/(vec3(1.0)+b*0.65);\n"
+            "  vec3 out_lin=vec3(1.0)-(vec3(1.0)-base_lin)*exp(-b_soft);\n"
+            "  gl_FragColor=vec4(pow(clamp(out_lin,0.0,1.0),vec3(1.0/2.2)),1.0);\n"
+            "}\n";
+        g_bloom.prog_extract=bloom_link_program(vs_quad,fs_extract);
+        g_bloom.prog_down=bloom_link_program(vs_quad,fs_down);
+        g_bloom.prog_up=bloom_link_program(vs_quad,fs_up);
+        g_bloom.prog_comp=bloom_link_program(vs_quad,fs_comp);
+        if(!g_bloom.prog_extract||!g_bloom.prog_down||!g_bloom.prog_up||!g_bloom.prog_comp) {
+            g_bloom.failed=1; goto restore;
+        }
+        g_bloom.u_ext_idx=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_idx_tex");
+        g_bloom.u_ext_lut=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_lut");
+        g_bloom.u_ext_hud=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_hud_mask");
+        g_bloom.u_ext_texel=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_texel");
+        g_bloom.u_down_tex=g_bloom.GetUniformLocation(g_bloom.prog_down,"u_tex");
+        g_bloom.u_down_hp=g_bloom.GetUniformLocation(g_bloom.prog_down,"u_halfpixel");
+        g_bloom.u_up_tex=g_bloom.GetUniformLocation(g_bloom.prog_up,"u_tex");
+        g_bloom.u_up_prev=g_bloom.GetUniformLocation(g_bloom.prog_up,"u_prev");
+        g_bloom.u_up_hp=g_bloom.GetUniformLocation(g_bloom.prog_up,"u_halfpixel");
+        g_bloom.u_comp_base=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_base");
+        g_bloom.u_comp_bloom=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_bloom");
+        g_bloom.u_comp_hud=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_hud_mask");
+        g_bloom.u_comp_int=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_intensity");
+        g_bloom.GenBuffers(1,&g_bloom.vbo);
+        g_bloom.GenTextures(1,&g_bloom.lut_tex);
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+        g_bloom.TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,256,2,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);
+        g_bloom.up_buf=(uint8_t *)malloc(1024u*640u*2u);
+        g_bloom.hud_buf=(uint8_t *)malloc(864u*480u);
+        if(!g_bloom.up_buf || !g_bloom.hud_buf) { g_bloom.failed=1; goto restore; }
+    }
+
+    bloom_free_fbos();
+    g_bloom.fbo_w=logical_w; g_bloom.fbo_h=480;
+    g_bloom.half_w=(logical_w+1)/2; g_bloom.half_h=240;
+    g_bloom.qtr_w=(g_bloom.half_w+1)/2; g_bloom.qtr_h=(g_bloom.half_h+1)/2;
+    g_bloom.eig_w=(g_bloom.qtr_w+1)/2; g_bloom.eig_h=(g_bloom.qtr_h+1)/2;
+
+    GLenum fmt=GL_RGBA16F;
+    if(!bloom_make_fbo(&g_bloom.fbo_half_a,&g_bloom.tex_half_a,g_bloom.half_w,g_bloom.half_h,fmt) ||
+       !bloom_make_fbo(&g_bloom.fbo_half_b,&g_bloom.tex_half_b,g_bloom.half_w,g_bloom.half_h,fmt) ||
+       !bloom_make_fbo(&g_bloom.fbo_qtr_a,&g_bloom.tex_qtr_a,g_bloom.qtr_w,g_bloom.qtr_h,fmt) ||
+       !bloom_make_fbo(&g_bloom.fbo_qtr_b,&g_bloom.tex_qtr_b,g_bloom.qtr_w,g_bloom.qtr_h,fmt) ||
+       !bloom_make_fbo(&g_bloom.fbo_eig,&g_bloom.tex_eig,g_bloom.eig_w,g_bloom.eig_h,fmt)) {
+        bloom_free_fbos();
+        fmt=GL_RGBA8;
+        if(!bloom_make_fbo(&g_bloom.fbo_half_a,&g_bloom.tex_half_a,g_bloom.half_w,g_bloom.half_h,fmt) ||
+           !bloom_make_fbo(&g_bloom.fbo_half_b,&g_bloom.tex_half_b,g_bloom.half_w,g_bloom.half_h,fmt) ||
+           !bloom_make_fbo(&g_bloom.fbo_qtr_a,&g_bloom.tex_qtr_a,g_bloom.qtr_w,g_bloom.qtr_h,fmt) ||
+           !bloom_make_fbo(&g_bloom.fbo_qtr_b,&g_bloom.tex_qtr_b,g_bloom.qtr_w,g_bloom.qtr_h,fmt) ||
+           !bloom_make_fbo(&g_bloom.fbo_eig,&g_bloom.tex_eig,g_bloom.eig_w,g_bloom.eig_h,fmt)) {
+            bloom_free_fbos();
+            gw_flag_trace("TRACE emissive_bloom fbo_incomplete%c",10);
+            g_bloom.failed=1; goto restore;
+        }
+    }
+    g_bloom.fbo_is_16f=(fmt==GL_RGBA16F);
+    g_bloom.ready=1;
+    if(!g_bloom.logged_init) {
+        g_bloom.logged_init=1;
+        gw_flag_trace("TRACE emissive_bloom init=ok fbo_fmt=%s logical=%dx480 half=%dx%d qtr=%dx%d eig=%dx%d%c",
+            g_bloom.fbo_is_16f?"RGBA16F":"RGBA8",logical_w,g_bloom.half_w,g_bloom.half_h,
+            g_bloom.qtr_w,g_bloom.qtr_h,g_bloom.eig_w,g_bloom.eig_h,10);
+    }
+restore:
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,(GLuint)prev_fbo);
+    g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex);
+    g_bloom.UseProgram((GLuint)prev_prog);
+    g_bloom.BindBuffer(GL_ARRAY_BUFFER,(GLuint)prev_vbo);
+    return g_bloom.ready;
+}
+
+static void bloom_classify(const uint8_t *pal) {
+    if(g_bloom.pal_ok && !memcmp(g_bloom.pal_cache,pal,768)) return;
+    memcpy(g_bloom.pal_cache,pal,768); g_bloom.pal_ok=1;
+    uint8_t lut[256u*2u*4u]; memset(lut,0,sizeof lut);
+    for(int k=0;k<256;k++) {
+        const int r=pal[k*3+0],g=pal[k*3+1],b=pal[k*3+2];
+        lut[k*4+0]=(uint8_t)(r*255/63);
+        lut[k*4+1]=(uint8_t)(g*255/63);
+        lut[k*4+2]=(uint8_t)(b*255/63);
+        lut[k*4+3]=255u;
+
+        double sw=0.0,gw=0.0,bs=1.0,bg=1.0;
+        /* Ground emission (GOOP glints/veins/crystals + cyan ground beacon; strictly excludes snow/sand/rock/sea-foam) */
+        if(k>=28 && k<=31 && b>r+8 && b>g+8 && r+4>=g) { gw=0.28+0.06*(k-28); bg=1.35; }
+        else if(k>=233 && k<=238 && b>=r && b>=g && (r+g+b)>=115) { gw=0.35+0.10*(k-233); bg=1.50; }
+        else if(k==145 && r>=60 && g>=60 && b>=60) { gw=0.75; bg=1.50; }
+        else if((k==130 || k==131) && g>=45 && b>=40 && r<=24) { gw=0.70; bg=1.60; }
+
+        /* Sprite/effect emission (energy beams, lasers, explosions, sparks, Gene Pod lights, power rings) */
+        if(k==130 && g>=45 && b>=40 && r*2<g) { sw=0.75; bs=1.60; }
+        else if(k==131 && g>=52 && b>=45 && r*2<g) { sw=1.00; bs=2.00; }
+        else if(k==133 && r>=46 && g<=8 && b<=8) { sw=0.75; bs=1.60; }
+        else if(k==132 && r>=52 && g>=20 && b>=20 && r>g+16) { sw=0.50; bs=1.30; }
+        else if(k>=86 && k<=89 && r>=44 && g>=22 && b<=10) { sw=0.25+0.075*(k-86); bs=1.40; }
+        else if(k==124 && r>=42 && g<=22 && b<=8) { sw=0.45; bs=1.40; }
+        else if(k==138 && r>=48 && g>=35 && b<=16) { sw=0.30; bs=1.40; }
+        else if(k==137 && r>=52 && g>=44 && b<=20) { sw=0.55; bs=1.60; }
+        else if(k==136 && r>=58 && g>=52 && b<=36) { sw=1.00; bs=2.10; }
+        else if(k==161 && r>=58 && g>=58 && b>=36 && b<=50) { sw=0.95; bs=2.00; }
+        else if(k==145 && r>=60 && g>=60 && b>=60) { sw=0.75; bs=1.80; }
+        else if(k==207 && r>=60 && g>=60 && b>=60) { sw=0.95; bs=2.00; }
+        else if(k==206 && r>=60 && g>=56 && b>=54) { sw=0.75; bs=1.60; }
+        else if(k==205 && r>=58 && g>=52 && b>=50) { sw=0.40; bs=1.30; }
+        else if(k==223 && r>=60 && g>=60 && b>=60) { sw=0.95; bs=2.00; }
+        else if(k==222 && g>=60 && r>=55 && b>=44) { sw=0.80; bs=1.70; }
+        else if(k==221 && g>=55 && r>=50 && b>=40) { sw=0.40; bs=1.30; }
+        else if(k==239 && r>=60 && g>=60 && b>=60) { sw=0.95; bs=2.00; }
+        else if(k==238 && b>=58 && r>=55 && g>=55) { sw=0.75; bs=1.60; }
+        else if(k==237 && b>=56 && r>=52 && g>=50) { sw=0.55; bs=1.40; }
+        else if(k==236 && b>=54 && r>=48 && g>=44) { sw=0.40; bs=1.30; }
+        else if(k==235 && b>=52 && g>=38 && r>=38) { sw=0.35; bs=1.25; }
+        else if(k==144 && b>=42 && b>r+18) { sw=0.35; bs=1.30; }
+
+        const double bmax=bs>bg?bs:bg;
+        int su=(int)(sw*255.0+0.5),gu=(int)(gw*255.0+0.5),bu=(int)(bmax*64.0+0.5);
+        if(su>255) su=255; if(gu>255) gu=255; if(bu>255) bu=255;
+        lut[(256+k)*4+0]=(uint8_t)su;
+        lut[(256+k)*4+1]=(uint8_t)gu;
+        lut[(256+k)*4+2]=(uint8_t)bu;
+        lut[(256+k)*4+3]=255u;
+    }
+    GLint prev_tex=0,prev_act=0,prev_align=4,prev_rl=0;
+    g_bloom.GetIntegerv(GL_ACTIVE_TEXTURE,&prev_act);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
+    g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&prev_tex);
+    g_bloom.GetIntegerv(GL_UNPACK_ALIGNMENT,&prev_align);
+    g_bloom.GetIntegerv(GL_UNPACK_ROW_LENGTH,&prev_rl);
+    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,1);
+    g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex);
+    g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,2,GL_RGBA,GL_UNSIGNED_BYTE,lut);
+    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,prev_align);
+    g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,prev_rl);
+    g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex);
+    g_bloom.ActiveTexture((GLenum)prev_act);
+}
+
+static int bloom_active(const gw_interactive_visual_snapshot *v) {
+    if(g_bloom_env_disable<0) { const char *e=getenv("GW_BLOOM_DISABLE"); g_bloom_env_disable=e && e[0]=='1'; }
+    return g_cli_play_mode && g_ini_emissive_bloom && g_ini_bloom_intensity>0.001f && !g_bloom_env_disable &&
+           !g_bloom.failed && v && v->valid && v->in_mission && v->fx_ring_valid && !g_terrain_modern_backend &&
+           v->ring_left==128;
+}
+
+static void bloom_alloc_rg_tex(GLuint *tex,int w,int h) {
+    if(*tex) g_bloom.DeleteTextures(1,tex);
+    g_bloom.GenTextures(1,tex);
+    g_bloom.BindTexture(GL_TEXTURE_2D,*tex);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+    g_bloom.TexImage2D(GL_TEXTURE_2D,0,GL_RG8,w,h,0,GL_RG,GL_UNSIGNED_BYTE,NULL);
+}
+
+static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_video_surface *source,
+                               int view_w,int panel_split) {
+    if(!bloom_active(v) || !source) return;
+    if(!bloom_ensure_init(view_w)) return;
+    bloom_classify(v->palette);
+
+    GLint prev_act=0,prev_tex=0,prev_align=4,prev_rl=0;
+    g_bloom.GetIntegerv(GL_ACTIVE_TEXTURE,&prev_act);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
+    g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&prev_tex);
+    g_bloom.GetIntegerv(GL_UNPACK_ALIGNMENT,&prev_align);
+    g_bloom.GetIntegerv(GL_UNPACK_ROW_LENGTH,&prev_rl);
+    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,1);
+    g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
+
+    if(g_bloom.view_w!=view_w || !g_bloom.view_tex[0] || !g_bloom.view_tex[1] || !g_bloom.hud_tex) {
+        g_bloom.view_w=view_w;
+        bloom_alloc_rg_tex(&g_bloom.view_tex[0],view_w,480);
+        bloom_alloc_rg_tex(&g_bloom.view_tex[1],view_w,480);
+        if(g_bloom.hud_tex) g_bloom.DeleteTextures(1,&g_bloom.hud_tex);
+        g_bloom.GenTextures(1,&g_bloom.hud_tex);
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.hud_tex);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+        g_bloom.TexImage2D(GL_TEXTURE_2D,0,GL_R8,view_w,480,0,GL_RED,GL_UNSIGNED_BYTE,NULL);
+    }
+    if(g_interp_prev_texture && interp_enabled()) {
+        GLuint sw=g_bloom.view_tex[0]; g_bloom.view_tex[0]=g_bloom.view_tex[1]; g_bloom.view_tex[1]=sw;
+    }
+
+    /* 1. Upload view_tex[1] and hud_tex */
+    const int ring_on_view=v->fx_ring_w==v->wscreen_pitch && v->fx_ring_h==480u;
+    const int ring_w_view=(int)v->wscreen_pitch-128;
+    const int cv_ring_ok=v->canvas_valid && (int)v->fx_ring_w==(int)GW_CANVAS_W && v->fx_ring_h==GW_CANVAS_H;
+    const int cv_rw=(int)GW_CANVAS_W-128;
+    for(int y=0;y<480;y++) {
+        const uint8_t *row=gw_video_surface_row(source,y);
+        uint8_t *dst=g_bloom.up_buf+(size_t)y*(size_t)view_w*2u;
+        uint8_t *hd=g_bloom.hud_buf+(size_t)y*(size_t)view_w;
+        int ry=0;
+        if(ring_on_view) { ry=(y+v->ring_y)%480; if(ry<0) ry+=480; }
+        else if(cv_ring_ok) { ry=(y+GW_CANVAS_VY0+v->ring_y)%(int)GW_CANVAS_H; if(ry<0) ry+=(int)GW_CANVAS_H; }
+        for(int x=0;x<view_w;x++) {
+            uint8_t k=row[x];
+            int is_panel=x<128;
+            if(!is_panel && x<176 && panel_split) {
+                is_panel=(g_interp_panel_rgba[y*48+(x-128)]>>24)!=0u;
+                if(is_panel && v->panel_bg_valid) k=v->panel_bg[y*48+(x-128)];
+            }
+            int is_gnd=0;
+            if(!is_panel) {
+                if(ring_on_view) {
+                    int rx=(x-128)+(v->ring_x-128); rx%=ring_w_view; if(rx<0) rx+=ring_w_view;
+                    is_gnd=(k==v->fx_ring[(size_t)ry*v->fx_ring_w+128u+(unsigned)rx]);
+                } else if(cv_ring_ok && x>=176) {
+                    int cx=x+(GW_CANVAS_VX0-128);
+                    int rx=(cx-128)+(v->ring_x-128); rx%=cv_rw; if(rx<0) rx+=cv_rw;
+                    is_gnd=(k==v->fx_ring[(size_t)ry*GW_CANVAS_W+128u+(unsigned)rx]);
+                }
+            }
+            dst[x*2+0]=k;
+            dst[x*2+1]=(uint8_t)((is_panel?0:1)|(is_gnd?2:0));
+            hd[x]=(uint8_t)(is_panel?255:0);
+        }
+    }
+    g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.view_tex[1]);
+    g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,view_w,480,GL_RG,GL_UNSIGNED_BYTE,g_bloom.up_buf);
+    g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.hud_tex);
+    g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,view_w,480,GL_RED,GL_UNSIGNED_BYTE,g_bloom.hud_buf);
+
+    /* 2. Upload canvas_tex[1] when zoom-out canvas is active */
+    if(v->canvas_valid && cv_ring_ok) {
+        if(!g_bloom.canvas_tex[0] || !g_bloom.canvas_tex[1]) {
+            bloom_alloc_rg_tex(&g_bloom.canvas_tex[0],GW_CANVAS_TEX_W,(int)GW_CANVAS_H);
+            bloom_alloc_rg_tex(&g_bloom.canvas_tex[1],GW_CANVAS_TEX_W,(int)GW_CANVAS_H);
+        }
+        GLuint sw=g_bloom.canvas_tex[0]; g_bloom.canvas_tex[0]=g_bloom.canvas_tex[1]; g_bloom.canvas_tex[1]=sw;
+        for(int y=0;y<(int)GW_CANVAS_H;y++) {
+            const uint8_t *row=v->canvas+(size_t)y*GW_CANVAS_W+128u;
+            uint8_t *dst=g_bloom.up_buf+(size_t)y*GW_CANVAS_TEX_W*2u;
+            int ry=(y+v->ring_y)%(int)GW_CANVAS_H; if(ry<0) ry+=(int)GW_CANVAS_H;
+            for(int x=0;x<GW_CANVAS_TEX_W;x++) {
+                uint8_t k=row[x];
+                if(y<480 && x<48 && v->panel_bg_valid && v->canvas_panel[y*48+x]) k=v->panel_bg[y*48+x];
+                int rx=x+(v->ring_x-128); rx%=cv_rw; if(rx<0) rx+=cv_rw;
+                const int is_gnd=(k==v->fx_ring[(size_t)ry*GW_CANVAS_W+128u+(unsigned)rx]);
+                dst[x*2+0]=k;
+                dst[x*2+1]=(uint8_t)(1|(is_gnd?2:0));
+            }
+        }
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[1]);
+        g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,GW_CANVAS_TEX_W,(int)GW_CANVAS_H,GL_RG,GL_UNSIGNED_BYTE,g_bloom.up_buf);
+        g_bloom.canvas_ready=g_bloom.canvas_ready<2?g_bloom.canvas_ready+1:2;
+    } else g_bloom.canvas_ready=0;
+
+    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,prev_align);
+    g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,prev_rl);
+    g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex);
+    g_bloom.ActiveTexture((GLenum)prev_act);
+}
+
+static void bloom_draw_quad(float x0,float y0,float x1,float y1,
+                            float u0,float v0,float u1,float v1,
+                            float su0,float sv0,float su1,float sv1) {
+    const float verts[4*6]={
+        x0,y0, u0,v0, su0,sv0,
+        x1,y0, u1,v0, su1,sv0,
+        x0,y1, u0,v1, su0,sv1,
+        x1,y1, u1,v1, su1,sv1
+    };
+    g_bloom.BufferData(GL_ARRAY_BUFFER,sizeof verts,verts,GL_STREAM_DRAW);
+    g_bloom.DrawArrays(GL_TRIANGLE_STRIP,0,4);
+}
+
+static void bloom_draw_map_rect(float lx0,float ly0,float lw,float lh,
+                                float u0,float v0,float u1,float v1,int view_w) {
+    const float x0=lx0/(float)view_w*2.0f-1.0f, x1=(lx0+lw)/(float)view_w*2.0f-1.0f;
+    const float y0=ly0/480.0f*2.0f-1.0f,      y1=(ly0+lh)/480.0f*2.0f-1.0f;
+    const float su0=lx0/(float)view_w, su1=(lx0+lw)/(float)view_w;
+    const float sv0=ly0/480.0f,        sv1=(ly0+lh)/480.0f;
+    bloom_draw_quad(x0,y0,x1,y1,u0,v0,u1,v1,su0,sv0,su1,sv1);
+}
+
+static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SDL_Texture *scale_target,
+                                      const gw_present_geo *geo,double interp_a) {
+    const int active=bloom_active(v) && bloom_ensure_init(g_present_w) && g_bloom.view_tex[1];
+    if(active!=g_bloom.last_active) {
+        g_bloom.last_active=active;
+        gw_flag_trace("TRACE emissive_bloom active=%d intensity=%.2f%c",active,(double)g_ini_bloom_intensity,10);
+    }
+    if(!active) return 0;
+
+    float st_tw=1.0f,st_th=1.0f;
+    if(SDL_GL_BindTexture(scale_target,&st_tw,&st_th)!=0) return 0;
+
+    /* Save GL state */
+    GLint prev_fbo=0,prev_prog=0,prev_act=0,prev_vbo=0,prev_vp[4]={0},prev_sc[4]={0},prev_align=4,prev_rl=0;
+    GLint prev_tex0=0,prev_tex1=0,prev_tex2=0,prev_bsrc_r=0,prev_bdst_r=0,prev_bsrc_a=0,prev_bdst_a=0;
+    GLboolean prev_sc_en=0,prev_bl_en=0;
+    g_bloom.GetIntegerv(GL_FRAMEBUFFER_BINDING,&prev_fbo);
+    g_bloom.GetIntegerv(GL_CURRENT_PROGRAM,&prev_prog);
+    g_bloom.GetIntegerv(GL_ACTIVE_TEXTURE,&prev_act);
+    g_bloom.GetIntegerv(GL_ARRAY_BUFFER_BINDING,&prev_vbo);
+    g_bloom.GetIntegerv(GL_VIEWPORT,prev_vp);
+    g_bloom.GetIntegerv(GL_SCISSOR_BOX,prev_sc);
+    g_bloom.GetIntegerv(GL_UNPACK_ALIGNMENT,&prev_align);
+    g_bloom.GetIntegerv(GL_UNPACK_ROW_LENGTH,&prev_rl);
+    g_bloom.GetIntegerv(GL_BLEND_SRC_RGB,&prev_bsrc_r);
+    g_bloom.GetIntegerv(GL_BLEND_DST_RGB,&prev_bdst_r);
+    g_bloom.GetIntegerv(GL_BLEND_SRC_ALPHA,&prev_bsrc_a);
+    g_bloom.GetIntegerv(GL_BLEND_DST_ALPHA,&prev_bdst_a);
+    prev_sc_en=g_bloom.IsEnabled(GL_SCISSOR_TEST);
+    prev_bl_en=g_bloom.IsEnabled(GL_BLEND);
+    g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&prev_tex2);
+    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&prev_tex1);
+    g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&prev_tex0);
+
+    g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_bloom.vbo);
+    g_bloom.EnableVertexAttribArray(0);
+    g_bloom.EnableVertexAttribArray(1);
+    g_bloom.EnableVertexAttribArray(2);
+    g_bloom.VertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,6*(GLsizei)sizeof(float),(const void *)0);
+    g_bloom.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,6*(GLsizei)sizeof(float),(const void *)(2*sizeof(float)));
+    g_bloom.VertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,6*(GLsizei)sizeof(float),(const void *)(4*sizeof(float)));
+    g_bloom.Disable(GL_BLEND);
+
+    /* Pass 1: Emissive Extraction -> fbo_half_a */
+    const int vw=g_present_w;
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_half_a);
+    g_bloom.Viewport(0,0,g_bloom.half_w,g_bloom.half_h);
+    g_bloom.Disable(GL_SCISSOR_TEST);
+    g_bloom.ClearColor(0.0f,0.0f,0.0f,1.0f);
+    g_bloom.Clear(GL_COLOR_BUFFER_BIT);
+    g_bloom.UseProgram(g_bloom.prog_extract);
+    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex);
+    g_bloom.Uniform1i(g_bloom.u_ext_lut,1);
+    g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.hud_tex);
+    g_bloom.Uniform1i(g_bloom.u_ext_hud,2);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
+    g_bloom.Uniform1i(g_bloom.u_ext_idx,0);
+
+    const int sc_x=(int)(128.0*g_bloom.half_w/(double)vw);
+    g_bloom.Enable(GL_SCISSOR_TEST);
+    g_bloom.Scissor(sc_x,0,g_bloom.half_w-sc_x,g_bloom.half_h);
+
+    if(g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999) {
+        const double ux=GW_CANVAS_VX0+g_zoom_x,uy=GW_CANVAS_VY0+g_zoom_y,z=g_zoom;
+        const float tw=(float)(GW_CANVAS_TEX_W*z),th=(float)(GW_CANVAS_H*z);
+        const int idx=(g_bloom.canvas_ready>=2 && (g_interp_dx||g_interp_dy) && interp_a<1.0)?g_interp_dx:0;
+        const int idy=(g_bloom.canvas_ready>=2 && (g_interp_dx||g_interp_dy) && interp_a<1.0)?g_interp_dy:0;
+        g_bloom.Uniform2f(g_bloom.u_ext_texel,1.0f/(float)GW_CANVAS_TEX_W,1.0f/(float)GW_CANVAS_H);
+        if(interp_a<1.0 && (idx||idy)) {
+            g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[0]);
+            bloom_draw_map_rect((float)(128.0+(GW_CANVAS_MAPX0+interp_a*idx-ux)*z),(float)((interp_a*idy-uy)*z),
+                                tw,th,0.0f,0.0f,1.0f,1.0f,vw);
+        }
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[1]);
+        bloom_draw_map_rect((float)(128.0+(GW_CANVAS_MAPX0-(1.0-interp_a)*idx-ux)*z),
+                            (float)((-(1.0-interp_a)*idy-uy)*z),tw,th,0.0f,0.0f,1.0f,1.0f,vw);
+    } else if(g_interp_prev_texture && interp_enabled() && (g_interp_dx||g_interp_dy) &&
+              g_interp_t_cur>g_interp_t_prev && g_interactive_perf_frequency &&
+              (double)(g_interp_t_cur-g_interp_t_prev)<0.2*(double)g_interactive_perf_frequency) {
+        const float u0=128.0f/(float)vw;
+        const double zz=g_zoom,zx=g_zoom_x,zy=g_zoom_y;
+        const float mw=(float)((vw-128)*zz),mh=(float)(480.0*zz);
+        g_bloom.Uniform2f(g_bloom.u_ext_texel,1.0f/(float)vw,1.0f/480.0f);
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.view_tex[0]);
+        bloom_draw_map_rect((float)(128.0+(interp_a*g_interp_dx-zx)*zz),(float)((interp_a*g_interp_dy-zy)*zz),
+                            mw,mh,u0,0.0f,1.0f,1.0f,vw);
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.view_tex[1]);
+        bloom_draw_map_rect((float)(128.0+(-(1.0-interp_a)*g_interp_dx-zx)*zz),
+                            (float)((-(1.0-interp_a)*g_interp_dy-zy)*zz),mw,mh,u0,0.0f,1.0f,1.0f,vw);
+    } else if(g_zoom>1.0001) {
+        const float u0=128.0f/(float)vw;
+        g_bloom.Uniform2f(g_bloom.u_ext_texel,1.0f/(float)vw,1.0f/480.0f);
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.view_tex[1]);
+        bloom_draw_map_rect((float)(128.0-g_zoom_x*g_zoom),(float)(-g_zoom_y*g_zoom),
+                            (float)((vw-128)*g_zoom),(float)(480.0*g_zoom),u0,0.0f,1.0f,1.0f,vw);
+    } else {
+        const float u0=128.0f/(float)vw;
+        g_bloom.Uniform2f(g_bloom.u_ext_texel,1.0f/(float)vw,1.0f/480.0f);
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.view_tex[1]);
+        bloom_draw_map_rect(128.0f,0.0f,(float)(vw-128),480.0f,u0,0.0f,1.0f,1.0f,vw);
+    }
+    g_bloom.Disable(GL_SCISSOR_TEST);
+
+    /* Pass 2: Dual Kawase Downsample & Upsample Pyramid */
+    g_bloom.UseProgram(g_bloom.prog_down);
+    g_bloom.Uniform1i(g_bloom.u_down_tex,0);
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_qtr_a);
+    g_bloom.Viewport(0,0,g_bloom.qtr_w,g_bloom.qtr_h);
+    g_bloom.Uniform2f(g_bloom.u_down_hp,0.5f/(float)g_bloom.qtr_w,0.5f/(float)g_bloom.qtr_h);
+    g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_half_a);
+    bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_eig);
+    g_bloom.Viewport(0,0,g_bloom.eig_w,g_bloom.eig_h);
+    g_bloom.Uniform2f(g_bloom.u_down_hp,0.5f/(float)g_bloom.eig_w,0.5f/(float)g_bloom.eig_h);
+    g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_qtr_a);
+    bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+
+    g_bloom.UseProgram(g_bloom.prog_up);
+    g_bloom.Uniform1i(g_bloom.u_up_tex,0);
+    g_bloom.Uniform1i(g_bloom.u_up_prev,1);
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_qtr_b);
+    g_bloom.Viewport(0,0,g_bloom.qtr_w,g_bloom.qtr_h);
+    g_bloom.Uniform2f(g_bloom.u_up_hp,0.5f/(float)g_bloom.eig_w,0.5f/(float)g_bloom.eig_h);
+    g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_eig);
+    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_qtr_a);
+    bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_half_b);
+    g_bloom.Viewport(0,0,g_bloom.half_w,g_bloom.half_h);
+    g_bloom.Uniform2f(g_bloom.u_up_hp,0.5f/(float)g_bloom.qtr_w,0.5f/(float)g_bloom.qtr_h);
+    g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_qtr_b);
+    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_half_a);
+    bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+
+    /* Pass 3: Soft-Shoulder Additive Composition onto FBO 0 */
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,0);
+    g_bloom.Viewport(geo->dst.x,geo->oh-geo->dst.y-geo->dst.h,geo->dst.w,geo->dst.h);
+    g_bloom.UseProgram(g_bloom.prog_comp);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
+    (void)SDL_GL_BindTexture(scale_target,&st_tw,&st_th);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,geo->nearest?GL_NEAREST:GL_LINEAR);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,geo->nearest?GL_NEAREST:GL_LINEAR);
+    g_bloom.Uniform1i(g_bloom.u_comp_base,0);
+    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_half_b);
+    g_bloom.Uniform1i(g_bloom.u_comp_bloom,1);
+    g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.hud_tex);
+    g_bloom.Uniform1i(g_bloom.u_comp_hud,2);
+    g_bloom.Uniform1f(g_bloom.u_comp_int,g_ini_bloom_intensity);
+
+    const float u0=(float)geo->src.x/(float)geo->tw*st_tw;
+    const float u1=(float)(geo->src.x+geo->src.w)/(float)geo->tw*st_tw;
+    const float v0=(float)geo->src.y/(float)geo->th*st_th;
+    const float v1=(float)(geo->src.y+geo->src.h)/(float)geo->th*st_th;
+    const float lu0=(float)geo->src.x/(float)geo->tw;
+    const float lu1=(float)(geo->src.x+geo->src.w)/(float)geo->tw;
+    /* Top-down flip for FBO 0: NDC y=+1 is top (v0, lv0=0), NDC y=-1 is bottom (v1, lv1=1) */
+    const float verts[4*6]={
+        -1.0f, 1.0f, u0,v0, lu0,0.0f,
+         1.0f, 1.0f, u1,v0, lu1,0.0f,
+        -1.0f,-1.0f, u0,v1, lu0,1.0f,
+         1.0f,-1.0f, u1,v1, lu1,1.0f
+    };
+    g_bloom.BufferData(GL_ARRAY_BUFFER,sizeof verts,verts,GL_STREAM_DRAW);
+    g_bloom.DrawArrays(GL_TRIANGLE_STRIP,0,4);
+    (void)SDL_GL_UnbindTexture(scale_target);
+
+    /* Restore all GL state for SDL2 */
+    g_bloom.DisableVertexAttribArray(2);
+    g_bloom.DisableVertexAttribArray(1);
+    g_bloom.DisableVertexAttribArray(0);
+    g_bloom.BindBuffer(GL_ARRAY_BUFFER,(GLuint)prev_vbo);
+    g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex2);
+    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex1);
+    g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex0);
+    g_bloom.ActiveTexture((GLenum)prev_act);
+    g_bloom.UseProgram((GLuint)prev_prog);
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,(GLuint)prev_fbo);
+    g_bloom.Viewport(prev_vp[0],prev_vp[1],prev_vp[2],prev_vp[3]);
+    g_bloom.Scissor(prev_sc[0],prev_sc[1],prev_sc[2],prev_sc[3]);
+    if(prev_sc_en) g_bloom.Enable(GL_SCISSOR_TEST); else g_bloom.Disable(GL_SCISSOR_TEST);
+    if(prev_bl_en) g_bloom.Enable(GL_BLEND); else g_bloom.Disable(GL_BLEND);
+    g_bloom.BlendFuncSeparate((GLenum)prev_bsrc_r,(GLenum)prev_bdst_r,(GLenum)prev_bsrc_a,(GLenum)prev_bdst_a);
+    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,prev_align);
+    g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,prev_rl);
+    return 1;
+}
+
 static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *palette,
                                        const char *capture_path,int upload_texture,
                                        const gw_interactive_visual_snapshot *visual) {
@@ -9382,8 +10127,13 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         Uint32 renderer_flags=(g_interactive_demo_mode && !headless_test_driver)?
             SDL_RENDERER_ACCELERATED:SDL_RENDERER_SOFTWARE;
         if(g_interactive_demo_mode && g_interactive_vsync) renderer_flags|=SDL_RENDERER_PRESENTVSYNC;
+        if(g_cli_play_mode && !headless_test_driver) SDL_SetHint(SDL_HINT_RENDER_DRIVER,"opengl");
         g_ifclevel_demo_renderer=g_ifclevel_demo_window?
             SDL_CreateRenderer(g_ifclevel_demo_window,-1,renderer_flags):NULL;
+        if(!g_ifclevel_demo_renderer && g_ifclevel_demo_window && g_cli_play_mode && !headless_test_driver) {
+            SDL_SetHint(SDL_HINT_RENDER_DRIVER,"");
+            g_ifclevel_demo_renderer=SDL_CreateRenderer(g_ifclevel_demo_window,-1,renderer_flags);
+        }
         if(g_ifclevel_demo_renderer && g_interactive_demo_mode && !headless_test_driver)
             g_interactive_vsync_set_result=SDL_RenderSetVSync(g_ifclevel_demo_renderer,
                 g_interactive_vsync?1:0);
@@ -9657,6 +10407,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                     }
                 }
             } else g_canvas_tex_ready=0;
+            if(visual) bloom_upload_frame(visual,source,texture_w,panel_split);
             if(g_interactive_perf_frequency) {
                 g_hostprof_convert_ms+=(double)(SDL_GetPerformanceCounter()-hp_convert0)*1000.0/(double)g_interactive_perf_frequency;
                 g_hostprof_uploads++;
@@ -9923,10 +10674,21 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
     }
     if(scaled) {
         SDL_SetRenderTarget(g_ifclevel_demo_renderer,NULL);
-        if(SDL_RenderClear(g_ifclevel_demo_renderer)!=0 ||
-           SDL_SetTextureScaleMode(scale_target,geo.nearest?SDL_ScaleModeNearest:SDL_ScaleModeLinear)!=0 ||
-           SDL_RenderCopy(g_ifclevel_demo_renderer,scale_target,&geo.src,&geo.dst)!=0) {
-            fprintf(stderr,"SDL scaled present: %s\n",SDL_GetError()); return 0;
+        double bloom_a=1.0;
+        if(visual && interp_enabled() && (g_interp_dx || g_interp_dy) && g_interp_t_cur>g_interp_t_prev &&
+           g_interactive_perf_frequency && (double)(g_interp_t_cur-g_interp_t_prev)<0.2*(double)g_interactive_perf_frequency) {
+            bloom_a=(double)(SDL_GetPerformanceCounter()-g_interp_t_cur)/(double)(g_interp_t_cur-g_interp_t_prev);
+            if(bloom_a<0.0) bloom_a=0.0; if(bloom_a>1.0) bloom_a=1.0;
+        }
+        if(SDL_RenderClear(g_ifclevel_demo_renderer)!=0) {
+            fprintf(stderr,"SDL demo present: %s\n",SDL_GetError()); return 0;
+        }
+        SDL_RenderFlush(g_ifclevel_demo_renderer);
+        if(!bloom_render_and_composite(visual,scale_target,&geo,bloom_a)) {
+            if(SDL_SetTextureScaleMode(scale_target,geo.nearest?SDL_ScaleModeNearest:SDL_ScaleModeLinear)!=0 ||
+               SDL_RenderCopy(g_ifclevel_demo_renderer,scale_target,&geo.src,&geo.dst)!=0) {
+                fprintf(stderr,"SDL scaled present: %s\n",SDL_GetError()); return 0;
+            }
         }
         dst=geo.dst;
         if(g_filter_mode==2) host_crt_overlay(&geo);
@@ -10557,8 +11319,13 @@ static int gw_smk_open_window(void) {
     gw_smk_trace("TRACE smacker_video window=%dx%d fullscreen=%d%c",smk_w,smk_h,(smk_flags&SDL_WINDOW_FULLSCREEN_DESKTOP)!=0,10);
     const char *drv=SDL_GetCurrentVideoDriver();
     const int headless=drv && strcmp(drv,"dummy")==0;
+    if(g_cli_play_mode && !headless) SDL_SetHint(SDL_HINT_RENDER_DRIVER,"opengl");
     g_smk_renderer=g_smk_window?SDL_CreateRenderer(g_smk_window,-1,
         headless?SDL_RENDERER_SOFTWARE:SDL_RENDERER_ACCELERATED):NULL;
+    if(!g_smk_renderer && g_smk_window && g_cli_play_mode && !headless) {
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER,"");
+        g_smk_renderer=SDL_CreateRenderer(g_smk_window,-1,SDL_RENDERER_ACCELERATED);
+    }
     g_smk_owns_window=g_smk_window!=NULL;
     if(!g_smk_renderer) {
         gw_smk_trace("TRACE smacker_video window failed: %s\n",SDL_GetError());
@@ -17758,13 +18525,15 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
     g_interactive_published_snapshot.ring_x=*(int16_t *)(memory+map_guest+0x08u);
     g_interactive_published_snapshot.ring_y=*(int16_t *)(memory+map_guest+0x0Au);
     g_interactive_published_snapshot.ring_left=*(int16_t *)(memory+map_guest+0x1Du);
-    {   /* water_effects: missions only (IFCMain current, no pending interface); the ring at the frame's own pitch */
+    {   /* water_effects / emissive_bloom: missions only (IFCMain current, no pending interface); the ring at the frame's own pitch */
         const uint32_t ring=*(const uint32_t *)(memory+0x002EECA0u);
         const uint32_t rw=canvas?GW_CANVAS_W:pitch,rh=canvas?GW_CANVAS_H:480u;
+        const int in_ifc_main=*(const uint32_t *)(memory+0x002EF7E8u)==0x0035FE9Au && !*(const uint32_t *)(memory+0x002EF7ECu) &&
+            *(const uint16_t *)(memory+map_guest+0x1Du)==128u;
+        g_interactive_published_snapshot.in_mission=in_ifc_main;
         g_interactive_published_snapshot.fx_ring_valid=0;
-        if(g_cli_play_mode && g_ini_water_effects && ring && ring<=GUEST_LIMIT-rw*rh && rw*rh<=sizeof g_interactive_published_snapshot.fx_ring &&
-           *(const uint32_t *)(memory+0x002EF7E8u)==0x0035FE9Au && !*(const uint32_t *)(memory+0x002EF7ECu) &&
-           *(const uint16_t *)(memory+map_guest+0x1Du)==128u) {
+        if(g_cli_play_mode && (g_ini_water_effects || g_ini_emissive_bloom) && ring && ring<=GUEST_LIMIT-rw*rh &&
+           rw*rh<=sizeof g_interactive_published_snapshot.fx_ring && in_ifc_main) {
             memcpy(g_interactive_published_snapshot.fx_ring,memory+ring,(size_t)rw*rh);
             g_interactive_published_snapshot.fx_ring_w=rw; g_interactive_published_snapshot.fx_ring_h=rh;
             g_interactive_published_snapshot.fx_ring_valid=1;
@@ -19302,6 +20071,8 @@ static void play_mode_sanitize_environment(void) {
    text is drawn (antialiased) at the full canvas resolution */
 #define GL_W 640
 #define GL_H 400
+#undef GL_S
+#undef GL_CW
 #define GL_S 2
 #define GL_CW (GL_W*GL_S)
 #define GL_CH (GL_H*GL_S)
@@ -19592,41 +20363,44 @@ static void gl_draw_missions(void) {
 /* settings row: name and one-line description in the left column (x 24..216), choices from x = 228 */
 static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
     gl_text_fit(GL.f_bold,24,y,192,GLC_AMBER,t);
-    if(sub) gl_text_fit(GL.f_small,24,y+17,192,GLC_GREY,sub);
+    if(sub) gl_text_fit(GL.f_small,24,y+15,192,GLC_GREY,sub);
 }
 static void gl_draw_display(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
-    /* rows every 41 units: 60, 101, 142, 183, 224, 265, 306 (panel 52..352) */
+    /* rows every 36 units: 58, 94, 130, 166, 202, 238, 274, 310 (panel 52..352) */
     const wchar_t *const modes[3]={GWT(L"CLÁSICO 4:3",L"CLASSIC 4:3"),GWT(L"PANORÁMICO 854×480",L"WIDESCREEN 854×480"),L"ZOOM OUT 1152×640"};
-    gl_row_label(60,GWT(L"MODO DE VISTA",L"VIEW MODE"),GWT(L"Zoom: rueda; Inicio = 1x",L"Zoom: wheel; Home = 1x"));
+    gl_row_label(58,GWT(L"MODO DE VISTA",L"VIEW MODE"),GWT(L"Zoom: rueda; Inicio = 1x",L"Zoom: wheel; Home = 1x"));
     int cur=g_ws_canvas?2:g_ws_requested?1:0;
-    int c=gl_choice(228,60,390,24,modes,3,cur,0u);
+    int c=gl_choice(228,58,390,22,modes,3,cur,0u);
     if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
     static const wchar_t *const res[5]={L"AUTO",L"900p",L"1080p",L"1440p",L"2160p"};
     unsigned dis=0u; for(int i=1;i<5;i++) if(GL.desk_w && (gl_res_w[i]>GL.desk_w || gl_res_h[i]>GL.desk_h)) dis|=1u<<i;
-    gl_row_label(101,GWT(L"RESOLUCIÓN",L"RESOLUTION"),GWT(L"Tamaño de la ventana",L"Window size"));
-    cur=gl_res_index(); c=gl_choice(228,101,390,24,res,5,cur,dis);
+    gl_row_label(94,GWT(L"RESOLUCIÓN",L"RESOLUTION"),GWT(L"Tamaño de la ventana",L"Window size"));
+    cur=gl_res_index(); c=gl_choice(228,94,390,22,res,5,cur,dis);
     if(c>=0 && c!=cur) { g_cli_res_w=gl_res_w[c]; g_cli_res_h=gl_res_h[c]; (void)gwrecomp_ini_set("resolution",gl_res_ini[c]); }
     const wchar_t *const fs[2]={GWT(L"VENTANA",L"WINDOW"),GWT(L"COMPLETA SIN BORDES",L"BORDERLESS FULLSCREEN")};
-    gl_row_label(142,GWT(L"PANTALLA",L"SCREEN"),GWT(L"Sin bordes = escritorio",L"Borderless = desktop size"));
-    c=gl_choice(228,142,390,24,fs,2,g_cli_fullscreen,0u);
+    gl_row_label(130,GWT(L"PANTALLA",L"SCREEN"),GWT(L"Sin bordes = escritorio",L"Borderless = desktop size"));
+    c=gl_choice(228,130,390,22,fs,2,g_cli_fullscreen,0u);
     if(c>=0 && c!=g_cli_fullscreen) { g_cli_fullscreen=c; gwrecomp_ini_set_int("fullscreen",c); }
     const wchar_t *const fps[2]={GWT(L"60 FPS CLÁSICO",L"60 FPS CLASSIC"),GWT(L"120 FPS INTERPOLADO",L"120 FPS INTERPOLATED")};
-    gl_row_label(183,GWT(L"FOTOGRAMAS",L"FRAME RATE"),GWT(L"El ritmo del juego no cambia",L"The game speed stays the same"));
-    cur=g_ini_fps==60u?0:1; c=gl_choice(228,183,390,24,fps,2,cur,0u);
+    gl_row_label(166,GWT(L"FOTOGRAMAS",L"FRAME RATE"),GWT(L"El ritmo del juego no cambia",L"The game speed stays the same"));
+    cur=g_ini_fps==60u?0:1; c=gl_choice(228,166,390,22,fps,2,cur,0u);
     if(c>=0 && c!=cur) { g_ini_fps=c?120u:60u; gwrecomp_ini_set_int("fps",(int)g_ini_fps); }
     const wchar_t *const flt[3]={GWT(L"NÍTIDO",L"SHARP"),GWT(L"EPX SUAVE",L"EPX SMOOTH"),L"CRT"};
-    gl_row_label(224,GWT(L"FILTRO (F7)",L"FILTER (F7)"),GWT(L"También con F7 al jugar",L"Also with F7 while playing"));
-    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,224,390,24,flt,3,cur,0u);
+    gl_row_label(202,GWT(L"FILTRO (F7)",L"FILTER (F7)"),GWT(L"También con F7 al jugar",L"Also with F7 while playing"));
+    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,202,390,22,flt,3,cur,0u);
     if(c>=0 && c!=cur) { g_filter_mode=c; (void)gwrecomp_ini_set("filter",g_filter_names[c]); }
     const wchar_t *const hz[2]={L"ORIGINAL",GWT(L"LIMPIO",L"CLEAN")};
-    gl_row_label(265,GWT(L"HORIZONTE",L"HORIZON"),GWT(L"Quita píxeles sueltos",L"Removes stray pixels"));
-    c=gl_choice(228,265,390,24,hz,2,g_ini_clean_horizon,0u);
+    gl_row_label(238,GWT(L"HORIZONTE",L"HORIZON"),GWT(L"Quita píxeles sueltos",L"Removes stray pixels"));
+    c=gl_choice(228,238,390,22,hz,2,g_ini_clean_horizon,0u);
     if(c>=0 && c!=g_ini_clean_horizon) { g_ini_clean_horizon=c; gwrecomp_ini_set_int("clean_horizon",c); }
     const wchar_t *const fx[2]={L"NO",GWT(L"SÍ",L"YES")};
-    gl_row_label(306,GWT(L"EFECTOS AGUA / GOOP",L"WATER / GOOP EFFECTS"),GWT(L"Olas y brillos animados",L"Animated waves and glints"));
-    c=gl_choice(228,306,390,24,fx,2,g_ini_water_effects,0u);
+    gl_row_label(274,GWT(L"EFECTOS AGUA / GOOP",L"WATER / GOOP EFFECTS"),GWT(L"Olas y brillos animados",L"Animated waves and glints"));
+    c=gl_choice(228,274,390,22,fx,2,g_ini_water_effects,0u);
     if(c>=0 && c!=g_ini_water_effects) { g_ini_water_effects=c; gwrecomp_ini_set_int("water_effects",c); }
+    gl_row_label(310,GWT(L"BLOOM EMISIVO",L"EMISSIVE BLOOM"),GWT(L"Halo en energía, explosiones y GOOP",L"Soft glow on energy, blasts and GOOP"));
+    c=gl_choice(228,310,390,22,fx,2,g_ini_emissive_bloom,0u);
+    if(c>=0 && c!=g_ini_emissive_bloom) { g_ini_emissive_bloom=c; gwrecomp_ini_set_int("emissive_bloom",c); }
 }
 static void gl_draw_controls(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
