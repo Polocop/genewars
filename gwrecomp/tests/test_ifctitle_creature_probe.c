@@ -16029,8 +16029,12 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
     for(int k=1;k<3;k++) { if(x[k]<minx) minx=x[k]; if(x[k]>maxx) maxx=x[k]; if(y[k]<miny) miny=y[k]; if(y[k]>maxy) maxy=y[k]; }
     const int64_t area=(int64_t)(x[1]-x[0])*(y[2]-y[0])-(int64_t)(x[2]-x[0])*(y[1]-y[0]);
     if(!area) return;
-    if(minx<0) minx=0; if(maxx>=(int)w) maxx=(int)w-1;
-    if(minx>maxx) return;
+    /* E19C0's clip window: x in [0, [0x2DA114]), y in [0, [0x2DA118]) relative to the destination; scroll strips are
+       drawn through a narrow window, so the heights must be clipped exactly like the colour */
+    {   const int32_t cw=*(int32_t *)(guest_memory+g_ds_base+0x002DA114u),ch=*(int32_t *)(guest_memory+g_ds_base+0x002DA118u);
+        if(minx<0) minx=0; if(maxx>=cw) maxx=cw-1; if(maxx>=(int)w) maxx=(int)w-1;
+        if(miny<0) miny=0; if(maxy>=ch) maxy=ch-1; }
+    if(minx>maxx || miny>maxy) return;
     const float hz0=(float)(h[0]>>3),hz1=(float)(h[1]>>3),hz2=(float)(h[2]>>3),inv=1.0f/(float)area;   /* 1/8 step units */
     const float dhx=((hz1-hz0)*(float)(y[2]-y[0])-(hz2-hz0)*(float)(y[1]-y[0]))*inv;
     const float dhy=((hz2-hz0)*(float)(x[1]-x[0])-(hz1-hz0)*(float)(x[2]-x[0]))*inv;
