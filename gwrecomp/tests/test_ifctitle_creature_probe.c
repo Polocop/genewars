@@ -15855,7 +15855,7 @@ static void th_dump(void) {   /* QA (GW_TH_DUMP=<file>): heights, coverage and t
     fclose(f);
 }
 static int th_capture_on(void) {
-    if(g_th_force<0) { const char *e=getenv("GW_TH_CAPTURE"); g_th_force=e && e[0]=='1'; if(g_th_force) atexit(th_dump); }
+    if(g_th_force<0) { const char *e=getenv("GW_TH_CAPTURE"); g_th_force=e && e[0]=='1'; }
     return g_th_force || (g_cli_play_mode && g_ini_terrain_ao);
 }
 void gw_terrain_vertex_height(unsigned int y,unsigned int cell) {
@@ -15880,6 +15880,7 @@ static void th_triangle(uint32_t va,uint32_t vb,uint32_t vc) {
         x[k]=*(int32_t *)(guest_memory+a); y[k]=*(int32_t *)(guest_memory+a+4u);
         if(th_lookup(y[k],&h[k])) { found|=1<<k; sum+=h[k]; } }
     g_th_tris++;
+    if(g_th_force && g_th_tris%500u==0u) th_dump();
     if(found!=7) { g_th_unmatched++; if(!found) return; const int n=(found&1)+((found>>1)&1)+((found>>2)&1); for(int k=0;k<3;k++) if(!(found>>k&1)) h[k]=sum/n; }
     /* heights in game units >> 6 (the projection's step); pixel coverage like a top-left fill */
     int minx=x[0],maxx=x[0],miny=y[0],maxy=y[0];
