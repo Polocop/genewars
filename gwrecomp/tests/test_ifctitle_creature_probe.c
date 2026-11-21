@@ -15939,13 +15939,14 @@ void gw_terrain_vertex_height(unsigned int y,unsigned int cell,unsigned int node
     for(unsigned k=0;k<n;k++) if(g_th_node[k].addr==na) { g_th_node[k].h=h; return; }
     g_th_node[g_th_node_n&15u].addr=na; g_th_node[g_th_node_n&15u].h=h; g_th_node_n++;
 }
-static int th_lookup(int32_t y,int32_t light,int32_t *h) {
-    const unsigned n=g_th_node_n<16u?g_th_node_n:16u;
+/* node slots holding exactly (y, light); two rows can project to the same y with the same (saturated) light */
+static int th_candidates(int32_t y,int32_t light,int out[16]) {
+    const unsigned n=g_th_node_n<16u?g_th_node_n:16u; int c=0;
     for(unsigned k=0;k<n;k++) {
         const uint32_t na=g_th_node[k].addr; if(na>GUEST_LIMIT-8u) continue;
-        if(*(int32_t *)(guest_memory+na)==y && *(int32_t *)(guest_memory+na+4u)==light) { *h=g_th_node[k].h; return 1; }
+        if(*(int32_t *)(guest_memory+na)==y && *(int32_t *)(guest_memory+na+4u)==light) out[c++]=(int)k;
     }
-    return 0;
+    return c;
 }
 static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
     const uint32_t ring=*(const uint32_t *)(guest_memory+0x002EECA0u);
@@ -15954,10 +15955,21 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
     if(!ring || pitch!=w || (size_t)w*hgt>sizeof g_th_ring/sizeof g_th_ring[0]) return;
     const int64_t off0=(int64_t)((uint64_t)g_ds_base+dst)-(int64_t)ring;   /* ring index of destination (0,0) */
     const uint32_t p[3]={va,vb,vc}; int32_t x[3],y[3],h[3]; int found=0,sum=0;
+    int cand[3][16],nc[3];
     for(int k=0;k<3;k++) {
-        const uint64_t a=(uint64_t)g_ds_base+p[k]; if(a>GUEST_LIMIT-8u) return;
+        const uint64_t a=(uint64_t)g_ds_base+p[k]; if(a>GUEST_LIMIT-20u) return;
         x[k]=*(int32_t *)(guest_memory+a); y[k]=*(int32_t *)(guest_memory+a+4u);
-        if(th_lookup(y[k],*(int32_t *)(guest_memory+a+16u),&h[k])) { found|=1<<k; sum+=h[k]; } }
+        nc[k]=th_candidates(y[k],*(int32_t *)(guest_memory+a+16u),cand[k]);
+    }
+    /* a triangle uses three different nodes: unique matches first, then each tie takes a node no other vertex took */
+    {   int used[16]={0},pick[3]={-1,-1,-1};
+        for(int k=0;k<3;k++) if(nc[k]==1) { pick[k]=cand[k][0]; used[pick[k]]=1; }
+        for(int pass=0;pass<2;pass++) for(int k=0;k<3;k++) if(pick[k]<0 && nc[k]>1) {
+            for(int j=0;j<nc[k];j++) if(!used[cand[k][j]]) { pick[k]=cand[k][j]; used[pick[k]]=1; break; }
+            if(pick[k]<0 && pass==1) pick[k]=cand[k][0];
+        }
+        for(int k=0;k<3;k++) if(pick[k]>=0) { h[k]=g_th_node[pick[k]].h; found|=1<<k; sum+=h[k]; }
+    }
     g_th_tris++;
     {   static FILE *lf; static int li=-1; if(li<0) { const char *e=getenv("GW_TH_LOG"); li=e&&e[0]; if(li) lf=fopen(e,"w"); }
         if(lf) fprintf(lf,"%05x n%u v0 %d,%d,%d h%d v1 %d,%d,%d h%d v2 %d,%d,%d h%d f%d\n",callsite,g_th_node_n,
