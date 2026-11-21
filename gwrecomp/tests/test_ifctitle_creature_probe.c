@@ -15918,13 +15918,14 @@ static int g_th_force=-1;
    its y and light at submission time */
 static struct { uint32_t addr; int32_t h; } g_th_node[16];
 static unsigned g_th_node_n;
-static uint32_t g_th_tris,g_th_unmatched;
+static uint32_t g_th_tris,g_th_unmatched,g_th_calls,g_th_reject,g_th_reject_pitch,g_th_reject_w;
 static void th_dump(void) {   /* QA (GW_TH_DUMP=<file>): heights, coverage and the ring, written at exit */
     const char *path=getenv("GW_TH_DUMP"); if(!path || !path[0] || !guest_memory) return;
     FILE *f=fopen(path,"wb"); if(!f) return;
     const uint32_t ring=*(const uint32_t *)(guest_memory+0x002EECA0u);
     const uint32_t w=*(const uint32_t *)(guest_memory+0x00376A78u),h=*(const uint32_t *)(guest_memory+0x00376A7Cu);
     const uint32_t hdr[6]={0x48544752u,w,h,g_th_tris,g_th_unmatched,g_th_node_n};
+    gw_flag_trace("TRACE terrain_ao dump calls=%u rejected=%u (pitch %u vs width %u) rastered=%u%c",g_th_calls,g_th_reject,g_th_reject_pitch,g_th_reject_w,g_th_tris,10);
     fwrite(hdr,4,6,f);
     if((size_t)w*h<=sizeof g_th_have && ring && ring<=GUEST_LIMIT-w*h) {
         fwrite(g_th_ring,2,(size_t)w*h,f); fwrite(g_th_have,1,(size_t)w*h,f); fwrite(guest_memory+ring,1,(size_t)w*h,f); }
@@ -15974,7 +15975,10 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
     const uint32_t ring=*(const uint32_t *)(guest_memory+0x002EECA0u);
     const uint32_t w=*(const uint32_t *)(guest_memory+0x00376A78u),hgt=*(const uint32_t *)(guest_memory+0x00376A7Cu);
     const uint32_t dst=*(uint32_t *)(guest_memory+g_ds_base+0x002DA100u),pitch=*(uint32_t *)(guest_memory+g_ds_base+0x002DA110u);
-    if(!ring || pitch!=w || (size_t)w*hgt>sizeof g_th_ring/sizeof g_th_ring[0]) return;
+    g_th_calls++;
+    if(!ring || pitch!=w || (size_t)w*hgt>sizeof g_th_ring/sizeof g_th_ring[0]) {
+        g_th_reject++; g_th_reject_pitch=pitch; g_th_reject_w=w;
+        return; }
     const int64_t off0=(int64_t)((uint64_t)g_ds_base+dst)-(int64_t)ring;   /* ring index of destination (0,0) */
     const uint32_t p[3]={va,vb,vc}; int32_t x[3],y[3],h[3]; int found=0,sum=0;
     int cand[3][16],nc[3],exact=0;
@@ -19075,6 +19079,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
             *(const uint16_t *)(memory+map_guest+0x1Du)==128u;
         g_interactive_published_snapshot.in_mission=in_ifc_main;
         if(g_cli_play_mode) write_probe_frame(memory,in_ifc_main);
+        {   static uint32_t pubs; if(g_th_force && ++pubs%300u==0u) th_dump(); }
         g_interactive_published_snapshot.fx_ring_valid=0; g_interactive_published_snapshot.th_valid=0;
         if(g_cli_play_mode && (g_ini_water_effects || g_ini_emissive_bloom || g_ini_terrain_ao || g_ini_soft_shadows) && ring && ring<=GUEST_LIMIT-rw*rh &&
            rw*rh<=sizeof g_interactive_published_snapshot.fx_ring && in_ifc_main) {
