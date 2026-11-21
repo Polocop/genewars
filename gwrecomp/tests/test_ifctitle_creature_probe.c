@@ -9299,10 +9299,11 @@ static void fx_row(uint32_t *out,int x0,int x1,int y,const gw_interactive_visual
      passes of radius 1) and the area is redrawn from the clean terrain darkened by that smooth mask (up to 68 %): same shape and
      place as the game's shadow, soft edges, no black dither, no double shadow. */
 static uint8_t *g_dp_idx,*g_dp_fac;       /* per source pixel: palette index to draw, factor (128 = 1.0) */
-static uint16_t *g_dp_ao;                 /* per ring pixel: ao factor (Q7) */
+static uint16_t *g_dp_ao;                 /* per quarter-resolution ring cell: ao factor (Q7) */
 static uint8_t *g_dp_ring_copy;           /* ring content the ao map was made from */
 static uint16_t *g_dp_tmp,*g_dp_tmp2;
 static uint8_t *g_dp_mask;
+static int *g_dp_cand;
 static uint64_t g_dp_generation;
 static int g_dp_valid,g_dp_pitch,g_dp_rows;
 static float g_dp_ao_strength_used=-1.0f;
@@ -9335,90 +9336,116 @@ static void dp_box_v(const uint16_t *in,uint16_t *out,int pitch,int rows,int x0,
         }
     }
 }
+/* ao factor (Q7) of ring pixel (rx,ry), bilinear between the quarter-resolution cells around it */
+static int g_dp_qw,g_dp_qh;
+static inline int dp_ao_at(int rx,int ry) {
+    const int qw=g_dp_qw,qh=g_dp_qh;
+    const int px=rx*64-96,py=ry*64-96;                 /* cell centre at 4c+1.5, in 1/256 cell units */
+    int x0=px>>8,y0=py>>8; const int wx=px&255,wy=py&255;
+    int x1=x0+1,y1=y0+1;
+    x0=(x0%qw+qw)%qw; x1=(x1%qw+qw)%qw; y0=(y0%qh+qh)%qh; y1=(y1%qh+qh)%qh;
+    const int a=g_dp_ao[y0*qw+x0],b=g_dp_ao[y0*qw+x1],c=g_dp_ao[y1*qw+x0],d=g_dp_ao[y1*qw+x1];
+    const int top=a*256+(b-a)*wx,bot=c*256+(d-c)*wx;
+    return (top*256+(bot-top)*wy+32768)>>16;
+}
 static void depth_update(const gw_interactive_visual_snapshot *v,const uint8_t *src,int pitch,int rows,const uint8_t lum[256]) {
     const size_t n=(size_t)pitch*(size_t)rows;
     if(!g_dp_idx) {
-        g_dp_idx=(uint8_t *)malloc(1152u*640u); g_dp_fac=(uint8_t *)malloc(1152u*640u); g_dp_ao=(uint16_t *)malloc(1152u*640u*2u);
+        g_dp_idx=(uint8_t *)malloc(1152u*640u); g_dp_fac=(uint8_t *)malloc(1152u*640u); g_dp_ao=(uint16_t *)malloc(288u*160u*2u);
         g_dp_ring_copy=(uint8_t *)calloc(1152u*640u,1); g_dp_tmp=(uint16_t *)malloc(1152u*640u*2u); g_dp_tmp2=(uint16_t *)malloc(1152u*640u*2u);
-        g_dp_mask=(uint8_t *)malloc(1152u*640u);
-        if(!g_dp_idx||!g_dp_fac||!g_dp_ao||!g_dp_ring_copy||!g_dp_tmp||!g_dp_tmp2||!g_dp_mask) { g_ini_terrain_ao=g_ini_soft_shadows=0; return; }
+        g_dp_mask=(uint8_t *)calloc(1152u*640u,1); g_dp_cand=(int *)malloc(1152u*640u*sizeof(int));
+        if(!g_dp_idx||!g_dp_fac||!g_dp_ao||!g_dp_ring_copy||!g_dp_tmp||!g_dp_tmp2||!g_dp_mask||!g_dp_cand) { g_ini_terrain_ao=g_ini_soft_shadows=0; return; }
     }
-    const int left=128,rw=pitch-left;
-    /* 1. ao map on the ring, remade only when the terrain (or its palette or strength) changed */
+    const int left=128,rw=pitch-left,qw=rw/4,qh=rows/4;
+    /* 1. ao map at quarter resolution (the effect is low-frequency), remade only when the terrain, its palette or the
+       strength changed: 4x4 block luminance (removes the grass texture), radius 1 (about 6 px) against radius 4 twice
+       (about 16 px); shaded flanks, valley floors and crater bottoms are darker than the wide average */
     static uint8_t ao_pal[768]; static int ao_pal_ok;
     const int geom_changed=pitch!=g_dp_pitch || rows!=g_dp_rows;
     if(g_ini_terrain_ao && (geom_changed || !ao_pal_ok || memcmp(ao_pal,v->palette,768) || g_dp_ao_strength_used!=g_ini_terrain_ao_strength ||
                             memcmp(g_dp_ring_copy,v->fx_ring,n))) {
         memcpy(g_dp_ring_copy,v->fx_ring,n); memcpy(ao_pal,v->palette,768); ao_pal_ok=1; g_dp_ao_strength_used=g_ini_terrain_ao_strength;
-        for(int y=0;y<rows;y++) for(int x=left;x<pitch;x++) g_dp_tmp[(size_t)y*pitch+x]=(uint16_t)(lum[v->fx_ring[(size_t)y*pitch+x]]*16u);
-        /* g_dp_ao = the terrain shading without the grass texture (radius 3, twice); g_dp_tmp = the wide average
-           (radius 14, twice): shaded flanks, valley floors and crater bottoms are darker than the wide average */
-        dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,left,rw,3,1); dp_box_v(g_dp_tmp2,g_dp_ao,pitch,rows,left,rw,3,1);
-        dp_box_h(g_dp_ao,g_dp_tmp2,pitch,rows,left,rw,3,1); dp_box_v(g_dp_tmp2,g_dp_ao,pitch,rows,left,rw,3,1);
-        dp_box_h(g_dp_ao,g_dp_tmp2,pitch,rows,left,rw,14,1); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,left,rw,14,1);
-        dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,left,rw,14,1); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,left,rw,14,1);
+        g_dp_qw=qw; g_dp_qh=qh;
+        for(int qy=0;qy<qh;qy++) for(int qx=0;qx<qw;qx++) {
+            unsigned s=0; const uint8_t *p=v->fx_ring+(size_t)(qy*4)*pitch+left+qx*4;
+            for(int j=0;j<4;j++,p+=pitch) s+=lum[p[0]]+lum[p[1]]+lum[p[2]]+lum[p[3]];
+            g_dp_tmp[qy*qw+qx]=(uint16_t)s;                       /* 0..4080 */
+        }
+        dp_box_h(g_dp_tmp,g_dp_tmp2,qw,qh,0,qw,1,1); dp_box_v(g_dp_tmp2,g_dp_ao,qw,qh,0,qw,1,1);        /* g_dp_ao: local shading */
+        dp_box_h(g_dp_ao,g_dp_tmp2,qw,qh,0,qw,4,1); dp_box_v(g_dp_tmp2,g_dp_tmp,qw,qh,0,qw,4,1);
+        dp_box_h(g_dp_tmp,g_dp_tmp2,qw,qh,0,qw,4,1); dp_box_v(g_dp_tmp2,g_dp_tmp,qw,qh,0,qw,4,1);      /* g_dp_tmp: wide average */
         const int smax=(int)(g_ini_terrain_ao_strength*128.0f+0.5f);
-        for(int y=0;y<rows;y++) for(int x=left;x<pitch;x++) {
-            const size_t i=(size_t)y*pitch+x; const uint8_t k=v->fx_ring[i];
+        for(int i=0;i<qw*qh;i++) {
             const int l=g_dp_ao[i],b=g_dp_tmp[i]; int f=128;
-            if(g_fx_kind[k]==FX_NONE && b>16*4) {
+            if(b>16*4) {
                 if(l<b) { int dk=(b-l)*128*4/b; if(dk>128) dk=128; f=128-smax*dk/128; }            /* full at 25 % darker */
                 else { int up=(l-b)*128/(b*4); if(up>8) up=8; f=128+up; }                          /* lit ridge: <= +6 % */
             }
             g_dp_ao[i]=(uint16_t)f;
         }
     }
-    /* 2. per source pixel: index and factor (ground pixels get the ao of their ring pixel) */
-    int sx0=pitch,sx1=-1,sy0=rows,sy1=-1;
-    if(g_ini_soft_shadows) memset(g_dp_mask,0,n);
+    const int ao=g_ini_terrain_ao && g_dp_qw==qw && g_dp_qh==qh;
+    static int rxm[1152];
+    static int qx0m[1152],qx1m[1152],wxm[1152];
+    for(int x=176;x<pitch;x++) {
+        int rx=(x-left)+(v->ring_x-left); rx%=rw; if(rx<0) rx+=rw; rxm[x]=rx;
+        if(ao) { const int px=rx*64-96; int a=px>>8; wxm[x]=px&255; qx0m[x]=(a%qw+qw)%qw; qx1m[x]=((a+1)%qw+qw)%qw; }
+    }
+    /* 2. per source pixel: index and factor; shadow candidates listed */
+    int nc=0;
     for(int y=0;y<rows;y++) {
         int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
-        for(int x=0;x<pitch;x++) {
-            const size_t i=(size_t)y*pitch+x; const uint8_t c=src[i];
-            g_dp_idx[i]=c; g_dp_fac[i]=128;
-            if(x<176) continue;
-            int rx=(x-left)+(v->ring_x-left); rx%=rw; if(rx<0) rx+=rw;
-            const size_t ri=(size_t)ry*pitch+left+rx; const uint8_t g=v->fx_ring[ri];
-            if(c==g) { if(g_ini_terrain_ao) g_dp_fac[i]=(uint8_t)g_dp_ao[ri]; continue; }
-            /* shadow candidate: darker remap of the terrain under it */
-            if(g_ini_soft_shadows && lum[g]>10 && (int)lum[c]*100<=(int)lum[g]*62 && g_fx_kind[g]!=FX_WATER) g_dp_mask[i]=1;
+        const uint8_t *srow=src+(size_t)y*pitch,*rrow=v->fx_ring+(size_t)ry*pitch+left;
+        uint8_t *irow=g_dp_idx+(size_t)y*pitch,*frow=g_dp_fac+(size_t)y*pitch;
+        memcpy(irow,srow,(size_t)pitch); memset(frow,128,(size_t)pitch);
+        const uint16_t *qa=NULL,*qb=NULL; int wy=0;
+        if(ao) { const int py=ry*64-96; int a=py>>8; wy=py&255; qa=g_dp_ao+((a%qh+qh)%qh)*qw; qb=g_dp_ao+(((a+1)%qh+qh)%qh)*qw; }
+        for(int x=176;x<pitch;x++) {
+            const int rx=rxm[x]; const uint8_t g=rrow[rx],c=srow[x];
+            if(c==g) {
+                if(ao && g_fx_kind[g]==FX_NONE) {
+                    const int x0=qx0m[x],x1=qx1m[x],wx=wxm[x];
+                    const int top=qa[x0]*256+(qa[x1]-qa[x0])*wx,bot=qb[x0]*256+(qb[x1]-qb[x0])*wx;
+                    frow[x]=(uint8_t)((top*256+(bot-top)*wy+32768)>>16);
+                }
+                continue;
+            }
+            if(g_ini_soft_shadows && lum[g]>10 && (int)lum[c]*100<=(int)lum[g]*62 && g_fx_kind[g]!=FX_WATER &&
+               y>0 && y<rows-1 && x>176 && x<pitch-1) { const int i=y*pitch+x; g_dp_mask[i]=1; g_dp_cand[nc++]=i; }
         }
     }
-    if(g_ini_soft_shadows) {
-        /* keep candidates that touch only ground or other candidates (never a sprite's own pixels) */
-        for(int y=1;y<rows-1;y++) for(int x=177;x<pitch-1;x++) {
-            const size_t i=(size_t)y*pitch+x; if(!g_dp_mask[i]) continue;
-            int ok=1;
-            for(int dy=-1;dy<=1 && ok;dy++) for(int dx=-1;dx<=1;dx++) {
-                const size_t j=i+(ptrdiff_t)dy*pitch+dx; if(g_dp_mask[j]) continue;
-                const int xx=x+dx,yy=y+dy; int ry=(yy+v->ring_y)%rows; if(ry<0) ry+=rows;
-                int rx=(xx-left)+(v->ring_x-left); rx%=rw; if(rx<0) rx+=rw;
-                if(src[j]!=v->fx_ring[(size_t)ry*pitch+left+rx]) { ok=0; break; }
+    /* 3. soft shadows: keep candidates touching only ground or other candidates, blur, redraw from the terrain */
+    if(nc) {
+        int sx0=pitch,sx1=-1,sy0=rows,sy1=-1;
+        for(int k=0;k<nc;k++) {
+            const int i=g_dp_cand[k],y=i/pitch,x=i%pitch; int ok=1;
+            for(int dy=-1;dy<=1 && ok;dy++) {
+                int ry=(y+dy+v->ring_y)%rows; if(ry<0) ry+=rows;
+                const uint8_t *rrow=v->fx_ring+(size_t)ry*pitch+left;
+                for(int dx=-1;dx<=1;dx++) { const int j=i+dy*pitch+dx; if(g_dp_mask[j]) continue; if(src[j]!=rrow[rxm[x+dx]]) { ok=0; break; } }
             }
-            g_dp_mask[i]=ok?2:0;
+            if(ok) { g_dp_cand[k]=i|0x40000000; if(x<sx0) sx0=x; if(x>sx1) sx1=x; if(y<sy0) sy0=y; if(y>sy1) sy1=y; }
         }
-        for(size_t i=0;i<n;i++) if(g_dp_mask[i]==1) g_dp_mask[i]=0;
-        for(int y=0;y<rows;y++) for(int x=176;x<pitch;x++) if(g_dp_mask[(size_t)y*pitch+x]) {
-            if(x<sx0) sx0=x; if(x>sx1) sx1=x; if(y<sy0) sy0=y; if(y>sy1) sy1=y; }
+        for(int k=0;k<nc;k++) { const int i=g_dp_cand[k]&0x3FFFFFFF; g_dp_mask[i]=(uint8_t)((g_dp_cand[k]&0x40000000)?2:0); }
         if(sx1>=sx0) {
-            const int pad=6; sx0=sx0-pad<176?176:sx0-pad; sx1=sx1+pad>=pitch?pitch-1:sx1+pad; sy0=sy0-pad<0?0:sy0-pad; sy1=sy1+pad>=rows?rows-1:sy1+pad;
-            const int bw=sx1-sx0+1;
-            for(int y=0;y<rows;y++) for(int x=sx0;x<=sx1;x++) g_dp_tmp[(size_t)y*pitch+x]=g_dp_mask[(size_t)y*pitch+x]?255u*16u:0u;
-            dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,sx0,bw,1,0); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,sx0,bw,1,0);
-            dp_box_h(g_dp_tmp,g_dp_tmp2,pitch,rows,sx0,bw,1,0); dp_box_v(g_dp_tmp2,g_dp_tmp,pitch,rows,sx0,bw,1,0);
+            const int pad=4; sx0=sx0-pad<176?176:sx0-pad; sx1=sx1+pad>=pitch?pitch-1:sx1+pad; sy0=sy0-pad<0?0:sy0-pad; sy1=sy1+pad>=rows?rows-1:sy1+pad;
+            const int bw=sx1-sx0+1,bh=sy1-sy0+1; uint16_t *t=g_dp_tmp+(size_t)sy0*pitch,*t2=g_dp_tmp2+(size_t)sy0*pitch;
+            for(int y=sy0;y<=sy1;y++) for(int x=sx0;x<=sx1;x++) g_dp_tmp[(size_t)y*pitch+x]=g_dp_mask[(size_t)y*pitch+x]==2?255u*16u:0u;
+            dp_box_h(t,t2,pitch,bh,sx0,bw,1,0); dp_box_v(t2,t,pitch,bh,sx0,bw,1,0);
+            dp_box_h(t,t2,pitch,bh,sx0,bw,1,0); dp_box_v(t2,t,pitch,bh,sx0,bw,1,0);
             for(int y=sy0;y<=sy1;y++) {
                 int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
+                const uint8_t *rrow=v->fx_ring+(size_t)ry*pitch+left;
                 for(int x=sx0;x<=sx1;x++) {
-                    const size_t i=(size_t)y*pitch+x;
-                    int rx=(x-left)+(v->ring_x-left); rx%=rw; if(rx<0) rx+=rw;
-                    const size_t ri=(size_t)ry*pitch+left+rx; const uint8_t g=v->fx_ring[ri];
-                    if(!g_dp_mask[i] && src[i]!=g) continue;                       /* a sprite pixel: untouched */
-                    const int m=g_dp_tmp[i]/16;                                      /* 0..255 smooth shadow */
-                    const int base=g_ini_terrain_ao?(int)g_dp_ao[ri]:128;
+                    const size_t i=(size_t)y*pitch+x; const int rx=rxm[x]; const uint8_t g=rrow[rx];
+                    if(g_dp_mask[i]!=2 && src[i]!=g) continue;                    /* a sprite pixel: untouched */
+                    const int m=g_dp_tmp[i]/16;                                     /* 0..255 smooth shadow */
+                    const int base=(ao && g_fx_kind[g]==FX_NONE)?dp_ao_at(rx,ry):128;
                     g_dp_idx[i]=g; g_dp_fac[i]=(uint8_t)(base*(255*100-m*68)/(255*100));   /* up to 68 % darker */
                 }
             }
         }
+        for(int k=0;k<nc;k++) g_dp_mask[g_dp_cand[k]&0x3FFFFFFF]=0;
     }
     g_dp_pitch=pitch; g_dp_rows=rows; g_dp_generation=v->generation; g_dp_valid=1;
     {   static int traced; if(!traced) { traced=1; gw_flag_trace("TRACE depth on terrain_ao=%d strength=%.2f soft_shadows=%d%c",
