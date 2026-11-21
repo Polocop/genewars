@@ -15947,7 +15947,7 @@ static int th_lookup(int32_t y,int32_t light,int32_t *h) {
     }
     return 0;
 }
-static void th_triangle(uint32_t va,uint32_t vb,uint32_t vc) {
+static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
     const uint32_t ring=*(const uint32_t *)(guest_memory+0x002EECA0u);
     const uint32_t w=*(const uint32_t *)(guest_memory+0x00376A78u),hgt=*(const uint32_t *)(guest_memory+0x00376A7Cu);
     const uint32_t dst=*(uint32_t *)(guest_memory+g_ds_base+0x002DA100u),pitch=*(uint32_t *)(guest_memory+g_ds_base+0x002DA110u);
@@ -15959,6 +15959,11 @@ static void th_triangle(uint32_t va,uint32_t vb,uint32_t vc) {
         x[k]=*(int32_t *)(guest_memory+a); y[k]=*(int32_t *)(guest_memory+a+4u);
         if(th_lookup(y[k],*(int32_t *)(guest_memory+a+16u),&h[k])) { found|=1<<k; sum+=h[k]; } }
     g_th_tris++;
+    {   static FILE *lf; static int li=-1; if(li<0) { const char *e=getenv("GW_TH_LOG"); li=e&&e[0]; if(li) lf=fopen(e,"w"); }
+        if(lf) fprintf(lf,"%05x n%u v0 %d,%d,%d h%d v1 %d,%d,%d h%d v2 %d,%d,%d h%d f%d
+",callsite,g_th_node_n,
+            x[0],y[0],*(int32_t *)(guest_memory+g_ds_base+p[0]+16u),h[0],x[1],y[1],*(int32_t *)(guest_memory+g_ds_base+p[1]+16u),h[1],
+            x[2],y[2],*(int32_t *)(guest_memory+g_ds_base+p[2]+16u),h[2],found); }
     if(g_th_force && g_th_tris%500u==0u) th_dump();
     if(found!=7) { g_th_unmatched++; if(!found) return; const int n=(found&1)+((found>>1)&1)+((found>>2)&1); for(int k=0;k<3;k++) if(!(found>>k&1)) h[k]=sum/n; }
     /* heights in game units >> 6 (the projection's step). Coverage: pixel centres inside the triangle (edge
@@ -16043,7 +16048,7 @@ void gw_hybrid_capture_primitive(uint32_t callsite,uint32_t va,uint32_t vb,
 	uint8_t *mem=guest_memory;
 	uint32_t limit=GUEST_LIMIT;
 	if(g_tprobe_state!=2 && g_tprobe_state!=3 && g_cli_play_mode && mem) terrain_probe_prim(callsite,va,vb,vc);
-	if(mem && th_capture_on()) th_triangle(va,vb,vc);
+	if(mem && th_capture_on()) th_triangle(callsite,va,vb,vc);
 	if(!g_hybrid_primitive_capture_enabled || !mem) return;
     g_hybrid_primitive_total++;
     if(g_hybrid_primitive_count>=4096u) return;
