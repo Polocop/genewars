@@ -15939,7 +15939,24 @@ void gw_terrain_vertex_height(unsigned int y,unsigned int cell,unsigned int node
     for(unsigned k=0;k<n;k++) if(g_th_node[k].addr==na) { g_th_node[k].h=h; return; }
     g_th_node[g_th_node_n&15u].addr=na; g_th_node[g_th_node_n&15u].h=h; g_th_node_n++;
 }
-/* node slots holding exactly (y, light); two rows can project to the same y with the same (saturated) light */
+/* the three vertex records (flat address) and the height each took from its node at the y copy */
+static struct { uint32_t addr; int32_t h; } g_th_rec[8];
+static unsigned g_th_rec_n;
+void gw_terrain_record_node(unsigned int rec,unsigned int node) {
+    if(!guest_memory || !th_capture_on()) return;
+    const unsigned n=g_th_node_n<16u?g_th_node_n:16u; int32_t h=0; int ok=0;
+    for(unsigned k=0;k<n;k++) if(g_th_node[k].addr==node) { h=g_th_node[k].h; ok=1; break; }
+    const unsigned rn=g_th_rec_n<8u?g_th_rec_n:8u;
+    for(unsigned k=0;k<rn;k++) if(g_th_rec[k].addr==rec) { g_th_rec[k].h=ok?h:INT32_MIN; return; }
+    g_th_rec[g_th_rec_n&7u].addr=rec; g_th_rec[g_th_rec_n&7u].h=ok?h:INT32_MIN; g_th_rec_n++;
+}
+static int th_record_height(uint32_t rec,int32_t *h) {
+    const unsigned rn=g_th_rec_n<8u?g_th_rec_n:8u;
+    for(unsigned k=0;k<rn;k++) if(g_th_rec[k].addr==rec && g_th_rec[k].h!=INT32_MIN) { *h=g_th_rec[k].h; return 1; }
+    return 0;
+}
+/* fallback, by content: node slots holding exactly (y, light); two rows can project to the same y with the same
+   (saturated) light */
 static int th_candidates(int32_t y,int32_t light,int out[16]) {
     const unsigned n=g_th_node_n<16u?g_th_node_n:16u; int c=0;
     for(unsigned k=0;k<n;k++) {
@@ -15955,7 +15972,8 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
     if(!ring || pitch!=w || (size_t)w*hgt>sizeof g_th_ring/sizeof g_th_ring[0]) return;
     const int64_t off0=(int64_t)((uint64_t)g_ds_base+dst)-(int64_t)ring;   /* ring index of destination (0,0) */
     const uint32_t p[3]={va,vb,vc}; int32_t x[3],y[3],h[3]; int found=0,sum=0;
-    int cand[3][16],nc[3];
+    int cand[3][16],nc[3],exact=0;
+    for(int k=0;k<3;k++) if(th_record_height((uint32_t)((uint64_t)g_ds_base+p[k]),&h[k])) exact|=1<<k;
     for(int k=0;k<3;k++) {
         const uint64_t a=(uint64_t)g_ds_base+p[k]; if(a>GUEST_LIMIT-20u) return;
         x[k]=*(int32_t *)(guest_memory+a); y[k]=*(int32_t *)(guest_memory+a+4u);
@@ -15970,7 +15988,9 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
             if(nref) { const int64_t m=ref/nref; int64_t best=INT64_MAX;
                 for(int j=0;j<nc[k];j++) { const int64_t d=g_th_node[cand[k][j]].h-m; const int64_t ad=d<0?-d:d; if(ad<best) { best=ad; pick[k]=cand[k][j]; } } }
         }
-        for(int k=0;k<3;k++) if(pick[k]>=0) { h[k]=g_th_node[pick[k]].h; found|=1<<k; sum+=h[k]; }
+        for(int k=0;k<3;k++) {
+            if(exact>>k&1) { found|=1<<k; sum+=h[k]; }
+            else if(pick[k]>=0) { h[k]=g_th_node[pick[k]].h; found|=1<<k; sum+=h[k]; } }
     }
     g_th_tris++;
     {   static FILE *lf; static int li=-1; if(li<0) { const char *e=getenv("GW_TH_LOG"); li=e&&e[0]; if(li) lf=fopen(e,"w"); }
