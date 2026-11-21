@@ -9853,12 +9853,12 @@ static int bloom_ensure_init(int logical_w) {
             "    float a=float(i)*0.7853982+0.3926991;\n"
             "    vec2 d=vec2(cos(a),sin(a));\n"
             "    float h1=texture2D(u_idx_tex,v_uv+d*4.0*u_texel).b*255.0;\n"
-            "    float h2=texture2D(u_idx_tex,v_uv+d*11.0*u_texel).b*255.0;\n"
-            "    float s1=max(h1-hc,0.0)/4.0, s2=max(h2-hc,0.0)/11.0;\n"
+            "    float h2=texture2D(u_idx_tex,v_uv+d*14.0*u_texel).b*255.0;\n"
+            "    float s1=max(h1-hc,0.0)/4.0, s2=max(h2-hc,0.0)/14.0;\n"
             "    occ+=max(s1,s2*0.85);\n"
             "  }\n"
             "  occ=occ/8.0;\n"
-            "  float ao=1.0-u_strength*smoothstep(0.0,0.45,occ);\n"
+            "  float ao=1.0-u_strength*smoothstep(0.0,0.30,occ);\n"
             "  gl_FragColor=vec4(ao,ao,ao,1.0);\n"
             "}\n";
         g_bloom.prog_extract=bloom_link_program(vs_quad,fs_extract);
