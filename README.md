@@ -71,7 +71,8 @@ GitHub issues are kept in [gwrecomp/docs/issues-archive.md](gwrecomp/docs/issues
 - **Terrain ambient occlusion and soft shadows:** crater floors, valleys, creases and the foot of hills darken from
   the real terrain heights, captured while the game rasterizes its terrain mesh (GPU, OpenGL; strength
   `terrain_ao_strength`, 0.40), and the game's hard shadows of ships, flyers and buildings are redrawn from the
-  clean terrain with soft edges (same shape and place, no black dither). Missions only, presented frame only;
+  clean terrain with soft edges (exactly the pixels the game's shadow routine wrote and no sprite covered; same
+  shape and place, no black dither). Missions only, presented frame only;
   sprites, water, GOOP and the HUD are never darkened. On/off in the GRAPHICS tab.
 - **Complete audio:**
   - Smacker video sound,
