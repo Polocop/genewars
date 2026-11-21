@@ -15987,7 +15987,6 @@ static void th_triangle(uint32_t va,uint32_t vb,uint32_t vc) {
         if(++n==20000u) { gw_flag_trace("TRACE terrain_ao height raster avg=%.2f us per triangle (20000 triangles)%c",acc/n,10); }
     }
 }
-}
 /* QA probe (opt-in, read-only): GW_TERRAIN_PROBE=<turn>. From that game turn on, records every terrain triangle
    submitted to 0xE19C0 (its three 20-byte vertex records and the raster globals) and the projection nodes, for one
    turn, then writes them with the map ring to work\terrain_probe.bin. Never writes guest memory. Local analysis. */
