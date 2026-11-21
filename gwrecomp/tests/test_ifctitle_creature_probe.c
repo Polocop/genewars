@@ -9466,7 +9466,6 @@ static void depth_update(const gw_interactive_visual_snapshot *v,const uint8_t *
     const int nc=dp_rows_parallel();
     /* 3. soft shadows: keep candidates touching only ground or other candidates, blur, redraw from the terrain */
     if(nc) {
-        int sx0=pitch,sx1=-1,sy0=rows,sy1=-1;
         for(int k=0;k<nc;k++) {
             const int i=g_dp_cand[k],y=i/pitch,x=i%pitch; int ok=1;
             for(int dy=-1;dy<=1 && ok;dy++) {
@@ -9474,22 +9473,34 @@ static void depth_update(const gw_interactive_visual_snapshot *v,const uint8_t *
                 const uint8_t *rrow=v->fx_ring+(size_t)ry*pitch+left;
                 for(int dx=-1;dx<=1;dx++) { const int j=i+dy*pitch+dx; if(g_dp_mask[j]) continue; if(src[j]!=rrow[rxm[x+dx]]) { ok=0; break; } }
             }
-            if(ok) { g_dp_cand[k]=i|0x40000000; if(x<sx0) sx0=x; if(x>sx1) sx1=x; if(y<sy0) sy0=y; if(y>sy1) sy1=y; }
+            if(ok) g_dp_cand[k]=i|0x40000000;
         }
-        for(int k=0;k<nc;k++) { const int i=g_dp_cand[k]&0x3FFFFFFF; g_dp_mask[i]=(uint8_t)((g_dp_cand[k]&0x40000000)?2:0); }
-        if(sx1>=sx0) {
-            const int pad=4; sx0=sx0-pad<176?176:sx0-pad; sx1=sx1+pad>=pitch?pitch-1:sx1+pad; sy0=sy0-pad<0?0:sy0-pad; sy1=sy1+pad>=rows?rows-1:sy1+pad;
+        /* 32x32 tiles holding a confirmed shadow pixel: each tile's core is blurred with a 4-pixel apron (the blur
+           reaches 2 px) and redrawn, so only the screen areas with a shadow cost anything */
+        enum { DT=32 }; static uint8_t tile[(1152/DT+1)*(640/DT+1)]; const int tw=(pitch+DT-1)/DT,th=(rows+DT-1)/DT;
+        memset(tile,0,(size_t)(tw*th));
+        for(int k=0;k<nc;k++) {
+            const int i=g_dp_cand[k]&0x3FFFFFFF,on=(g_dp_cand[k]&0x40000000)!=0; g_dp_mask[i]=(uint8_t)(on?2:0);
+            if(on) tile[(i/pitch)/DT*tw+(i%pitch)/DT]=1;
+        }
+        for(int ty=0;ty<th;ty++) for(int tx=0;tx<tw;tx++) {
+            if(!tile[ty*tw+tx]) continue;
+            int cx0=tx*DT,cx1=cx0+DT-1,cy0=ty*DT,cy1=cy0+DT-1;
+            if(cx0<176) cx0=176; if(cx1>=pitch) cx1=pitch-1; if(cy1>=rows) cy1=rows-1;
+            if(cx0>cx1) continue;
+            const int sx0=cx0-4<176?176:cx0-4,sx1=cx1+4>=pitch?pitch-1:cx1+4,sy0=cy0-4<0?0:cy0-4,sy1=cy1+4>=rows?rows-1:cy1+4;
             const int bw=sx1-sx0+1,bh=sy1-sy0+1; uint16_t *t=g_dp_tmp+(size_t)sy0*pitch,*t2=g_dp_tmp2+(size_t)sy0*pitch;
             for(int y=sy0;y<=sy1;y++) for(int x=sx0;x<=sx1;x++) g_dp_tmp[(size_t)y*pitch+x]=g_dp_mask[(size_t)y*pitch+x]==2?255u*16u:0u;
             dp_box_h(t,t2,pitch,bh,sx0,bw,1,0); dp_box_v(t2,t,pitch,bh,sx0,bw,1,0);
             dp_box_h(t,t2,pitch,bh,sx0,bw,1,0); dp_box_v(t2,t,pitch,bh,sx0,bw,1,0);
-            for(int y=sy0;y<=sy1;y++) {
+            for(int y=cy0;y<=cy1;y++) {
                 int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
                 const uint8_t *rrow=v->fx_ring+(size_t)ry*pitch+left;
-                for(int x=sx0;x<=sx1;x++) {
-                    const size_t i=(size_t)y*pitch+x; const int rx=rxm[x]; const uint8_t g=rrow[rx];
+                for(int x=cx0;x<=cx1;x++) {
+                    const size_t i=(size_t)y*pitch+x; const int m=g_dp_tmp[i]/16;  /* 0..255 smooth shadow */
+                    if(!m) continue;                                                 /* no shadow near: as before */
+                    const int rx=rxm[x]; const uint8_t g=rrow[rx];
                     if(g_dp_mask[i]!=2 && src[i]!=g) continue;                    /* a sprite pixel: untouched */
-                    const int m=g_dp_tmp[i]/16;                                     /* 0..255 smooth shadow */
                     const int base=(ao && g_fx_kind[g]==FX_NONE)?dp_ao_at(rx,ry):128;
                     g_dp_idx[i]=g; g_dp_fac[i]=(uint8_t)(base*(255*100-m*68)/(255*100));   /* up to 68 % darker */
                 }
