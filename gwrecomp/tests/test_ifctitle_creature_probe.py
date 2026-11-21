@@ -4679,16 +4679,19 @@ def main()->None:
         lifted_text=lifted_text.replace(marker,f"gw_terrain_record_node((unsigned int)(SS_BASE + (esp + 0x{off-4:02X})),(unsigned int)(DS_BASE + ({node}))); {marker}",1)
     # FUN_0007BC40 redraws a single map cell: its four corners are projected by FUN_00065630 from world coordinates
     # on the cell grid (eax = vertex record, bx = world x, cx = world y), then two triangles go to E19C0
+    def before_call_line(text,comment,code):
+        if text.count(comment)!=1:
+            raise SystemExit(f"terrain height capture expected one call line {comment}")
+        i=text.index(comment); ls=text.rfind("\n",0,i)+1
+        line=text[ls:i]
+        indent=line[:len(line)-len(line.lstrip(" "))]
+        return text[:ls]+indent+code+"\n"+text[ls:]
     for site in (0x7BC96,0x7BCB6,0x7BCD4,0x7BD2F):
-        marker=f"GW_RECOMP_CALL_AT(0x{site:08X}u,0x65630u,"
-        if lifted_text.count(marker)!=1:
-            raise SystemExit(f"terrain height capture expected one corner projection at 0x{site:X}")
-        lifted_text=lifted_text.replace(marker,f"gw_terrain_record_world((unsigned int)(DS_BASE + eax),ebx,ecx); {marker}",1)
+        lifted_text=before_call_line(lifted_text,f"/* 0x{site:08X}: call 0x65630 */",
+                                     "gw_terrain_record_world((unsigned int)(DS_BASE + eax),ebx,ecx);")
     for site in (0x7BCE3,0x7BD3E):
-        marker=f"GW_RECOMP_CALL_AT(0x{site:08X}u,0xe19c0u,"
-        if lifted_text.count(marker)!=1:
-            raise SystemExit(f"terrain height capture expected one cell triangle submission at 0x{site:X}")
-        lifted_text=lifted_text.replace(marker,f"gw_hybrid_capture_primitive(0x{site:08X}u,eax,ebx,edx,esp); {marker}",1)
+        lifted_text=before_call_line(lifted_text,f"/* 0x{site:08X}: call 0xe19c0 */",
+                                     f"gw_hybrid_capture_primitive(0x{site:08X}u,eax,ebx,edx,esp);")
     lifted_text=("void gw_terrain_vertex_height(unsigned int,unsigned int,unsigned int);\n"
                  "void gw_terrain_record_node(unsigned int,unsigned int);\n"
                  "void gw_terrain_record_world(unsigned int,unsigned int,unsigned int);\n"+lifted_text)
