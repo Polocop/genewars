@@ -9296,7 +9296,8 @@ static void fx_row(uint32_t *out,int x0,int x1,int y,const gw_interactive_visual
      heights captured while the mesh is rasterized (g_th_ring).
    - soft_shadows: the game draws shadows (DrawMyShadowSprite/Frame: Ethereal ships, flyers, buildings) as terrain
      remapped darker, partly to black, with hard edges. A map pixel is taken as shadow when it differs from the ring,
-     is at most 62 % as bright as the terrain under it, and touches only ground or other shadow pixels (so the dark
+     [exact since v1.1: a pixel is shadow when the shadow routine's store (0x8E4A1) wrote it and no sprite wrote it
+     afterwards, see g_spr_mask; the brightness/neighbour rules below are the earlier heuristic] (so the dark
      outline of a sprite, which touches the sprite's own pixels, is never taken). The shadow mask is blurred (two box
      passes of radius 1) and the area is redrawn from the clean terrain darkened by that smooth mask (up to 68 %): same shape and
      place as the game's shadow, soft edges, no black dither, no double shadow. */
@@ -9375,7 +9376,7 @@ static void dp_rows(int y0,int y1,int *cand,int *count) {
                 }
                 continue;
             }
-            if(shadows && !(v->spr_valid && v->spr_mask[(size_t)y*pitch+x]) && lum[g]>10 && (int)lum[c]*100<=(int)lum[g]*62 && g_fx_kind[g]!=FX_WATER &&
+            if(shadows && v->spr_valid && v->spr_mask[(size_t)y*pitch+x]==2u && lum[c]<lum[g] && g_fx_kind[g]!=FX_WATER &&
                y>0 && y<rows-1 && x>176 && x<pitch-1) { const int i=y*pitch+x; g_dp_mask[i]=1; cand[nc++]=i; }
         }
     }
@@ -9440,17 +9441,9 @@ static void depth_update(const gw_interactive_visual_snapshot *v,const uint8_t *
     /* 2. per source pixel: index and factor; shadow candidates listed (rows split over the worker threads) */
     g_dpj.v=v; g_dpj.src=src; g_dpj.lum=lum; g_dpj.pitch=pitch; g_dpj.rows=rows; g_dpj.qw=qw; g_dpj.qh=qh; g_dpj.ao=ao;
     const int nc=dp_rows_parallel();
-    /* 3. soft shadows: keep candidates touching only ground or other candidates, blur, redraw from the terrain */
+    /* 3. soft shadows: every candidate is a pixel the shadow routine wrote (exact mask), blur, redraw from the terrain */
     if(nc) {
-        for(int k=0;k<nc;k++) {
-            const int i=g_dp_cand[k],y=i/pitch,x=i%pitch; int ok=1;
-            for(int dy=-1;dy<=1 && ok;dy++) {
-                int ry=(y+dy+v->ring_y)%rows; if(ry<0) ry+=rows;
-                const uint8_t *rrow=v->fx_ring+(size_t)ry*pitch+left;
-                for(int dx=-1;dx<=1;dx++) { const int j=i+dy*pitch+dx; if(g_dp_mask[j]) continue; if(src[j]!=rrow[rxm[x+dx]]) { ok=0; break; } }
-            }
-            if(ok) g_dp_cand[k]=i|0x40000000;
-        }
+        for(int k=0;k<nc;k++) g_dp_cand[k]|=0x40000000;
         /* 32x32 tiles holding a confirmed shadow pixel: each tile's core is blurred with a 4-pixel apron (the blur
            reaches 2 px) and redrawn, so only the screen areas with a shadow cost anything */
         enum { DT=32 }; static uint8_t tile[(1152/DT+1)*(640/DT+1)]; const int tw=(pitch+DT-1)/DT,th=(rows+DT-1)/DT;
@@ -18973,9 +18966,11 @@ static unsigned clean_horizon_pixels(uint8_t *buf,uint32_t pitch,uint32_t x0,uin
    frame (lbDisplay.WScreen) during mission frames 30..90 (the Ethereal ship lands) and 600..660 (after), and writes
    both lists to gw_flags.log, to find which routine draws the shadows. Never changes a write. */
 static uint32_t g_wp_va[4096],g_wp_n[2][4096],g_wp_used,g_wp_lo,g_wp_hi; static int g_wp_phase=-1;
-/* soft_shadows: pixels the sprite routines wrote into the frame during this game frame. The game's shadows and the
-   terrain copy are not instrumented writes, so they never mark it; units, buildings, the Ethereal ship and its beam
-   always do, so a soft shadow can never cover a sprite pixel. Host memory only. */
+/* soft_shadows: what the game wrote into the frame during this game frame, per pixel. 2 = shadow: written by the
+   shadow routine's store at 0x8E4A1, which remaps the pixel already there through the shade table (link 0x18CA54);
+   1 = sprite: any other instrumented write (units, buildings, the Ethereal ship, its beam). A sprite pixel stays 1
+   even if a shadow is drawn over it later, and a sprite drawn over a shadow turns it to 1, so the soft shadow is
+   applied exactly where the game drew a shadow on the ground and never on a sprite. Host memory only. */
 static uint8_t g_spr_mask[1152u*640u];
 static uint32_t g_spr_lo,g_spr_hi,g_spr_writes;
 static int g_spr_on;
@@ -18983,7 +18978,10 @@ static void write_probe_observer(uint32_t va,recomp_segment_id seg,uint16_t sel,
     (void)seg; (void)sel; (void)base; (void)user;
     if(g_spr_on && lin>=g_spr_lo && lin<g_spr_hi) {
         uint32_t n=width?width:1u; if(lin+n>g_spr_hi) n=g_spr_hi-lin;
-        memset(g_spr_mask+(lin-g_spr_lo),1,n); g_spr_writes++;
+        uint8_t *m=g_spr_mask+(lin-g_spr_lo);
+        if(va==0x0008E4A1u) { for(uint32_t i=0;i<n;i++) if(m[i]!=1u) m[i]=2u; }   /* shadow remap of the pixel below */
+        else memset(m,1,n);                                                       /* a sprite pixel, on top */
+        g_spr_writes++;
     }
     if(g_wp_phase<0 || lin<g_wp_lo || lin>=g_wp_hi) return;
     uint32_t h=(va*2654435761u)>>20, k=0;
