@@ -247,12 +247,44 @@ if ($Test) {
     $psi.EnvironmentVariables.Clear()
     foreach ($k in $keep) { $v = [Environment]::GetEnvironmentVariable($k); if ($v) { $psi.EnvironmentVariables[$k] = $v } }
     $psi.EnvironmentVariables['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
+    if (-not ('GwPkgWin' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System; using System.Text; using System.Runtime.InteropServices;
+public static class GwPkgWin {
+    public delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder sb, int n);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+    public static IntPtr FindTitled(uint targetPid, out string title) {
+        IntPtr found = IntPtr.Zero; string foundTitle = "";
+        EnumWindows((h, l) => {
+            uint pid; GetWindowThreadProcessId(h, out pid);
+            if (pid == targetPid && IsWindowVisible(h)) {
+                var sb = new StringBuilder(256);
+                if (GetWindowText(h, sb, sb.Capacity) > 0) { found = h; foundTitle = sb.ToString(); return false; }
+            }
+            return true;
+        }, IntPtr.Zero);
+        title = foundTitle; return found;
+    }
+}
+'@
+    }
     $p = [Diagnostics.Process]::Start($psi)
-    $sw = [Diagnostics.Stopwatch]::StartNew(); $title = ''
-    while ($sw.Elapsed.TotalSeconds -lt 20 -and -not $p.HasExited) { Start-Sleep -Milliseconds 500; $p.Refresh(); if ($p.MainWindowHandle -ne 0) { $title = $p.MainWindowTitle; break } }
+    $sw = [Diagnostics.Stopwatch]::StartNew(); $title = ''; $hwnd = [IntPtr]::Zero
+    while ($sw.Elapsed.TotalSeconds -lt 20 -and -not $p.HasExited) {
+        Start-Sleep -Milliseconds 500; $p.Refresh()
+        $t = ''; $h = [GwPkgWin]::FindTitled([uint32]$p.Id, [ref]$t)
+        if ($h -ne [IntPtr]::Zero -and $t) { $hwnd = $h; $title = $t; break }
+    }
     if ($title) { Start-Sleep 3; $p.Refresh() }
     $alive = -not $p.HasExited
-    if ($alive) { [void]$p.CloseMainWindow(); if (-not $p.WaitForExit(15000)) { $p.Kill(); [void]$p.WaitForExit(5000) } }
+    if ($alive) {
+        if ($hwnd -ne [IntPtr]::Zero) { [void][GwPkgWin]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) } else { [void]$p.CloseMainWindow() }
+        if (-not $p.WaitForExit(15000)) { $p.Kill(); [void]$p.WaitForExit(5000) }
+    }
     # leave the folder as packaged: drop what the test run created (logs, evidence\) and restore gwrecomp.ini
     Get-ChildItem -LiteralPath $out -Recurse -Force | Sort-Object { $_.FullName.Length } -Descending |
         ? { -not $before[$_.FullName] -and $_.FullName.StartsWith($out + '\') } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
