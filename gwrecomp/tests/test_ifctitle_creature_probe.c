@@ -15961,12 +15961,14 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
         x[k]=*(int32_t *)(guest_memory+a); y[k]=*(int32_t *)(guest_memory+a+4u);
         nc[k]=th_candidates(y[k],*(int32_t *)(guest_memory+a+16u),cand[k]);
     }
-    /* a triangle uses three different nodes: unique matches first, then each tie takes a node no other vertex took */
-    {   int used[16]={0},pick[3]={-1,-1,-1};
-        for(int k=0;k<3;k++) if(nc[k]==1) { pick[k]=cand[k][0]; used[pick[k]]=1; }
-        for(int pass=0;pass<2;pass++) for(int k=0;k<3;k++) if(pick[k]<0 && nc[k]>1) {
-            for(int j=0;j<nc[k];j++) if(!used[cand[k][j]]) { pick[k]=cand[k][j]; used[pick[k]]=1; break; }
-            if(pick[k]<0 && pass==1) pick[k]=cand[k][0];
+    /* ties (two rows projecting to the same y with the same light, one row step apart): the terrain is continuous, so
+       the right node is the one whose height is closest to the triangle's unambiguous vertices */
+    {   int pick[3]={-1,-1,-1}; int64_t ref=0; int nref=0;
+        for(int k=0;k<3;k++) if(nc[k]==1) { pick[k]=cand[k][0]; ref+=g_th_node[pick[k]].h; nref++; }
+        for(int k=0;k<3;k++) if(pick[k]<0 && nc[k]>1) {
+            pick[k]=cand[k][0];
+            if(nref) { const int64_t m=ref/nref; int64_t best=INT64_MAX;
+                for(int j=0;j<nc[k];j++) { const int64_t d=g_th_node[cand[k][j]].h-m; const int64_t ad=d<0?-d:d; if(ad<best) { best=ad; pick[k]=cand[k][j]; } } }
         }
         for(int k=0;k<3;k++) if(pick[k]>=0) { h[k]=g_th_node[pick[k]].h; found|=1<<k; sum+=h[k]; }
     }
