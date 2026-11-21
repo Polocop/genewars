@@ -9443,7 +9443,14 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
     if(depth && (!g_dp_valid || v->generation!=g_dp_generation)) {
         uint8_t lum[256];
         for(int k=0;k<256;k++) lum[k]=(uint8_t)(((int)v->palette[k*3]*77+(int)v->palette[k*3+1]*150+(int)v->palette[k*3+2]*29)*255/(63*256));
+        const uint64_t t0=SDL_GetPerformanceCounter();
         depth_update(v,src,pitch,rows,lum);
+        {   /* cost, written once after 300 game frames */
+            static double acc,peak; static int cnt;
+            const double ms=(double)(SDL_GetPerformanceCounter()-t0)*1000.0/(double)SDL_GetPerformanceFrequency();
+            acc+=ms; if(ms>peak) peak=ms;
+            if(++cnt==300) gw_flag_trace("TRACE depth cost avg=%.2f ms peak=%.2f ms per game frame (%dx%d)%c",acc/cnt,peak,pitch,rows,10);
+        }
     }
     const int dp=depth && g_dp_valid && g_dp_pitch==pitch && g_dp_rows==rows;
     if(v->generation!=g_fx_last_generation) {
