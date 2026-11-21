@@ -68,6 +68,10 @@ GitHub issues are kept in [gwrecomp/docs/issues-archive.md](gwrecomp/docs/issues
 - **Emissive bloom:** a soft GPU glow (Dual Kawase, OpenGL) on energy beams, explosions, Gene Pod lights and GOOP
   glints, in missions only; the left HUD and plain terrain never glow, and the game's own frames are unchanged. On/off
   in the launcher's GRAPHICS tab; strength `bloom_intensity` in `gwrecomp.ini`.
+- **Terrain relief and soft shadows:** valleys, creases and shaded slopes get a little deeper shading, taken from the
+  terrain's own shading (up to `terrain_ao_strength`, 22 %), and the game's hard shadows of ships, flyers and buildings
+  are redrawn from the clean terrain with soft edges (same shape and place, no black dither). Missions only, presented
+  frame only; sprites, water, GOOP and the HUD are never darkened. On/off in the GRAPHICS tab.
 - **Complete audio:**
   - Smacker video sound,
   - the original Miles sound effects through a virtual SB16,
@@ -115,6 +119,8 @@ them.
 | `filter` | `sharp`, `epx` or `crt` (also F7 in game) |
 | `water_effects` | animated water and GOOP (`1`/`0`) |
 | `emissive_bloom`, `bloom_intensity` | glow on energy, explosions and GOOP (`1`/`0`); strength `0.0`–`1.5` (default `0.65`) |
+| `terrain_ao`, `terrain_ao_strength` | relief from the terrain shading (`1`/`0`); darkest step `0.0`–`0.5` (default `0.22`) |
+| `soft_shadows` | the game's shadows with soft edges (`1`/`0`) |
 | `enhanced_audio` | calibrated panning, pitch variation, music ducking (`1`/`0`) |
 | `language` | launcher language: `en`, `es` or `auto` (Windows display language) |
 | `cd_cue` | path to your own Gene Wars CD image `.cue`, for the CD music (launcher: PLAY → **CD IMAGE**) |
@@ -154,7 +160,7 @@ con el SHA-256 que se publica en cada versión.
 compartas.
 
 **Opciones:** todo lo que cambias en el lanzador se guarda en `gwrecomp.ini` (modo de vista, resolución, pantalla
-completa, 60/120 FPS, filtro, `water_effects`, `emissive_bloom` (bloom emisivo; intensidad con `bloom_intensity`), `enhanced_audio`, `language` = `es` / `en` / `auto`). Para la música del CD, en la pestaña
+completa, 60/120 FPS, filtro, `water_effects`, `emissive_bloom` (bloom emisivo; intensidad con `bloom_intensity`), `terrain_ao` (relieve del terreno; `terrain_ao_strength`), `soft_shadows` (sombras suaves), `enhanced_audio`, `language` = `es` / `en` / `auto`). Para la música del CD, en la pestaña
 JUGAR pulsa **IMAGEN DEL CD** y elige el `.cue` de tu propia imagen del CD (se guarda como `cd_cue`). `gwrecomp.ini.example` explica cada clave.
 
 ## Legal
