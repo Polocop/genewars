@@ -9834,7 +9834,7 @@ static int bloom_ensure_init(int logical_w) {
             "  vec3 out_lin=vec3(1.0)-(vec3(1.0)-base_lin)*exp(-b_soft);\n"
             "  gl_FragColor=vec4(pow(clamp(out_lin,0.0,1.0),vec3(1.0/2.2)),1.0);\n"
             "}\n";
-        /* terrain_ao: horizon/cavity occlusion from the captured height (B, game height >> 6) of terrain pixels
+        /* terrain_ao: horizon/cavity occlusion from the captured height (12 bits in B and the high nibble of G, game height >> 3) of terrain pixels
            (A = 1: ground, not water/GOOP/HUD). 8 directions x 2 radii in source texels; a neighbour higher than the
            centre occludes in proportion to its rise over the distance (the horizon slope), so crater floors, creases,
            depressions and the foot of hills darken whatever the light direction; flat or convex ground stays 1. */
@@ -9844,16 +9844,17 @@ static int bloom_ensure_init(int logical_w) {
             "uniform vec2 u_texel;\n"
             "uniform float u_strength;\n"
             "varying vec2 v_uv;\n"
+            "float hgt(vec4 t){ float lo=floor(floor(t.g*255.0+0.5)/16.0); return (floor(t.b*255.0+0.5)*16.0+lo)/8.0; }\n"
             "void main(){\n"
             "  vec4 c=texture2D(u_idx_tex,v_uv);\n"
             "  if(c.a<0.5){ gl_FragColor=vec4(1.0); return; }\n"
-            "  float hc=c.b*255.0;\n"
+            "  float hc=hgt(c);\n"
             "  float occ=0.0;\n"
             "  for(int i=0;i<8;i++){\n"
             "    float a=float(i)*0.7853982+0.3926991;\n"
             "    vec2 d=vec2(cos(a),sin(a));\n"
-            "    float h1=texture2D(u_idx_tex,v_uv+d*4.0*u_texel).b*255.0;\n"
-            "    float h2=texture2D(u_idx_tex,v_uv+d*14.0*u_texel).b*255.0;\n"
+            "    float h1=hgt(texture2D(u_idx_tex,v_uv+d*4.0*u_texel));\n"
+            "    float h2=hgt(texture2D(u_idx_tex,v_uv+d*14.0*u_texel));\n"
             "    float s1=max(h1-hc,0.0)/4.0, s2=max(h2-hc,0.0)/14.0;\n"
             "    occ+=max(s1,s2*0.85);\n"
             "  }\n"
@@ -10100,9 +10101,9 @@ static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_
                 }
             }
             dst[x*4+0]=k;
-            dst[x*4+1]=(uint8_t)((is_panel?0:1)|(is_gnd?2:0));
-            {   int hv=(th && have_ri)?v->th_ring[ri]:0; hv=hv<0?0:hv>255?255:hv;
-                dst[x*4+2]=(uint8_t)hv;
+            {   int hv=(th && have_ri)?v->th_ring[ri]:0; hv=hv<0?0:hv>4095?4095:hv;   /* 12 bits: B = high 8, G bits 4..7 = low 4 */
+                dst[x*4+1]=(uint8_t)((is_panel?0:1)|(is_gnd?2:0)|((hv&15)<<4));
+                dst[x*4+2]=(uint8_t)(hv>>4);
                 dst[x*4+3]=(uint8_t)((th && have_ri && is_gnd && x>=176 && g_fx_kind[k]==FX_NONE)?255:0); }
             hd[x]=(uint8_t)(is_panel?255:0);
         }
@@ -10130,9 +10131,9 @@ static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_
                 const size_t ri=(size_t)ry*GW_CANVAS_W+128u+(unsigned)rx;
                 const int is_gnd=(k==v->fx_ring[ri]);
                 dst[x*4+0]=k;
-                dst[x*4+1]=(uint8_t)(1|(is_gnd?2:0));
-                {   int hv=th?v->th_ring[ri]:0; hv=hv<0?0:hv>255?255:hv;
-                    dst[x*4+2]=(uint8_t)hv;
+                {   int hv=th?v->th_ring[ri]:0; hv=hv<0?0:hv>4095?4095:hv;
+                    dst[x*4+1]=(uint8_t)(1|(is_gnd?2:0)|((hv&15)<<4));
+                    dst[x*4+2]=(uint8_t)(hv>>4);
                     dst[x*4+3]=(uint8_t)((th && is_gnd && x>=48 && g_fx_kind[k]==FX_NONE)?255:0); }
             }
         }
@@ -16008,7 +16009,7 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
     if(!area) return;
     if(minx<0) minx=0; if(maxx>=(int)w) maxx=(int)w-1;
     if(minx>maxx) return;
-    const float hz0=(float)(h[0]>>6),hz1=(float)(h[1]>>6),hz2=(float)(h[2]>>6),inv=1.0f/(float)area;
+    const float hz0=(float)(h[0]>>3),hz1=(float)(h[1]>>3),hz2=(float)(h[2]>>3),inv=1.0f/(float)area;   /* 1/8 step units */
     const float dhx=((hz1-hz0)*(float)(y[2]-y[0])-(hz2-hz0)*(float)(y[1]-y[0]))*inv;
     const float dhy=((hz2-hz0)*(float)(x[1]-x[0])-(hz1-hz0)*(float)(x[2]-x[0]))*inv;
     const int sgn=area>0?1:-1;
