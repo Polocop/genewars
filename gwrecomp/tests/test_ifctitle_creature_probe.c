@@ -15960,8 +15960,7 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
         if(th_lookup(y[k],*(int32_t *)(guest_memory+a+16u),&h[k])) { found|=1<<k; sum+=h[k]; } }
     g_th_tris++;
     {   static FILE *lf; static int li=-1; if(li<0) { const char *e=getenv("GW_TH_LOG"); li=e&&e[0]; if(li) lf=fopen(e,"w"); }
-        if(lf) fprintf(lf,"%05x n%u v0 %d,%d,%d h%d v1 %d,%d,%d h%d v2 %d,%d,%d h%d f%d
-",callsite,g_th_node_n,
+        if(lf) fprintf(lf,"%05x n%u v0 %d,%d,%d h%d v1 %d,%d,%d h%d v2 %d,%d,%d h%d f%d\n",callsite,g_th_node_n,
             x[0],y[0],*(int32_t *)(guest_memory+g_ds_base+p[0]+16u),h[0],x[1],y[1],*(int32_t *)(guest_memory+g_ds_base+p[1]+16u),h[1],
             x[2],y[2],*(int32_t *)(guest_memory+g_ds_base+p[2]+16u),h[2],found); }
     if(g_th_force && g_th_tris%500u==0u) th_dump();
