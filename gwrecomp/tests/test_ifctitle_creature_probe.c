@@ -9546,7 +9546,8 @@ static void hp_par(int n,hp_fn fn,void *ctx) {
 /* water_effects per pixel (x, y of the source; the pixel is water or GOOP ground, see g_fx_g): the effect colour, or
    base when GOOP has no highlight there. Same formulas as before; the displacement only pulls from water ground. */
 typedef struct { int32_t o; int16_t x,y; uint32_t base; } fx_wpx;
-static struct { uint32_t *buf; fx_wpx *px; int n,cap,w,h,y0,y1; } g_fxr[2];   /* [0] 640/854 view, [1] zoom-out canvas */
+static struct { uint32_t *buf,*base; fx_wpx *px; int n,cap,w,h,y0,y1; } g_fxr[2];
+static uint8_t g_fx_rowany[640];   /* 1 for source rows holding water/GOOP ground at x >= 176 */   /* [0] 640/854 view, [1] zoom-out canvas */
 static uint8_t *g_fx_g;
 static uint64_t g_fxc_gen=UINT64_MAX; static int g_fxc_key=-1,g_fxc_tq=-1; static uint8_t g_fxc_pal[768];
 static SDL_Texture *g_fxc_tex[2];
@@ -9594,7 +9595,9 @@ static void fx_ground_rows(void *cp,int y0,int y1) {   /* g_fx_g: kind where the
         int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
         const uint8_t *s=c->src+(size_t)y*pitch,*rr=v->fx_ring+(size_t)ry*pitch+left; uint8_t *g=g_fx_g+(size_t)y*pitch;
         memset(g,0,(size_t)left); int rx=rx0;
-        for(int x=left;x<pitch;x++) { const uint8_t k=s[x]; g[x]=(g_fx_kind[k] && k==rr[rx])?g_fx_kind[k]:0u; if(++rx==rw) rx=0; }
+        uint8_t any=0;
+        for(int x=left;x<pitch;x++) { const uint8_t k=s[x]; const uint8_t gk=(g_fx_kind[k] && k==rr[rx])?g_fx_kind[k]:0u; g[x]=gk; if(x>=176) any|=gk; if(++rx==rw) rx=0; }
+        if(y<640) g_fx_rowany[y]=any!=0;
     }
 }
 static void fx_base_rows(void *cp,int y0,int y1) {     /* region r: terrain colour with the AO/shadow factors */
@@ -9605,11 +9608,17 @@ static void fx_base_rows(void *cp,int y0,int y1) {     /* region r: terrain colo
                            (v->canvas_valid?v->wscreen+(size_t)y*v->wscreen_pitch:c->src+(size_t)y*pitch);
         if(c->dp) { const uint8_t *di=g_dp_idx+(size_t)y*pitch+176,*df=g_dp_fac+(size_t)y*pitch+176; for(int x=0;x<w;x++) o[x]=dp_apply(c->lut[di[x]],df[x]); }
         else for(int x=0;x<w;x++) o[x]=c->lut[row[176+x]];
+        memcpy(g_fxr[r].base+(size_t)y*(size_t)w,o,(size_t)w*sizeof *o);
     }
 }
-static void fx_water_px(void *cp,int i0,int i1) {      /* region r: the listed water/GOOP pixels */
-    const fx_ctx *c=(const fx_ctx *)cp; const fx_wpx *e=g_fxr[c->r].px; uint32_t *b=g_fxr[c->r].buf;
-    for(int i=i0;i<i1;i++) b[e[i].o]=fx_px(e[i].x,e[i].y,c->src,c->pitch,c->rows,c->lut,c->tq,e[i].base);
+static void fx_water_rows(void *cp,int i0,int i1) {    /* region r: the water/GOOP ground pixels of band rows */
+    const fx_ctx *c=(const fx_ctx *)cp; const int r=c->r,w=g_fxr[r].w,pitch=c->pitch,xe=w<pitch-176?w:pitch-176;
+    uint32_t *b=g_fxr[r].buf; const uint32_t *base=g_fxr[r].base;
+    for(int i=i0;i<i1;i++) {
+        const int y=g_fxr[r].y0+i; if(y>=c->rows || !g_fx_rowany[y]) continue;
+        const uint8_t *g=g_fx_g+(size_t)y*pitch+176; uint32_t *o=b+(size_t)y*(size_t)w; const uint32_t *ob=base+(size_t)y*(size_t)w;
+        for(int x=0;x<xe;x++) if(g[x]) o[x]=fx_px(176+x,y,c->src,pitch,c->rows,c->lut,c->tq,ob[x]);
+    }
 }
 static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view_tex,int view_w,
                        SDL_Texture *canvas_tex,int canvas_ready) {
@@ -9660,8 +9669,9 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
     fx_ctx fc={v,src,pitch,rows,lut,tq,dp,0};
     if(rebuild) {
         if(!g_fx_g) g_fx_g=(uint8_t *)malloc(1152u*640u);
-        for(int r=0;r<2;r++) if(!g_fxr[r].buf) g_fxr[r].buf=(uint32_t *)malloc(1152u*640u*sizeof(uint32_t));
-        if(!g_fx_g || !g_fxr[0].buf || !g_fxr[1].buf) return;
+        for(int r=0;r<2;r++) { if(!g_fxr[r].buf) g_fxr[r].buf=(uint32_t *)malloc(1152u*640u*sizeof(uint32_t));
+                               if(!g_fxr[r].base) g_fxr[r].base=(uint32_t *)malloc(1152u*640u*sizeof(uint32_t)); }
+        if(!g_fx_g || !g_fxr[0].buf || !g_fxr[1].buf || !g_fxr[0].base || !g_fxr[1].base) return;
         if(water) hp_par(rows,fx_ground_rows,&fc);   /* water/GOOP ground map of the source */
         for(int r=0;r<2;r++) {
             g_fxr[r].n=0; g_fxr[r].y0=0x7FFFFFFF; g_fxr[r].y1=-1;
@@ -9669,26 +9679,14 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
             g_fxr[r].w=r==0?view_w-176:(int)GW_CANVAS_W-176; g_fxr[r].h=r==0?480:(int)GW_CANVAS_H;
             fc.r=r; hp_par(g_fxr[r].h,fx_base_rows,&fc);
             if(!water) continue;
-            const int w=g_fxr[r].w,h=g_fxr[r].h<rows?g_fxr[r].h:rows;
-            for(int y=0;y<h;y++) {
-                const uint8_t *g=g_fx_g+(size_t)y*pitch+176; const uint32_t *o=g_fxr[r].buf+(size_t)y*(size_t)w;
-                const int xe=w<pitch-176?w:pitch-176;
-                for(int x=0;x<xe;x++) if(g[x]) {
-                    if(g_fxr[r].n==g_fxr[r].cap) {
-                        const int nc=g_fxr[r].cap?g_fxr[r].cap*2:65536; fx_wpx *np=(fx_wpx *)realloc(g_fxr[r].px,(size_t)nc*sizeof *np);
-                        if(!np) break;
-                        g_fxr[r].px=np; g_fxr[r].cap=nc; }
-                    fx_wpx *e=&g_fxr[r].px[g_fxr[r].n++]; e->o=y*w+x; e->x=(int16_t)(176+x); e->y=(int16_t)y; e->base=o[x];
-                    if(y<g_fxr[r].y0) g_fxr[r].y0=y;
-                    if(y>g_fxr[r].y1) g_fxr[r].y1=y;
-                }
-            }
+            const int h=g_fxr[r].h<rows?g_fxr[r].h:rows;   /* the band of rows holding water/GOOP ground */
+            for(int y=0;y<h;y++) if(g_fx_rowany[y]) { if(y<g_fxr[r].y0) g_fxr[r].y0=y; g_fxr[r].y1=y; }
         }
         g_fxc_gen=v->generation; g_fxc_key=key; memcpy(g_fxc_pal,v->palette,768);
         g_fxc_tex[0]=use_view?view_tex:NULL; g_fxc_tex[1]=use_canvas?canvas_tex:NULL;
     }
     /* water and GOOP: only their pixels, from the cached base */
-    if(water) for(int r=0;r<2;r++) { fc.r=r; hp_par(g_fxr[r].n,fx_water_px,&fc); }
+    if(water) for(int r=0;r<2;r++) if(g_fxr[r].y1>=g_fxr[r].y0) { fc.r=r; hp_par(g_fxr[r].y1-g_fxr[r].y0+1,fx_water_rows,&fc); }
     g_fxc_tq=tq;
     for(int r=0;r<2;r++) {
         SDL_Texture *t=r==0?(use_view?view_tex:NULL):(use_canvas?canvas_tex:NULL);
@@ -11093,10 +11091,14 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             uint32_t lut[256];   /* 6-bit VGA DAC -> ARGB, once per frame (same values as the per-pixel formula) */
             for(unsigned k=0;k<256u;k++)
                 lut[k]=0xFF000000u|((uint32_t)palette[k*3u+0u]*255u/63u<<16)|((uint32_t)palette[k*3u+1u]*255u/63u<<8)|((uint32_t)palette[k*3u+2u]*255u/63u);
+            /* zoomed out with the canvas in use, the view texture only shows its HUD strip (x < 176): only that part
+               is converted and uploaded */
+            const int vconv_w=(visual && visual->canvas_valid && g_zoom<0.9 && g_canvas_tex_ready>=1 && g_tex_scale==1 &&
+                               g_present_w>176)?176:g_present_w;
             for(int y=0;y<480;y++) {
                 const uint8_t *row=gw_video_surface_row(source,y);
                 uint32_t *out=g_ifclevel_demo_rgba+(size_t)y*(size_t)texture_w;
-                for(int x=0;x<g_present_w;x++) out[x]=lut[row[x]];
+                for(int x=0;x<vconv_w;x++) out[x]=lut[row[x]];
             }
             /* Panel split for x=128..175 (interpolating presentation only): the uploaded frame carries the map
                background there (from the ring), the panel art goes to its own overlay texture drawn unshifted on
@@ -11153,7 +11155,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 }
                 if(g_interactive_perf_frequency) { g_hostprof_epx_ms+=(double)(SDL_GetPerformanceCounter()-epx0)*1000.0/(double)g_interactive_perf_frequency; g_hostprof_epx_n++; }
             } else
-            if(SDL_UpdateTexture(g_ifclevel_demo_texture,NULL,g_ifclevel_demo_rgba,
+            if(SDL_UpdateTexture(g_ifclevel_demo_texture,vconv_w<g_present_w?&(SDL_Rect){0,0,vconv_w,480}:NULL,g_ifclevel_demo_rgba,
                                  texture_w*(int)sizeof(uint32_t))!=0) {
                 fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
             }
