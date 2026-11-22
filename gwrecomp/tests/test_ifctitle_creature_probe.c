@@ -11240,6 +11240,10 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
     /* this frame's zoomed-out map comes from the GPU composition (decided once, before any conversion) */
     g_gm_frame=visual && gm_frame_ok(visual) && g_zoom<0.9999 &&
                (bloom_active(visual) || ao_gpu_active(visual) || part_active(visual) || fx_active(visual) || depth_active(visual));
+    {   static int last=-1;
+        if(visual && visual->in_mission && g_gm_frame!=last) { last=g_gm_frame;
+            gw_flag_trace("TRACE gpu_map frame=%d ready=%d failed=%d have=%d canvas=%d zoom=%.3f ring=%ux%u left=%d bloom_failed=%d%c",g_gm_frame,g_gm.ready,
+                g_gm.failed,g_gm.have,visual->canvas_valid,g_zoom,visual->fx_ring_w,visual->fx_ring_h,visual->ring_left,g_bloom.failed,10); } }
     if(!terrain_capture_path && g_terrain_modern_backend && !g_terrain_capture_done)
         terrain_capture_path=getenv("GW_TERRAIN_CAPTURE_FRAME");
     {   const int pitch=(visual && visual->wscreen_pitch==864u)?864:640;
