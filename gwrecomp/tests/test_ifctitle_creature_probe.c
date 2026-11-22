@@ -19719,8 +19719,7 @@ void gw_frame_drawn(unsigned int fn,unsigned int x,unsigned int y,unsigned int f
             if(fa<=GUEST_LIMIT-12u) { const uint32_t el=*(const uint32_t *)(guest_memory+fa); const uint64_t ea=(uint64_t)g_ds_base+el;
                 if(ea<=GUEST_LIMIT-10u) { const uint32_t sp=*(const uint32_t *)(guest_memory+ea); const uint64_t sa=(uint64_t)g_ds_base+sp;
                     if(sa<=GUEST_LIMIT-6u) { sw=guest_memory[sa+4]; sh=guest_memory[sa+5]; } } }
-            fprintf(lf,"t%u c%d f%u %08x %d %d w%d,%d s%ux%u
-",turn,g_draw_caller,fn==0x919C0u?0:fn==0x91AE0u?1:2,frame,(int)x,(int)y,
+            fprintf(lf,"t%u c%d f%u %08x %d %d w%d,%d s%ux%u\n",turn,g_draw_caller,fn==0x919C0u?0:fn==0x91AE0u?1:2,frame,(int)x,(int)y,
                 *(const int32_t *)(guest_memory+0x00376A80u),*(const int32_t *)(guest_memory+0x00376A84u),sw,sh);
             ln++; if((ln&1023u)==0u) fflush(lf);
         }
