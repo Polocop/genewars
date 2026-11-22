@@ -8247,6 +8247,7 @@ static int g_present_w=640,g_present_pitch=640;
 static double g_hostprof_fx_ms,g_hostprof_bloom_ms,g_hostprof_bu_ms;
 static double g_ph[9];   /* this frame: convert (incl. bloom upload), bloom upload, fx, bloom/AO pass, SDL present,
                             canvas texture write+upload, bloom canvas TexSubImage, fx texture uploads, view texture upload (ms) */
+static uint64_t g_present_deadline,g_present_waited; static void present_wait_until(uint64_t deadline);
 static double ph_ms(uint64_t t0) { const uint64_t f=SDL_GetPerformanceFrequency(); return (double)(SDL_GetPerformanceCounter()-t0)*1000.0/(double)(f?f:1u); }
 static double g_hostprof_convert_ms,g_hostprof_copy_ms,g_hostprof_present_ms,g_hostprof_wait_ms,g_hostprof_frame_ms;
 /* GW_GPU_TIMING=1 (diagnostics): GPU-synchronised time of composition + scaled copy (1-pixel readbacks bracket it,
@@ -11683,6 +11684,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         g_present_dump_path[0]=0;
     }
     const uint64_t render_present_start=SDL_GetPerformanceCounter(); if(g_interactive_perf_frequency) g_hostprof_copy_ms+=(double)(render_present_start-hp_copy0)*1000.0/(double)g_interactive_perf_frequency;
+    present_wait_until(g_present_deadline);
     SDL_RenderPresent(g_ifclevel_demo_renderer);
     if(g_interactive_demo_mode) { enhanced_audio_tick(); gw_cdda_pump(); }
     if(g_interactive_demo_mode) {
@@ -11947,6 +11949,20 @@ static void pace_stats_frame(uint64_t present_end,uint64_t work,int tick) {
                 pace_pct(k==2?"sub_fx":k==3?"sub_bloom_ao":k==4?"sub_present":"sub_fx_upload",b,nb,8.334); } }
         g_pace_n=0; g_pace_t0=present_end;
     }
+}
+/* the fixed-step pacer's next presentation instant (0 = none); the present path waits for it before SDL_RenderPresent */
+
+static void present_wait_until(uint64_t deadline) {
+    g_present_waited=0;
+    if(!deadline || !g_interactive_perf_frequency) return;
+    const uint64_t w0=SDL_GetPerformanceCounter();
+    const uint64_t sleep_margin=g_interactive_perf_frequency*5u/2000u;   /* 2.5 ms */
+    for(;;) {
+        const uint64_t now=SDL_GetPerformanceCounter();
+        if(now>=deadline) break;
+        if(deadline-now>sleep_margin) SDL_Delay(1u); else YieldProcessor();
+    }
+    g_present_waited=SDL_GetPerformanceCounter()-w0;
 }
 static void tick_profile_start(void) {
     if(!g_tick_profile_file) {
@@ -20890,6 +20906,18 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
             visual_eval_counter,g_interactive_frame_count,published_new_snapshot);
         /* A Smacker clip started by the game (worker thread) owns the window while it runs. */
         const int smk_owns=gw_smk_main_service();
+        /* fixed-step pacer: the next presentation instant advances by exactly one period from the previous target (no
+           drift from the time spent in the frame); it resynchronises only after a delay of more than 2 periods. The
+           frame is rendered first and the present call waits for that instant (present_wait_until), so presentations
+           sit on an exact 1/fps grid whatever each frame's work, as long as it fits in the period. Sleeps (1 ms
+           granularity, timeBeginPeriod(1)) only while more than 2.5 ms remain, then spins with pause. */
+        static uint64_t pace_target;
+        if(!pace_target || frame_start>pace_target+2u*frame_period) pace_target=frame_start;
+        pace_target+=frame_period;
+        static int pace_legacy=-1;   /* QA: GW_PACER_LEGACY=1 = the previous pacer (deadline from the frame start, present first) */
+        if(pace_legacy<0) { const char *e=getenv("GW_PACER_LEGACY"); pace_legacy=e && e[0]=='1'; }
+        const uint64_t deadline=pace_legacy?frame_start+frame_period:pace_target;
+        g_present_deadline=(requested_fps && !pace_legacy)?deadline:0u;
         const uint64_t render_start=SDL_GetPerformanceCounter();
         int present_ok=0;
         if(smk_owns) present_ok=1;
@@ -20904,15 +20932,6 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
         if(have_visual) record_interactive_camera_presentation(previous_visual,visual,
             visual_eval_counter,g_interactive_frame_count);
         if(update_texture && !smk_owns) last_visual_generation=visual->generation;
-        /* fixed-step pacer: the next presentation instant advances by exactly one period from the previous target (no
-           drift from the time spent in the frame); it resynchronises only after a delay of more than 2 periods. Sleeps
-           (1 ms granularity, timeBeginPeriod(1)) only while more than 2.5 ms remain, then spins with pause. */
-        static uint64_t pace_target;
-        if(!pace_target || frame_start>pace_target+2u*frame_period) pace_target=frame_start;
-        pace_target+=frame_period;
-        static int pace_legacy=-1;   /* QA: GW_PACER_LEGACY=1 = the previous pacer (deadline from the frame start) */
-        if(pace_legacy<0) { const char *e=getenv("GW_PACER_LEGACY"); pace_legacy=e && e[0]=='1'; }
-        const uint64_t deadline=pace_legacy?frame_start+frame_period:pace_target;
         if(requested_fps) {
             const uint64_t wait0=SDL_GetPerformanceCounter();
             const uint64_t sleep_margin=pace_legacy?g_interactive_perf_frequency/500u:g_interactive_perf_frequency*5u/2000u;
@@ -20931,7 +20950,7 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
         const double render_ms=(double)(render_end-render_start)*1000.0/(double)g_interactive_perf_frequency;
         const double frame_ms=(double)(frame_end-frame_start)*1000.0/(double)g_interactive_perf_frequency;
         g_interactive_frame_count++;
-        pace_stats_frame(render_end,render_end-frame_start,update_texture && !smk_owns && have_visual && visual->in_mission);
+        pace_stats_frame(render_end,render_end-frame_start-g_present_waited,update_texture && !smk_owns && have_visual && visual->in_mission);
         g_interactive_sum_render_ms+=render_ms; g_interactive_sum_input_ms+=input_ms;
         g_interactive_sum_frame_ms+=frame_ms;
         if(g_interactive_host_frame_time_count<
