@@ -16075,6 +16075,7 @@ void gw_hybrid_capture_terrain_entry(uint32_t eax,uint32_t ebx,uint32_t ecx,
    the rasterizer and the ring are untouched, so frames are identical with or without it. */
 static int16_t g_th_ring[1152u*640u];
 static uint8_t g_th_have[1152u*640u];       /* 1 where a terrain triangle wrote a height */
+static uint8_t g_th_rowhave[640];           /* 1 for ring rows a terrain triangle has written */
 static int g_th_force=-1;
 /* the vertex records E19C0 receives copy y (node +0) and the light (node +4) from 12-byte mesh nodes; the height is
    recorded per node address when the node's y is stored, and a vertex takes the height of the node that holds exactly
@@ -16212,9 +16213,7 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
         /* the row's pixels that fall inside the ring (a row that only partly fits keeps those pixels;
            the last pixels of the last ring row past the end) keeps the pixels that fit instead of being dropped whole,
            which left that ring row without heights (a 1-pixel AO line moving with the terrain) */
-        /* the ring is circular: the full redraw targets ring - 1 row (destination offset -pitch, 640 rows), so its
-           first row is the ring's last row, which the game keeps in step with that row (measured: GW_TH_LOG) */
-        const int64_t total=(int64_t)w*hgt; int64_t rowi=(off0+(int64_t)py*pitch)%total; if(rowi<0) rowi+=total;
+        const int64_t total=(int64_t)w*hgt,rowi=off0+(int64_t)py*pitch;
         int lo=minx,hi=maxx;
         if(rowi+lo<0) lo=(int)(-rowi);
         if(rowi+hi>=total) hi=(int)(total-1-rowi);
@@ -16223,6 +16222,7 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
         int64_t e0=A[0]*cx0+B[0]*cy+C[0],e1=A[1]*cx0+B[1]*cy+C[1],e2=A[2]*cx0+B[2]*cy+C[2];
         float hv=hz0+dhx*((float)lo+0.5f-(float)x[0])+dhy*((float)py+0.5f-(float)y[0]);
         int16_t *hr=g_th_ring+rowi; uint8_t *cr=g_th_have+rowi;
+        if(rowi>=0 && rowi<total) g_th_rowhave[rowi/w]=1;
         for(int px=lo;px<=hi;px++) {
             if(e0>=0 && e1>=0 && e2>=0) { hr[px]=(int16_t)(hv+(hv>=0.0f?0.5f:-0.5f)); cr[px]=1; }
             e0+=2*A[0]; e1+=2*A[1]; e2+=2*A[2]; hv+=dhx;
@@ -19325,6 +19325,13 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
             g_interactive_published_snapshot.fx_ring_valid=1;
             if(g_ini_terrain_ao && (size_t)rw*rh<=sizeof g_th_ring/sizeof g_th_ring[0]) {
                 memcpy(g_interactive_published_snapshot.th_ring,g_th_ring,(size_t)rw*rh*sizeof g_th_ring[0]);
+                /* a ring row no terrain triangle ever wrote (measured: the game's full redraw targets ring - 1 row, so
+                   at the wrap seam one ring row keeps colour from an earlier redraw but never got heights) takes the
+                   heights of the nearest written row above it, so the AO sees no step there (1-pixel line otherwise) */
+                if(rh<=640u) for(uint32_t ry=0;ry<rh;ry++) if(!g_th_rowhave[ry]) {
+                    for(uint32_t k=1;k<rh;k++) { const uint32_t sy=(ry+rh-k)%rh;
+                        if(g_th_rowhave[sy]) { memcpy(g_interactive_published_snapshot.th_ring+(size_t)ry*rw,g_th_ring+(size_t)sy*rw,(size_t)rw*sizeof g_th_ring[0]); break; } }
+                }
                 g_interactive_published_snapshot.th_valid=1;
             }
         }
