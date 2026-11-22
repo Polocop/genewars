@@ -9553,6 +9553,7 @@ typedef struct { int32_t o; int16_t x,y; uint32_t base; } fx_wpx;
 static struct { uint32_t *buf,*base; fx_wpx *px; int n,cap,w,h,y0,y1; } g_fxr[2];
 static uint8_t g_fx_rowany[640];
 static int g_wt_ready;   /* 1 once the GPU water pass compiled: the CPU path then does no water */   /* 1 for source rows holding water/GOOP ground at x >= 176 */   /* [0] 640/854 view, [1] zoom-out canvas */
+static int g_gm_frame;   /* this presented frame draws the zoomed-out map from the GPU composition */
 static uint8_t *g_fx_g;
 static uint64_t g_fxc_gen=UINT64_MAX; static int g_fxc_key=-1,g_fxc_tq=-1; static uint8_t g_fxc_pal[768];
 static SDL_Texture *g_fxc_tex[2];
@@ -9650,6 +9651,7 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
         } else { g_fx_wx=v->ring_x; g_fx_wy=v->ring_y; }
         g_fx_last_rx=v->ring_x; g_fx_last_ry=v->ring_y; g_fx_last_generation=v->generation; g_fx_have_anchor=1;
     }
+    if(g_gm_frame) return;   /* soft shadows and water of the zoomed-out map run on the GPU */
     if(!water && !depth) return;
     if(depth && (!g_dp_valid || v->generation!=g_dp_generation)) {
         uint8_t lum[256];
@@ -9727,7 +9729,7 @@ static struct {
     int fbo_is_16f;
     GLuint lut_tex,hud_tex;
     GLuint view_tex[2];   /* [0] prev, [1] cur (GL_RG8: R=index, G=flags) */
-    GLuint canvas_tex[2]; /* [0] prev, [1] cur (GL_RG8: R=index, G=flags) */
+    GLuint canvas_tex[3]; /* [0] prev, [1] cur, [2] spare (RGBA8: R index, G flags + low height, B high height, A AO mask) */
     int canvas_ready;
     uint8_t pal_cache[768];
     int pal_ok;
@@ -9744,7 +9746,7 @@ static struct {
     GLuint fbo_ao,tex_ao,prog_ao;
     GLint u_ao_idx,u_ao_texel,u_ao_strength,u_comp_ao,u_comp_ao_on;
     GLuint fbo_wt,tex_wt,prog_wt,kind_tex; int wt_w,wt_h,wt_failed; uint8_t kind_pal[768]; int kind_ok;
-    GLint u_wt_idx,u_wt_lut,u_wt_kind,u_wt_texel,u_wt_off,u_wt_tq,u_comp_wt,u_comp_wt_on;
+    GLint u_wt_idx,u_wt_lut,u_wt_kind,u_wt_texel,u_wt_off,u_wt_tq,u_comp_wt,u_comp_wt_on,u_comp_map,u_comp_map_on;
     uint8_t *up_buf;
     uint8_t *hud_buf;
     /* GL entry points resolved via SDL_GL_GetProcAddress (no -lopengl32 link needed) */
@@ -9986,11 +9988,14 @@ static int bloom_ensure_init(int logical_w) {
             "uniform float u_ao_on;\n"
             "uniform sampler2D u_wt;\n"
             "uniform float u_wt_on;\n"
+            "uniform sampler2D u_map;\n"
+            "uniform float u_map_on;\n"
             "varying vec2 v_uv;\n"
             "varying vec2 v_suv;\n"
             "void main(){\n"
             "  vec3 base=texture2D(u_base,v_uv).rgb;\n"
             "  if(texture2D(u_hud_mask,v_suv).r>0.5){ gl_FragColor=vec4(base,1.0); return; }\n"
+            "  if(u_map_on>0.5) base=texture2D(u_map,v_suv).rgb;\n"
             "  if(u_wt_on>0.5){ vec4 w=texture2D(u_wt,v_suv); base=mix(base,w.rgb,w.a); }\n"
             "  if(u_ao_on>0.5) base*=texture2D(u_ao,v_suv).r;\n"
             "  vec3 b=texture2D(u_bloom,v_suv).rgb*u_intensity;\n"
@@ -10053,6 +10058,8 @@ static int bloom_ensure_init(int logical_w) {
         g_bloom.u_comp_ao_on=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_ao_on");
         g_bloom.u_comp_wt=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_wt");
         g_bloom.u_comp_wt_on=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_wt_on");
+        g_bloom.u_comp_map=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_map");
+        g_bloom.u_comp_map_on=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_map_on");
         g_bloom.u_ao_idx=g_bloom.GetUniformLocation(g_bloom.prog_ao,"u_idx_tex");
         g_bloom.u_ao_texel=g_bloom.GetUniformLocation(g_bloom.prog_ao,"u_texel");
         g_bloom.u_ao_strength=g_bloom.GetUniformLocation(g_bloom.prog_ao,"u_strength");
@@ -10277,12 +10284,186 @@ static void bu_canvas_rows(void *cp,int y0,int y1) {
         }
     }
 }
+/* ---- GPU map composition (zoom-out canvas): the 8-bit frame, the ring terrain, the captured heights, the sprite /
+   shadow mask and the shadow routine's remap row go to the GPU raw, once per game frame; the per-pixel work runs in
+   GLSL: (1) packing into the layer texture the bloom / AO / water passes read (R index, G flags + low height, B high
+   height, A AO mask: the same layout the CPU packed), (2) the exact soft-shadow candidates (shadow store mask >= 2, the
+   pixel still the remap of the terrain under it, darker, not water) and their 5x5 tent blur, (3) on every presented
+   frame, the map colour: palette, and inside a blurred shadow the terrain colour darkened by up to 68 %. The composite
+   uses it as the map base; SDL only draws the HUD and the panel. Presentation only, never guest memory. */
+#ifndef GL_RG
+#define GL_RG 0x8227
+#endif
+#ifndef GL_RG8
+#define GL_RG8 0x822B
+#endif
+static struct {
+    int ready,failed,have,pending,shadows,th,msk_zero;
+    GLuint t_idx,t_ring,t_hgt,t_msk,t_shade,t_kind,tmp1,tmp2,fbo,map_fbo,map_tex;
+    GLuint aux[3];
+    int map_w,map_h,ring_x,ring_y,kind_ok;
+    GLuint p_pack,p_cand,p_blurh,p_blurv,p_map;
+    GLint pk_idx,pk_ring,pk_hgt,pk_kind,pk_off,pk_th;
+    GLint cd_idx,cd_ring,cd_msk,cd_shade,cd_lut,cd_kind,cd_off;
+    GLint bh_src,bv_src,bv_cand,bv_ring,bv_off,bv_on;
+    GLint mp_pk,mp_aux,mp_lut;
+    uint8_t kind_pal[768];
+    uint8_t *ring_last; int16_t *hgt_last; int last_valid;
+} g_gm;
+
+static int g_layers_aux;        /* bloom_draw_map_layers also binds each canvas layer's aux texture on unit 5 */
+static int gm_frame_ok(const gw_interactive_visual_snapshot *v) {
+    return g_gm.ready && !g_gm.failed && g_gm.have && v && v->valid && v->in_mission && v->canvas_valid && v->fx_ring_valid &&
+           (int)v->fx_ring_w==(int)GW_CANVAS_W && v->fx_ring_h==GW_CANVAS_H && v->ring_left==128 && g_cli_play_mode &&
+           !g_terrain_modern_backend && g_tex_scale==1 && !g_bloom.failed;
+}
+static GLuint gm_tex(int w,int h,GLenum ifmt,GLenum fmt) {
+    GLuint t=0; g_bloom.GenTextures(1,&t); g_bloom.BindTexture(GL_TEXTURE_2D,t);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+    g_bloom.TexImage2D(GL_TEXTURE_2D,0,(GLint)ifmt,w,h,0,fmt,GL_UNSIGNED_BYTE,NULL);
+    return t;
+}
+#define GM_GLSL_COMMON \
+    "#version 120\n" \
+    "float rd(sampler2D t,vec2 p,vec2 sz){ return floor(texture2D(t,(p+0.5)/sz).r*255.0+0.5); }\n" \
+    "float k256(sampler2D t,float k){ return floor(texture2D(t,vec2((k+0.5)/256.0,0.5)).r*255.0+0.5); }\n"
+static int gm_init(void) {
+    if(g_gm.ready) return 1;
+    if(g_gm.failed || g_bloom.failed) return 0;
+    static const char *vs=
+        "#version 120\n attribute vec2 a_pos;\n attribute vec2 a_uv;\n attribute vec2 a_suv;\n varying vec2 v_uv;\n"
+        "void main(){ v_uv=a_uv; gl_Position=vec4(a_pos,0.0,1.0); }\n";
+    /* packing: one texel per canvas pixel at canvas x = 128 + texel x (the layer texture's own layout) */
+    static const char *fs_pack= GM_GLSL_COMMON
+        "uniform sampler2D u_idx; uniform sampler2D u_ring; uniform sampler2D u_hgt; uniform sampler2D u_kind;\n"
+        "uniform vec2 u_off; uniform float u_th;\n"
+        "void main(){\n"
+        "  vec2 S=vec2(1152.0,640.0); vec2 tp=floor(gl_FragCoord.xy); float cx=tp.x+128.0, y=tp.y;\n"
+        "  float c=rd(u_idx,vec2(cx,y),S);\n"
+        "  float rx=mod((cx-128.0)+(u_off.x-128.0),1024.0), ry=mod(y+u_off.y,640.0);\n"
+        "  float g=rd(u_ring,vec2(128.0+rx,ry),S); float gnd=(c==g)?1.0:0.0;\n"
+        "  float hy=(y>638.5)?mod(ry-1.0,640.0):ry;\n"
+        "  vec2 hh=texture2D(u_hgt,(vec2(128.0+rx,hy)+0.5)/S).rg; float lo=floor(hh.r*255.0+0.5), hi=floor(hh.g*255.0+0.5);\n"
+        "  float h=(hi>=128.0)?0.0:min(lo+256.0*hi,4095.0); h*=u_th;\n"
+        "  float G=1.0+2.0*gnd+16.0*mod(h,16.0), B=floor(h/16.0);\n"
+        "  float A=(u_th>0.5 && gnd>0.5 && tp.x>=48.0 && k256(u_kind,c)<0.5)?255.0:0.0;\n"
+        "  gl_FragColor=vec4(c,G,B,A)/255.0;\n"
+        "}\n";
+    /* soft-shadow candidates: exactly the CPU rule (dp_rows / dp_is_shadow_of) */
+    static const char *fs_cand= GM_GLSL_COMMON
+        "uniform sampler2D u_idx; uniform sampler2D u_ring; uniform sampler2D u_msk; uniform sampler2D u_shade; uniform sampler2D u_lut; uniform sampler2D u_kind;\n"
+        "uniform vec2 u_off;\n"
+        "float lum(float k){ vec3 p=floor(texture2D(u_lut,vec2((k+0.5)/256.0,0.25)).rgb*255.0+0.5); return dot(p,vec3(77.0,150.0,29.0)); }\n"
+        "void main(){\n"
+        "  vec2 S=vec2(1152.0,640.0); vec2 tp=floor(gl_FragCoord.xy); float cx=tp.x+128.0, y=tp.y;\n"
+        "  float c=rd(u_idx,vec2(cx,y),S);\n"
+        "  float rx=mod((cx-128.0)+(u_off.x-128.0),1024.0), ry=mod(y+u_off.y,640.0);\n"
+        "  float g=rd(u_ring,vec2(128.0+rx,ry),S);\n"
+        "  float m=rd(u_msk,vec2(cx,y),S);\n"
+        "  float s1=k256(u_shade,g), s2=k256(u_shade,s1), s3=k256(u_shade,s2);\n"
+        "  bool ok=m>=2.0 && c!=g && (c==s1 || c==s2 || c==s3) && lum(c)<lum(g) && k256(u_kind,g)!=1.0 &&\n"
+        "          y>0.5 && y<638.5 && cx>176.5 && cx<1150.5;\n"
+        "  gl_FragColor=vec4(ok?1.0:0.0);\n"
+        "}\n";
+    /* tent blur (two box passes of radius 1 = weights 1 2 3 2 1 / 9 per axis), horizontal then vertical */
+    static const char *fs_blurh=
+        "#version 120\n uniform sampler2D u_src;\n"
+        "void main(){ vec2 S=vec2(1024.0,640.0); vec2 p=floor(gl_FragCoord.xy)+0.5;\n"
+        "  float v=texture2D(u_src,(p+vec2(-2.0,0.0))/S).r+2.0*texture2D(u_src,(p+vec2(-1.0,0.0))/S).r+3.0*texture2D(u_src,p/S).r+\n"
+        "          2.0*texture2D(u_src,(p+vec2(1.0,0.0))/S).r+texture2D(u_src,(p+vec2(2.0,0.0))/S).r;\n"
+        "  gl_FragColor=vec4(v/9.0); }\n";
+    static const char *fs_blurv= GM_GLSL_COMMON
+        "uniform sampler2D u_src; uniform sampler2D u_cand; uniform sampler2D u_ring; uniform vec2 u_off; uniform float u_on;\n"
+        "void main(){ vec2 S=vec2(1024.0,640.0); vec2 tp=floor(gl_FragCoord.xy); vec2 p=tp+0.5;\n"
+        "  float v=texture2D(u_src,(p+vec2(0.0,-2.0))/S).r+2.0*texture2D(u_src,(p+vec2(0.0,-1.0))/S).r+3.0*texture2D(u_src,p/S).r+\n"
+        "          2.0*texture2D(u_src,(p+vec2(0.0,1.0))/S).r+texture2D(u_src,(p+vec2(0.0,2.0))/S).r;\n"
+        "  float rx=mod(tp.x+(u_off.x-128.0),1024.0), ry=mod(tp.y+u_off.y,640.0);\n"
+        "  float g=rd(u_ring,vec2(128.0+rx,ry),vec2(1152.0,640.0));\n"
+        "  float cd=texture2D(u_cand,p/S).r;\n"
+        "  gl_FragColor=vec4(g/255.0,u_on*v/9.0,u_on*cd,1.0); }\n";
+    /* map colour of a layer: palette, and the soft shadow redraw from the terrain */
+    static const char *fs_map=
+        "#version 120\n uniform sampler2D u_pk; uniform sampler2D u_aux; uniform sampler2D u_lut;\n varying vec2 v_uv;\n"
+        "vec3 lut(float k){ return texture2D(u_lut,vec2((k+0.5)/256.0,0.25)).rgb; }\n"
+        "void main(){\n"
+        "  vec4 p=texture2D(u_pk,v_uv); vec4 a=texture2D(u_aux,v_uv);\n"
+        "  float c=floor(p.r*255.0+0.5), gnd=mod(floor(floor(p.g*255.0+0.5)/2.0),2.0);\n"
+        "  float m=floor(a.g*255.0+0.5)/255.0, g=floor(a.r*255.0+0.5);\n"
+        "  vec3 col=lut(c);\n"
+        "  if(m>0.0 && (a.b>0.5 || gnd>0.5)) col=lut(g)*(1.0-m*0.68);\n"
+        "  gl_FragColor=vec4(col,1.0);\n"
+        "}\n";
+    g_gm.p_pack=bloom_link_program(vs,fs_pack); g_gm.p_cand=bloom_link_program(vs,fs_cand);
+    g_gm.p_blurh=bloom_link_program(vs,fs_blurh); g_gm.p_blurv=bloom_link_program(vs,fs_blurv); g_gm.p_map=bloom_link_program(vs,fs_map);
+    if(!g_gm.p_pack || !g_gm.p_cand || !g_gm.p_blurh || !g_gm.p_blurv || !g_gm.p_map) {
+        g_gm.failed=1; gw_flag_trace("TRACE gpu_map unavailable (CPU map kept)%c",10); return 0; }
+    #define GMU(prog,name) g_bloom.GetUniformLocation(g_gm.prog,name)
+    g_gm.pk_idx=GMU(p_pack,"u_idx"); g_gm.pk_ring=GMU(p_pack,"u_ring"); g_gm.pk_hgt=GMU(p_pack,"u_hgt"); g_gm.pk_kind=GMU(p_pack,"u_kind");
+    g_gm.pk_off=GMU(p_pack,"u_off"); g_gm.pk_th=GMU(p_pack,"u_th");
+    g_gm.cd_idx=GMU(p_cand,"u_idx"); g_gm.cd_ring=GMU(p_cand,"u_ring"); g_gm.cd_msk=GMU(p_cand,"u_msk"); g_gm.cd_shade=GMU(p_cand,"u_shade");
+    g_gm.cd_lut=GMU(p_cand,"u_lut"); g_gm.cd_kind=GMU(p_cand,"u_kind"); g_gm.cd_off=GMU(p_cand,"u_off");
+    g_gm.bh_src=GMU(p_blurh,"u_src");
+    g_gm.bv_src=GMU(p_blurv,"u_src"); g_gm.bv_cand=GMU(p_blurv,"u_cand"); g_gm.bv_ring=GMU(p_blurv,"u_ring"); g_gm.bv_off=GMU(p_blurv,"u_off"); g_gm.bv_on=GMU(p_blurv,"u_on");
+    g_gm.mp_pk=GMU(p_map,"u_pk"); g_gm.mp_aux=GMU(p_map,"u_aux"); g_gm.mp_lut=GMU(p_map,"u_lut");
+    #undef GMU
+    g_gm.t_idx=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_ring=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_hgt=gm_tex(1152,640,GL_RG8,GL_RG);
+    g_gm.t_msk=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_shade=gm_tex(256,1,GL_R8,GL_RED); g_gm.t_kind=gm_tex(256,1,GL_R8,GL_RED);
+    g_gm.tmp1=gm_tex(GW_CANVAS_TEX_W,(int)GW_CANVAS_H,GL_R8,GL_RED); g_gm.tmp2=gm_tex(GW_CANVAS_TEX_W,(int)GW_CANVAS_H,GL_R8,GL_RED);
+    for(int i=0;i<3;i++) { g_gm.aux[i]=gm_tex(GW_CANVAS_TEX_W,(int)GW_CANVAS_H,GL_RGBA8,GL_RGBA); if(!g_bloom.canvas_tex[i]) bloom_alloc_rg_tex(&g_bloom.canvas_tex[i],GW_CANVAS_TEX_W,(int)GW_CANVAS_H); }
+    g_bloom.GenFramebuffers(1,&g_gm.fbo);
+    g_gm.ring_last=(uint8_t *)malloc(1152u*640u); g_gm.hgt_last=(int16_t *)malloc(1152u*640u*2u);
+    if(!g_gm.ring_last || !g_gm.hgt_last || !g_gm.fbo) { g_gm.failed=1; return 0; }
+    g_gm.msk_zero=0; g_gm.last_valid=0; g_gm.kind_ok=0; g_gm.ready=1;
+    gw_flag_trace("TRACE gpu_map on (palette, packing, soft shadows and water on the GPU)%c",10);
+    return 1;
+}
+/* upload of a band of rows [y0, y1] of a 1152-wide texture */
+static void gm_rows(GLuint t,int y0,int y1,GLenum fmt,const void *base,size_t bpp) {
+    if(y1<y0) return;
+    g_bloom.BindTexture(GL_TEXTURE_2D,t);
+    g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,y0,1152,y1-y0+1,fmt,GL_UNSIGNED_BYTE,(const uint8_t *)base+(size_t)y0*1152u*bpp);
+}
+/* once per new game frame (presentation thread, GL context current, unpack alignment 1): raw uploads and layer rotation;
+   the passes run at the start of the next composite (gm_passes) */
+static void gm_upload(const gw_interactive_visual_snapshot *v) {
+    {   GLuint t=g_bloom.canvas_tex[0]; g_bloom.canvas_tex[0]=g_bloom.canvas_tex[1]; g_bloom.canvas_tex[1]=g_bloom.canvas_tex[2]; g_bloom.canvas_tex[2]=t;
+        t=g_gm.aux[0]; g_gm.aux[0]=g_gm.aux[1]; g_gm.aux[1]=g_gm.aux[2]; g_gm.aux[2]=t; }
+    gm_rows(g_gm.t_idx,0,639,GL_RED,v->canvas,1u);
+    if(v->panel_bg_valid) {   /* panel art on x = 128..175: the map under it, as the CPU conversion does */
+        static uint8_t patch[48u*480u];
+        for(int y=0;y<480;y++) for(int x=0;x<48;x++) { const uint8_t k=v->canvas[(size_t)y*GW_CANVAS_W+128u+(unsigned)x];
+            patch[y*48+x]=v->canvas_panel[y*48+x]?v->panel_bg[y*48+x]:k; }
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_idx);
+        g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,128,0,48,480,GL_RED,GL_UNSIGNED_BYTE,patch);
+    }
+    /* ring terrain and heights: only the band of rows that changed since the last upload */
+    {   int a=-1,b=-1,c=-1,d=-1;
+        for(int y=0;y<640;y++) {
+            const size_t o=(size_t)y*1152u;
+            if(!g_gm.last_valid || memcmp(g_gm.ring_last+o,v->fx_ring+o,1152u)) { if(a<0) a=y; b=y; memcpy(g_gm.ring_last+o,v->fx_ring+o,1152u); }
+            if(v->th_valid && (!g_gm.last_valid || memcmp(g_gm.hgt_last+o,v->th_ring+o,1152u*2u))) { if(c<0) c=y; d=y; memcpy(g_gm.hgt_last+o,v->th_ring+o,1152u*2u); }
+        }
+        gm_rows(g_gm.t_ring,a,b,GL_RED,v->fx_ring,1u);
+        if(v->th_valid) gm_rows(g_gm.t_hgt,c,d,GL_RG,v->th_ring,2u);
+        g_gm.last_valid=1;
+    }
+    g_gm.shadows=g_ini_soft_shadows && v->spr_valid;
+    if(g_gm.shadows) { gm_rows(g_gm.t_msk,0,639,GL_RED,v->spr_mask,1u);
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_shade); g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,1,GL_RED,GL_UNSIGNED_BYTE,v->shade_t); }
+    if(!g_gm.kind_ok || memcmp(g_gm.kind_pal,v->palette,768)) {
+        uint8_t k8[256]; for(int k=0;k<256;k++) k8[k]=g_fx_kind[k];
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_kind); g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,1,GL_RED,GL_UNSIGNED_BYTE,k8);
+        memcpy(g_gm.kind_pal,v->palette,768); g_gm.kind_ok=1; }
+    g_gm.ring_x=v->ring_x; g_gm.ring_y=v->ring_y; g_gm.th=v->th_valid; g_gm.pending=1;
+}
+
 static int part_active(const gw_interactive_visual_snapshot *v);
 static int wt_init(void);
 static void wt_upload_kind(const uint8_t *pal);
 static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_video_surface *source,
                                int view_w,int panel_split) {
-    if(!(bloom_active(v) || ao_gpu_active(v) || part_active(v) || fx_active(v)) || !source) return;
+    if(!(bloom_active(v) || ao_gpu_active(v) || part_active(v) || fx_active(v) || depth_active(v)) || !source) return;
     if(!bloom_ensure_init(view_w)) return;
     bloom_classify(v->palette);
     fx_classify(v->palette);
@@ -10331,6 +10512,12 @@ static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_
     g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,view_w,480,GL_RED,GL_UNSIGNED_BYTE,g_bloom.hud_buf);
 
     /* 2. Upload canvas_tex[1] when zoom-out canvas is active */
+    if(v->canvas_valid && cv_ring_ok && gm_init()) {   /* GPU map composition: raw uploads, the passes run in the composite */
+        const uint64_t ts0=SDL_GetPerformanceCounter();
+        gm_upload(v);
+        g_ph[6]+=ph_ms(ts0);
+        g_bloom.canvas_ready=g_bloom.canvas_ready<2?g_bloom.canvas_ready+1:2;
+    } else
     if(v->canvas_valid && cv_ring_ok) {
         if(!g_bloom.canvas_tex[0] || !g_bloom.canvas_tex[1]) {
             bloom_alloc_rg_tex(&g_bloom.canvas_tex[0],GW_CANVAS_TEX_W,(int)GW_CANVAS_H);
@@ -10655,10 +10842,12 @@ static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
         const int idy=(g_bloom.canvas_ready>=2 && (g_interp_dx||g_interp_dy) && interp_a<1.0)?g_interp_dy:0;
         g_bloom.Uniform2f(texel_loc,1.0f/(float)GW_CANVAS_TEX_W,1.0f/(float)GW_CANVAS_H);
         if(interp_a<1.0 && (idx||idy) && !g_layers_cur_only) {
+            if(g_layers_aux) { g_bloom.ActiveTexture(GL_TEXTURE5); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.aux[0]); g_bloom.ActiveTexture(GL_TEXTURE0); }
             g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[0]);
             bloom_draw_map_rect((float)(128.0+(GW_CANVAS_MAPX0+interp_a*idx-ux)*z),(float)((interp_a*idy-uy)*z),
                                 tw,th,0.0f,0.0f,1.0f,1.0f,vw);
         }
+        if(g_layers_aux) { g_bloom.ActiveTexture(GL_TEXTURE5); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.aux[1]); g_bloom.ActiveTexture(GL_TEXTURE0); }
         g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[1]);
         bloom_draw_map_rect((float)(128.0+(GW_CANVAS_MAPX0-(1.0-interp_a)*idx-ux)*z),
                             (float)((-(1.0-interp_a)*idy-uy)*z),tw,th,0.0f,0.0f,1.0f,1.0f,vw);
@@ -10764,10 +10953,71 @@ static void wt_upload_kind(const uint8_t *pal) {
     g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,1,GL_RED,GL_UNSIGNED_BYTE,k8);
     memcpy(g_bloom.kind_pal,pal,768); g_bloom.kind_ok=1;
 }
+static void gm_target(GLuint tex) {
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_gm.fbo);
+    g_bloom.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,tex,0);
+    g_bloom.Viewport(0,0,GW_CANVAS_TEX_W,(int)GW_CANVAS_H);
+}
+static void gm_bind(int unit,GLuint tex,GLint loc) {
+    g_bloom.ActiveTexture(GL_TEXTURE0+(GLenum)unit); g_bloom.BindTexture(GL_TEXTURE_2D,tex); g_bloom.Uniform1i(loc,unit);
+}
+/* inside the composite (state saved, quad buffer bound, scissor and blend off): the per-game-frame passes */
+static void gm_passes(void) {
+    if(!g_gm.pending) return;
+    const float ox=(float)g_gm.ring_x,oy=(float)g_gm.ring_y;
+    gm_target(g_bloom.canvas_tex[1]);
+    g_bloom.UseProgram(g_gm.p_pack);
+    gm_bind(0,g_gm.t_idx,g_gm.pk_idx); gm_bind(1,g_gm.t_ring,g_gm.pk_ring); gm_bind(2,g_gm.t_hgt,g_gm.pk_hgt); gm_bind(3,g_gm.t_kind,g_gm.pk_kind);
+    g_bloom.Uniform2f(g_gm.pk_off,ox,oy); g_bloom.Uniform1f(g_gm.pk_th,g_gm.th?1.0f:0.0f);
+    bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+    if(g_gm.shadows) {
+        gm_target(g_gm.tmp1);
+        g_bloom.UseProgram(g_gm.p_cand);
+        gm_bind(0,g_gm.t_idx,g_gm.cd_idx); gm_bind(1,g_gm.t_ring,g_gm.cd_ring); gm_bind(2,g_gm.t_msk,g_gm.cd_msk);
+        gm_bind(3,g_gm.t_shade,g_gm.cd_shade); gm_bind(4,g_bloom.lut_tex,g_gm.cd_lut); gm_bind(5,g_gm.t_kind,g_gm.cd_kind);
+        g_bloom.Uniform2f(g_gm.cd_off,ox,oy);
+        bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+        gm_target(g_gm.tmp2);
+        g_bloom.UseProgram(g_gm.p_blurh); gm_bind(0,g_gm.tmp1,g_gm.bh_src);
+        bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+    }
+    gm_target(g_gm.aux[1]);
+    g_bloom.UseProgram(g_gm.p_blurv);
+    gm_bind(0,g_gm.tmp2,g_gm.bv_src); gm_bind(1,g_gm.tmp1,g_gm.bv_cand); gm_bind(2,g_gm.t_ring,g_gm.bv_ring);
+    g_bloom.Uniform2f(g_gm.bv_off,ox,oy); g_bloom.Uniform1f(g_gm.bv_on,g_gm.shadows?1.0f:0.0f);
+    bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
+    g_gm.pending=0; g_gm.have=g_gm.have<3?g_gm.have+1:3;
+}
+/* every presented frame: the map colour of both layers into a buffer the size of the scaled frame */
+static int gm_map(const gw_present_geo *geo,double interp_a) {
+    if(g_gm.map_w!=geo->tw || g_gm.map_h!=geo->th || !g_gm.map_fbo) {
+        if(g_gm.map_fbo) { g_bloom.DeleteFramebuffers(1,&g_gm.map_fbo); g_bloom.DeleteTextures(1,&g_gm.map_tex); g_gm.map_fbo=g_gm.map_tex=0; }
+        if(!bloom_make_fbo(&g_gm.map_fbo,&g_gm.map_tex,geo->tw,geo->th,GL_RGBA8)) { g_gm.failed=1; return 0; }
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.map_tex);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+        g_gm.map_w=geo->tw; g_gm.map_h=geo->th;
+    }
+    const int vw=g_present_w;
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_gm.map_fbo);
+    g_bloom.Viewport(0,0,g_gm.map_w,g_gm.map_h);
+    g_bloom.Disable(GL_SCISSOR_TEST);
+    g_bloom.ClearColor(0.0f,0.0f,0.0f,1.0f); g_bloom.Clear(GL_COLOR_BUFFER_BIT);
+    g_bloom.Enable(GL_SCISSOR_TEST); g_bloom.Scissor((int)(128.0*g_gm.map_w/vw),0,g_gm.map_w,g_gm.map_h);
+    g_bloom.UseProgram(g_gm.p_map);
+    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_gm.mp_lut,1);
+    g_bloom.Uniform1i(g_gm.mp_aux,5);
+    g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.Uniform1i(g_gm.mp_pk,0);
+    GLint dummy=-1;
+    g_layers_aux=1; bloom_draw_map_layers(interp_a,dummy); g_layers_aux=0;
+    g_bloom.Disable(GL_SCISSOR_TEST);
+    return 1;
+}
+
 static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SDL_Texture *scale_target,
                                       const gw_present_geo *geo,double interp_a) {
     const int bloom_on=bloom_active(v),ao_on0=ao_gpu_active(v),part_on=part_active(v),wt_on0=fx_active(v) && !g_bloom.wt_failed;
-    const int active=(bloom_on || ao_on0 || part_on || wt_on0) && bloom_ensure_init(g_present_w) && g_bloom.view_tex[1];
+    const int active=(bloom_on || ao_on0 || part_on || wt_on0 || g_gm_frame || g_gm.pending) && bloom_ensure_init(g_present_w) && g_bloom.view_tex[1];
     const int ao_on=active && ao_on0 && g_bloom.fbo_ao;
     {   static int last_ao=-1; if(ao_on!=last_ao) { last_ao=ao_on; gw_flag_trace("TRACE terrain_ao gpu=%d strength=%.2f%c",ao_on,(double)g_ini_terrain_ao_strength,10); } }
     if(active!=g_bloom.last_active) {
@@ -10809,6 +11059,8 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,6*(GLsizei)sizeof(float),(const void *)(2*sizeof(float)));
     g_bloom.VertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,6*(GLsizei)sizeof(float),(const void *)(4*sizeof(float)));
     g_bloom.Disable(GL_BLEND);
+    g_bloom.Disable(GL_SCISSOR_TEST);
+    gm_passes();   /* GPU map composition: packing and soft shadows of a new game frame */
 
     if(bloom_on) {
     /* Pass 1: Emissive Extraction -> fbo_half_a */
@@ -10913,6 +11165,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
         g_layers_cur_only=1; bloom_draw_map_layers(interp_a,g_bloom.u_wt_texel); g_layers_cur_only=0;
         g_bloom.Disable(GL_SCISSOR_TEST);
     }
+    const int map_on=g_gm_frame && gm_map(geo,interp_a);
     /* Pass 3: Soft-Shoulder Additive Composition onto FBO 0 */
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,0);
     g_bloom.Viewport(geo->dst.x,geo->oh-geo->dst.y-geo->dst.h,geo->dst.w,geo->dst.h);
@@ -10930,6 +11183,9 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.ActiveTexture(GL_TEXTURE3); g_bloom.BindTexture(GL_TEXTURE_2D,ao_on?g_bloom.tex_ao:0u);
     g_bloom.Uniform1i(g_bloom.u_comp_ao,3);
     g_bloom.Uniform1f(g_bloom.u_comp_ao_on,ao_on?1.0f:0.0f);
+    g_bloom.ActiveTexture(GL_TEXTURE6); g_bloom.BindTexture(GL_TEXTURE_2D,map_on?g_gm.map_tex:0u);
+    g_bloom.Uniform1i(g_bloom.u_comp_map,6);
+    g_bloom.Uniform1f(g_bloom.u_comp_map_on,map_on?1.0f:0.0f);
     g_bloom.ActiveTexture(GL_TEXTURE4); g_bloom.BindTexture(GL_TEXTURE_2D,wt_on?g_bloom.tex_wt:0u);
     g_bloom.Uniform1i(g_bloom.u_comp_wt,4);
     g_bloom.Uniform1f(g_bloom.u_comp_wt_on,wt_on?1.0f:0.0f);
@@ -10981,6 +11237,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                                        const char *capture_path,int upload_texture,
                                        const gw_interactive_visual_snapshot *visual) {
     const char *terrain_capture_path=capture_path;
+    /* this frame's zoomed-out map comes from the GPU composition (decided once, before any conversion) */
+    g_gm_frame=visual && gm_frame_ok(visual) && g_zoom<0.9999 &&
+               (bloom_active(visual) || ao_gpu_active(visual) || part_active(visual) || fx_active(visual) || depth_active(visual));
     if(!terrain_capture_path && g_terrain_modern_backend && !g_terrain_capture_done)
         terrain_capture_path=getenv("GW_TERRAIN_CAPTURE_FRAME");
     {   const int pitch=(visual && visual->wscreen_pitch==864u)?864:640;
@@ -11331,7 +11590,8 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 {   const uint8_t *fs; int fp,fr;
                     if(visual && !g_terrain_modern_backend && ((fx_active(visual) && !g_wt_ready) || depth_active(visual)) && g_canvas_tex_ready>=1 &&
                        fx_source(visual,&fs,&fp,&fr)) cv_conv_w=48; }
-                if(g_canvas_tex[0] && g_canvas_tex[1]) {
+                if(g_gm_frame) g_canvas_tex_ready=2;   /* the GPU composes the map: the SDL canvas textures are not drawn */
+                else if(g_canvas_tex[0] && g_canvas_tex[1]) {
                     /* [0] previous, [1] current, [2] spare: the new current one is the one drawn two game frames ago,
                        so its upload never waits for the GPU still drawing the last frame */
                     SDL_Texture *t=g_canvas_tex[0]; g_canvas_tex[0]=g_canvas_tex[1];
@@ -11556,8 +11816,10 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         SDL_RenderFillRect(g_ifclevel_demo_renderer,&map_clip);
         SDL_RenderSetClipRect(g_ifclevel_demo_renderer,&map_clip);
         int ok=1;
-        if(a<1.0) ok=SDL_RenderCopyF(g_ifclevel_demo_renderer,g_canvas_tex[0],NULL,&prev_dst)==0;
-        ok=ok && SDL_RenderCopyF(g_ifclevel_demo_renderer,g_canvas_tex[1],NULL,&cur_dst)==0;
+        if(!g_gm_frame) {
+            if(a<1.0) ok=SDL_RenderCopyF(g_ifclevel_demo_renderer,g_canvas_tex[0],NULL,&prev_dst)==0;
+            ok=ok && SDL_RenderCopyF(g_ifclevel_demo_renderer,g_canvas_tex[1],NULL,&cur_dst)==0;
+        }
         SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
         if(g_hud_cur>=0 && g_hud_tex[g_hud_cur]) ok=ok && SDL_RenderCopy(g_ifclevel_demo_renderer,g_hud_tex[g_hud_cur],NULL,&hud_dst)==0;
         else ok=ok && SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&hud_src,&hud_dst)==0;
