@@ -9,6 +9,7 @@
 #include "gw_cdda_audio.h"
 #include "gw_vsb16.h"
 #include "gw_terrain_mesh_projection.h"
+#include "gw_terrain_gpu_fixture.h"
 #include "../tools/terrain_renderer/gw_terrain_renderer.h"
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
@@ -16934,6 +16935,10 @@ static uint8_t g_th_have[1152u*640u];       /* 1 where a terrain triangle wrote 
 static uint8_t g_th_rowhave[640];           /* 1 for ring rows a terrain triangle has written */
 static int g_th_force=-1;
 static int g_terrain_mesh_capture_enabled;
+static const char *g_terrain_gpu_fixture_path;
+static gw_terrain_gpu_triangle *g_terrain_gpu_fixture;
+static gw_terrain_gpu_fixture_header g_terrain_gpu_fixture_header;
+static uint32_t g_terrain_gpu_fixture_ring;
 /* the vertex records E19C0 receives copy y (node +0) and the light (node +4) from 12-byte mesh nodes; the height is
    recorded per node address when the node's y is stored, and a vertex takes the height of the node that holds exactly
    its y and light at submission time */
@@ -17146,6 +17151,60 @@ static void terrain_probe_prim(uint32_t callsite,uint32_t va,uint32_t vb,uint32_
 /* Export the actual E19C0 inputs for the two terrain producers. The projected
    coordinates, UVs and light are measured at submission, before clipping;
    texture and clip state are read from the same live rasterizer globals. */
+static void terrain_gpu_record(const uint8_t *ds,const uint32_t ptr[3],
+                               const gw_terrain_mesh_window *window,uint32_t ring) {
+    if(!g_terrain_gpu_fixture_path || window->width!=GW_CANVAS_W ||
+       window->height!=GW_CANVAS_H || window->x!=0 || window->y!=-1) return;
+    const uint32_t texture=*(const uint32_t *)(ds+0x002DA108u);
+    const uint32_t turn=*(const uint32_t *)(guest_memory+0x002F1472u);
+    if(!g_terrain_gpu_fixture) {
+        g_terrain_gpu_fixture=(gw_terrain_gpu_triangle *)malloc(
+            GW_TERRAIN_GPU_FIXTURE_CAP*sizeof *g_terrain_gpu_fixture);
+        if(!g_terrain_gpu_fixture) { g_terrain_gpu_fixture_path=NULL; return; }
+        g_terrain_gpu_fixture_header=(gw_terrain_gpu_fixture_header){
+            GW_TERRAIN_GPU_FIXTURE_MAGIC,GW_CANVAS_W,GW_CANVAS_H,0,turn,
+            window->x,window->y,*(const int32_t *)(ds+0x0035EAB4u)};
+        g_terrain_gpu_fixture_ring=ring;
+    }
+    gw_terrain_gpu_fixture_header *header=&g_terrain_gpu_fixture_header;
+    if(header->turn!=turn || g_terrain_gpu_fixture_ring!=ring ||
+       header->count==GW_TERRAIN_GPU_FIXTURE_CAP ||
+       texture>GUEST_LIMIT-g_ds_base-(31u*256u+32u)) {
+        g_terrain_gpu_fixture_path=NULL;
+        free(g_terrain_gpu_fixture); g_terrain_gpu_fixture=NULL;
+        return;
+    }
+    gw_terrain_gpu_triangle *triangle=&g_terrain_gpu_fixture[header->count++];
+    triangle->mode=ds[0x002DCE25u];
+    for(unsigned i=0;i<3u;i++) {
+        gw_terrain_gpu_vertex *v=&triangle->vertex[i];
+        memcpy(v,ds+ptr[i],5u*sizeof(int32_t));
+        v->height=INT32_MIN;
+        for(unsigned k=0;k<8u && k<g_th_rec_n;k++) {
+            if(g_th_rec[k].addr==g_ds_base+ptr[i] && g_th_rec[k].mesh_h!=INT32_MIN) {
+                v->height=gw_terrain_mesh_height_step((int16_t)g_th_rec[k].mesh_h);
+                break;
+            }
+        }
+    }
+    for(unsigned y=0;y<32u;y++) memcpy(triangle->texels+y*32u,ds+texture+y*256u,32u);
+}
+static void terrain_gpu_publish(const uint8_t *memory,uint32_t ring) {
+    if(!g_terrain_gpu_fixture_path || !g_terrain_gpu_fixture ||
+       g_terrain_gpu_fixture_ring!=ring) return;
+    const gw_terrain_gpu_fixture_header *h=&g_terrain_gpu_fixture_header;
+    FILE *f=fopen(g_terrain_gpu_fixture_path,"wb");
+    if(f) {
+        const int ok=fwrite(h,sizeof *h,1,f)==1 &&
+            fwrite(vga_dac,1,768u,f)==768u &&
+            fwrite(memory+0x00362A54u,1,64u*256u,f)==64u*256u &&
+            fwrite(memory+ring,1,GW_CANVAS_W*GW_CANVAS_H,f)==GW_CANVAS_W*GW_CANVAS_H &&
+            fwrite(g_terrain_gpu_fixture,sizeof *g_terrain_gpu_fixture,h->count,f)==h->count;
+        if(fclose(f)==0 && ok) gw_flag_trace("TRACE terrain GPU fixture count=%u turn=%u%c",h->count,h->turn,10);
+    }
+    free(g_terrain_gpu_fixture); g_terrain_gpu_fixture=NULL;
+    g_terrain_gpu_fixture_path=NULL;
+}
 static void terrain_mesh_capture(uint32_t site,uint32_t va,uint32_t vb,uint32_t vc) {
     static FILE *output;
     static unsigned count;
@@ -17163,7 +17222,7 @@ static void terrain_mesh_capture(uint32_t site,uint32_t va,uint32_t vb,uint32_t 
         if(output) fputs("turn\tsite\tring_x\tring_y\tcanvas_w\tcanvas_h\tclip_x\tclip_y\tclip_w\tclip_h\ttexture_guest\tmode\theight_scale\t"
             "x0\ty0\tu0\tv0\tlight0\tz0\tx1\ty1\tu1\tv1\tlight1\tz1\tx2\ty2\tu2\tv2\tlight2\tz2\n",output);
     }
-    if(!output || g_ds_base>GUEST_LIMIT-0x0035EAB8u) return;
+    if((!output && !g_terrain_gpu_fixture_path) || g_ds_base>GUEST_LIMIT-0x0035EAB8u) return;
     const uint32_t w=*(const uint32_t *)(m+0x00376A78u);
     const uint32_t h=*(const uint32_t *)(m+0x00376A7Cu);
     const uint32_t ring=*(const uint32_t *)(m+0x002EECA0u);
@@ -17178,6 +17237,8 @@ static void terrain_mesh_capture(uint32_t site,uint32_t va,uint32_t vb,uint32_t 
            *(const uint32_t *)(ds+0x002DA114u),*(const uint32_t *)(ds+0x002DA118u))) return;
     const uint32_t ptr[3]={va,vb,vc};
     for(unsigned i=0;i<3u;i++) if(ptr[i]>GUEST_LIMIT-g_ds_base-20u) return;
+    terrain_gpu_record(ds,ptr,&window,ring);
+    if(!output) return;
     fprintf(output,"%u\t%05x\t%d\t%d\t%u\t%u\t%d\t%d\t%u\t%u\t%08x\t%u\t%d",
         *(const uint32_t *)(m+0x002F1472u),site,
         *(const int16_t *)(m+0x00346D78u),*(const int16_t *)(m+0x00346D7Au),w,h,
@@ -20254,6 +20315,8 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         const int in_ifc_main=*(const uint32_t *)(memory+0x002EF7E8u)==0x0035FE9Au && !*(const uint32_t *)(memory+0x002EF7ECu) &&
             *(const uint16_t *)(memory+map_guest+0x1Du)==128u;
         g_interactive_published_snapshot.in_mission=in_ifc_main;
+        if(canvas && in_ifc_main && ring && ring<=GUEST_LIMIT-GW_CANVAS_W*GW_CANVAS_H)
+            terrain_gpu_publish(memory,ring);
         if(g_cli_play_mode) write_probe_frame(memory,in_ifc_main);
         g_interactive_published_snapshot.spr_valid=0;
         g_interactive_published_snapshot.ev_ship_n=g_interactive_published_snapshot.ev_beam_n=0;
@@ -22563,7 +22626,9 @@ int main(int argc,char **argv) {
     if(g_cli_play_mode) {
         play_mode_sanitize_environment();
         const char *capture=getenv("GW_TERRAIN3D_CAPTURE");
-        g_terrain_mesh_capture_enabled=capture && *capture;
+        const char *fixture=getenv("GW_TERRAIN3D_FIXTURE");
+        g_terrain_gpu_fixture_path=fixture && *fixture ? fixture : NULL;
+        g_terrain_mesh_capture_enabled=(capture && *capture) || g_terrain_gpu_fixture_path;
     }
     int fast_launch=0;
     for(int ai=4;ai<argc;ai++) {
