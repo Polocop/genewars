@@ -10,6 +10,7 @@
 #include "gw_vsb16.h"
 #include "gw_terrain_mesh_projection.h"
 #include "gw_terrain_gpu_fixture.h"
+#include "gw_terrain_visible_mesh.h"
 #include "../tools/terrain_renderer/gw_terrain_renderer.h"
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
@@ -7926,6 +7927,7 @@ typedef struct gw_interactive_visual_snapshot {
     uint8_t canvas[1152u*640u];
     uint8_t canvas_panel[480u*48u];  /* x=128..175 of the canvas: 1 = panel art (differs from the map ring there) */
     int canvas_valid;
+    gw_terrain_mesh_draw terrain_mesh;
     /* water_effects: the map ring at publication (terrain only, no Things), to tell ground pixels from sprites */
     uint8_t fx_ring[1152u*640u];
     uint32_t fx_ring_w,fx_ring_h;
@@ -8481,6 +8483,7 @@ static char g_ini_data_dir[600];
 static unsigned g_ini_fps;   /* gwrecomp.ini fps = N (play mode) */
 static char g_ini_path_used[MAX_PATH];
 static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launcher=1,g_ini_last_mission=1;
+static int g_terrain_3d=1;  /* host presentation thread only */
 static int g_ini_clean_horizon=1;   /* clean_horizon: drop 1-pixel horizon slivers from the presented frame */
 static int g_ini_water_effects=1;   /* water_effects: animated water ripples/caustics and GOOP highlights (presented frame only) */
 static int g_ini_enhanced_audio=1;  /* enhanced_audio: positional sound fitted to the view, SFX pitch variation, CD-DA ducking */
@@ -8580,6 +8583,7 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"launcher")) g_ini_launcher=atoi(val)!=0;
         else if(!strcmp(key,"last_mission")) { const int v=atoi(val); if(v>=1 && v<=24) g_ini_last_mission=v; }
         else if(!strcmp(key,"cd_cue")) snprintf(g_ini_cd_cue,sizeof g_ini_cd_cue,"%s",val);
+        else if(!strcmp(key,"terrain_3d")) g_terrain_3d=atoi(val)!=0;
         else if(!strcmp(key,"clean_horizon")) g_ini_clean_horizon=atoi(val)!=0;
         else if(!strcmp(key,"water_effects")) g_ini_water_effects=atoi(val)!=0;
         else if(!strcmp(key,"enhanced_audio")) g_ini_enhanced_audio=atoi(val)!=0;
@@ -8803,13 +8807,22 @@ static LONG host_pan_bit(SDL_Keycode k) {
 }
 /* Host controls in play mode. Returns 1 when the event is consumed (never reaches the game). */
 static int host_controls_event(const SDL_Event *ev) {
+    static int mesh_shortcut_down;
     const int map=(int)InterlockedCompareExchange(&g_live_ifc_map,0,0);
     if(ev->type==SDL_WINDOWEVENT && ev->window.event==SDL_WINDOWEVENT_FOCUS_LOST) {
+        mesh_shortcut_down=0;
         InterlockedExchange(&g_pan_hold,0); InterlockedExchange(&g_turbo_tab,0); g_mid_drag=0; return 0;
     }
     if(ev->type==SDL_KEYDOWN || ev->type==SDL_KEYUP) {
         const SDL_Keycode k=ev->key.keysym.sym; const int down=ev->type==SDL_KEYDOWN;
         const LONG bit=g_ini_camera_keys?host_pan_bit(k):0;
+        if(k==SDLK_F9 && (mesh_shortcut_down || (map && down && (ev->key.keysym.mod&KMOD_CTRL)))) {
+            if(down && !mesh_shortcut_down && !ev->key.repeat) {
+                g_terrain_3d=!g_terrain_3d;
+                gw_flag_trace("TRACE host_controls terrain_3d=%d%c",g_terrain_3d,10);
+            }
+            mesh_shortcut_down=down; return 1;
+        }
         if(ev->key.repeat) return k==SDLK_F7 || k==SDLK_F8 || k==SDLK_F10 || (map && (k==SDLK_TAB || k==SDLK_HOME || bit));
         if(k==SDLK_F7) {
             if(down) { display_filter_load(); g_filter_mode=(g_filter_mode+1)%3; display_filter_save();
@@ -10303,15 +10316,16 @@ static void bu_canvas_rows(void *cp,int y0,int y1) {
 #define GL_RG8 0x822B
 #endif
 static struct {
-    int ready,failed,have,pending,shadows,th,msk_zero;
+    int ready,failed,have,pending,shadows,th,msk_zero,mesh_enabled,mesh_applied;
+    const gw_terrain_mesh_draw *mesh;
     GLuint t_idx,t_ring,t_hgt,t_msk,t_shade,t_kind,tmp1,tmp2,fbo,map_fbo,map_tex;
     GLuint aux[3];
     int map_w,map_h,ring_x,ring_y,kind_ok;
     GLuint p_pack,p_cand,p_blurh,p_blurv,p_map,p_hud;
     GLint hu_idx,hu_lut;
-    GLint pk_idx,pk_ring,pk_hgt,pk_kind,pk_off,pk_th;
+    GLint pk_idx,pk_ring,pk_hgt,pk_kind,pk_off,pk_th,pk_mesh,pk_mesh_on,pk_mask;
     GLint cd_idx,cd_ring,cd_msk,cd_shade,cd_lut,cd_kind,cd_off;
-    GLint bh_src,bv_src,bv_cand,bv_ring,bv_off,bv_on;
+    GLint bh_src,bv_src,bv_cand,bv_ring,bv_off,bv_on,bv_mesh,bv_mesh_on;
     GLint mp_pk,mp_aux,mp_lut;
     uint8_t kind_pal[768];
     uint8_t *ring_last; int16_t *hgt_last; int last_valid;
@@ -10330,6 +10344,7 @@ static GLuint gm_tex(int w,int h,GLenum ifmt,GLenum fmt) {
     g_bloom.TexImage2D(GL_TEXTURE_2D,0,(GLint)ifmt,w,h,0,fmt,GL_UNSIGNED_BYTE,NULL);
     return t;
 }
+#include "gw_terrain_mesh_gl.h"
 #define GM_GLSL_COMMON \
     "#version 120\n" \
     "float rd(sampler2D t,vec2 p,vec2 sz){ return floor(texture2D(t,(p+0.5)/sz).r*255.0+0.5); }\n" \
@@ -10345,7 +10360,7 @@ static int gm_init(void) {
     /* packing: one texel per canvas pixel at canvas x = 128 + texel x (the layer texture's own layout) */
     static const char *fs_pack= GM_GLSL_COMMON
         "uniform sampler2D u_idx; uniform sampler2D u_ring; uniform sampler2D u_hgt; uniform sampler2D u_kind;\n"
-        "uniform vec2 u_off; uniform float u_th;\n"
+        "uniform vec2 u_off; uniform float u_th; uniform sampler2D u_mesh, u_mask; uniform float u_mesh_on;\n"
         "void main(){\n"
         "  vec2 S=vec2(1152.0,640.0); vec2 tp=floor(gl_FragCoord.xy); float cx=tp.x+128.0, y=tp.y;\n"
         "  float c=rd(u_idx,vec2(cx,y),S);\n"
@@ -10354,6 +10369,10 @@ static int gm_init(void) {
         "  float hy=(y>638.5)?mod(ry-1.0,640.0):ry;\n"
         "  vec2 hh=texture2D(u_hgt,(vec2(128.0+rx,hy)+0.5)/S).rg; float lo=floor(hh.r*255.0+0.5), hi=floor(hh.g*255.0+0.5);\n"
         "  float h=(hi>=128.0)?0.0:min(lo+256.0*hi,4095.0); h*=u_th;\n"
+        "  if(u_mesh_on>0.5 && gnd>0.5 && rd(u_mask,vec2(cx,y),S)<0.5){\n"
+        "    vec2 m=texture2D(u_mesh,(vec2(cx,y)+0.5)/S).rg;\n"
+        "    if(m.g>0.5) c=floor(m.r*255.0+0.5);\n"
+        "  }\n"
         "  float G=1.0+2.0*gnd+16.0*mod(h,16.0), B=floor(h/16.0);\n"
         "  float A=(u_th>0.5 && gnd>0.5 && tp.x>=48.0 && k256(u_kind,c)<0.5)?255.0:0.0;\n"
         "  gl_FragColor=vec4(c,G,B,A)/255.0;\n"
@@ -10382,12 +10401,16 @@ static int gm_init(void) {
         "          2.0*texture2D(u_src,(p+vec2(1.0,0.0))/S).r+texture2D(u_src,(p+vec2(2.0,0.0))/S).r;\n"
         "  gl_FragColor=vec4(v/9.0); }\n";
     static const char *fs_blurv= GM_GLSL_COMMON
-        "uniform sampler2D u_src; uniform sampler2D u_cand; uniform sampler2D u_ring; uniform vec2 u_off; uniform float u_on;\n"
+        "uniform sampler2D u_src; uniform sampler2D u_cand; uniform sampler2D u_ring, u_mesh; uniform vec2 u_off; uniform float u_on, u_mesh_on;\n"
         "void main(){ vec2 S=vec2(1024.0,640.0); vec2 tp=floor(gl_FragCoord.xy); vec2 p=tp+0.5;\n"
         "  float v=texture2D(u_src,(p+vec2(0.0,-2.0))/S).r+2.0*texture2D(u_src,(p+vec2(0.0,-1.0))/S).r+3.0*texture2D(u_src,p/S).r+\n"
         "          2.0*texture2D(u_src,(p+vec2(0.0,1.0))/S).r+texture2D(u_src,(p+vec2(0.0,2.0))/S).r;\n"
         "  float rx=mod(tp.x+(u_off.x-128.0),1024.0), ry=mod(tp.y+u_off.y,640.0);\n"
         "  float g=rd(u_ring,vec2(128.0+rx,ry),vec2(1152.0,640.0));\n"
+        "  if(u_mesh_on>0.5){\n"
+        "    vec2 mesh=texture2D(u_mesh,(tp+vec2(128.5,0.5))/vec2(1152.0,640.0)).rg;\n"
+        "    if(mesh.g>0.5) g=floor(mesh.r*255.0+0.5);\n"
+        "  }\n"
         "  float cd=texture2D(u_cand,p/S).r;\n"
         "  gl_FragColor=vec4(g/255.0,u_on*v/9.0,u_on*cd,1.0); }\n";
     /* map colour of a layer: palette, and the soft shadow redraw from the terrain */
@@ -10415,10 +10438,12 @@ static int gm_init(void) {
     #define GMU(prog,name) g_bloom.GetUniformLocation(g_gm.prog,name)
     g_gm.pk_idx=GMU(p_pack,"u_idx"); g_gm.pk_ring=GMU(p_pack,"u_ring"); g_gm.pk_hgt=GMU(p_pack,"u_hgt"); g_gm.pk_kind=GMU(p_pack,"u_kind");
     g_gm.pk_off=GMU(p_pack,"u_off"); g_gm.pk_th=GMU(p_pack,"u_th");
+    g_gm.pk_mesh=GMU(p_pack,"u_mesh"); g_gm.pk_mesh_on=GMU(p_pack,"u_mesh_on"); g_gm.pk_mask=GMU(p_pack,"u_mask");
     g_gm.cd_idx=GMU(p_cand,"u_idx"); g_gm.cd_ring=GMU(p_cand,"u_ring"); g_gm.cd_msk=GMU(p_cand,"u_msk"); g_gm.cd_shade=GMU(p_cand,"u_shade");
     g_gm.cd_lut=GMU(p_cand,"u_lut"); g_gm.cd_kind=GMU(p_cand,"u_kind"); g_gm.cd_off=GMU(p_cand,"u_off");
     g_gm.bh_src=GMU(p_blurh,"u_src");
     g_gm.bv_src=GMU(p_blurv,"u_src"); g_gm.bv_cand=GMU(p_blurv,"u_cand"); g_gm.bv_ring=GMU(p_blurv,"u_ring"); g_gm.bv_off=GMU(p_blurv,"u_off"); g_gm.bv_on=GMU(p_blurv,"u_on");
+    g_gm.bv_mesh=GMU(p_blurv,"u_mesh"); g_gm.bv_mesh_on=GMU(p_blurv,"u_mesh_on");
     g_gm.mp_pk=GMU(p_map,"u_pk"); g_gm.mp_aux=GMU(p_map,"u_aux"); g_gm.mp_lut=GMU(p_map,"u_lut");
     g_gm.hu_idx=GMU(p_hud,"u_idx"); g_gm.hu_lut=GMU(p_hud,"u_lut");
     #undef GMU
@@ -10464,7 +10489,9 @@ static void gm_upload(const gw_interactive_visual_snapshot *v) {
         g_gm.last_valid=1;
     }
     g_gm.shadows=g_ini_soft_shadows && v->spr_valid;
-    if(g_gm.shadows) { gm_rows(g_gm.t_msk,0,639,GL_RED,v->spr_mask,1u);
+    g_gm.mesh=(v->spr_valid && v->terrain_mesh.count)?&v->terrain_mesh:NULL;
+    if(g_gm.shadows || g_gm.mesh) gm_rows(g_gm.t_msk,0,639,GL_RED,v->spr_mask,1u);
+    if(g_gm.shadows) {
         g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_shade); g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,1,GL_RED,GL_UNSIGNED_BYTE,v->shade_t); }
     if(!g_gm.kind_ok || memcmp(g_gm.kind_pal,v->palette,768)) {
         uint8_t k8[256]; for(int k=0;k<256;k++) k8[k]=g_fx_kind[k];
@@ -10478,7 +10505,9 @@ static int wt_init(void);
 static void wt_upload_kind(const uint8_t *pal);
 static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_video_surface *source,
                                int view_w,int panel_split) {
-    if(!(bloom_active(v) || ao_gpu_active(v) || part_active(v) || fx_active(v) || depth_active(v)) || !source) return;
+    if(!source || !v) return;
+    const int mesh=v->in_mission && v->terrain_mesh.count;
+    if(!(mesh || bloom_active(v) || ao_gpu_active(v) || part_active(v) || fx_active(v) || depth_active(v))) return;
     if(!bloom_ensure_init(view_w)) return;
     bloom_classify(v->palette);
     fx_classify(v->palette);
@@ -10977,12 +11006,20 @@ static void gm_bind(int unit,GLuint tex,GLint loc) {
     g_bloom.ActiveTexture(GL_TEXTURE0+(GLenum)unit); g_bloom.BindTexture(GL_TEXTURE_2D,tex); g_bloom.Uniform1i(loc,unit);
 }
 /* inside the composite (state saved, quad buffer bound, scissor and blend off): the per-game-frame passes */
-static void gm_passes(void) {
-    if(!g_gm.pending) return;
+static void gm_passes(int in_mission) {
+    if(!in_mission) return;
+    const int desired=g_terrain_3d && g_gm.mesh && !g_gl_mesh.failed;
+    if(!g_gm.pending && desired==g_gm.mesh_enabled) return;
+    const int toggled=desired!=g_gm.mesh_enabled;
+    g_gm.mesh_enabled=desired;
+    g_gm.mesh_applied=desired && terrain_gl_render(g_gm.mesh);
+    if(toggled) g_bloom.canvas_ready=1; /* previous layer used the other renderer */
     const float ox=(float)g_gm.ring_x,oy=(float)g_gm.ring_y;
     gm_target(g_bloom.canvas_tex[1]);
     g_bloom.UseProgram(g_gm.p_pack);
     gm_bind(0,g_gm.t_idx,g_gm.pk_idx); gm_bind(1,g_gm.t_ring,g_gm.pk_ring); gm_bind(2,g_gm.t_hgt,g_gm.pk_hgt); gm_bind(3,g_gm.t_kind,g_gm.pk_kind);
+    gm_bind(4,g_gm.mesh_applied?g_gl_mesh.color:g_gm.t_kind,g_gm.pk_mesh); gm_bind(5,g_gm.t_msk,g_gm.pk_mask);
+    g_bloom.Uniform1f(g_gm.pk_mesh_on,g_gm.mesh_applied?1.0f:0.0f);
     g_bloom.Uniform2f(g_gm.pk_off,ox,oy); g_bloom.Uniform1f(g_gm.pk_th,g_gm.th?1.0f:0.0f);
     bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
     if(g_gm.shadows) {
@@ -10999,6 +11036,8 @@ static void gm_passes(void) {
     gm_target(g_gm.aux[1]);
     g_bloom.UseProgram(g_gm.p_blurv);
     gm_bind(0,g_gm.tmp2,g_gm.bv_src); gm_bind(1,g_gm.tmp1,g_gm.bv_cand); gm_bind(2,g_gm.t_ring,g_gm.bv_ring);
+    gm_bind(3,g_gm.mesh_applied?g_gl_mesh.color:g_gm.t_kind,g_gm.bv_mesh);
+    g_bloom.Uniform1f(g_gm.bv_mesh_on,g_gm.mesh_applied?1.0f:0.0f);
     g_bloom.Uniform2f(g_gm.bv_off,ox,oy); g_bloom.Uniform1f(g_gm.bv_on,g_gm.shadows?1.0f:0.0f);
     bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
     g_bloom.ActiveTexture(GL_TEXTURE0);
@@ -11081,7 +11120,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.VertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,6*(GLsizei)sizeof(float),(const void *)(4*sizeof(float)));
     g_bloom.Disable(GL_BLEND);
     g_bloom.Disable(GL_SCISSOR_TEST);
-    gm_passes();   /* GPU map composition: packing and soft shadows of a new game frame */
+    gm_passes(v && v->valid && v->in_mission && v->canvas_valid);   /* GPU map composition: packing and soft shadows of a new game frame */
 
     if(bloom_on) {
     /* Pass 1: Emissive Extraction -> fbo_half_a */
@@ -17189,6 +17228,35 @@ static void terrain_gpu_record(const uint8_t *ds,const uint32_t ptr[3],
     }
     for(unsigned y=0;y<32u;y++) memcpy(triangle->texels+y*32u,ds+texture+y*256u,32u);
 }
+static void terrain_visible_fixture(const uint8_t *memory,uint32_t ring,
+                                    gw_terrain_gpu_fixture_header header) {
+    gw_terrain_visible_triangle *mesh=malloc(GW_TERRAIN_GPU_FIXTURE_CAP*sizeof *mesh);
+    if(!mesh) return;
+    header.count=(uint32_t)gw_terrain_build_visible(memory,header.width,header.height,
+                                                   mesh,GW_TERRAIN_GPU_FIXTURE_CAP);
+    if(!header.count) { free(mesh); return; }
+    char path[1024];
+    const int length=snprintf(path,sizeof path,"%s.grid",g_terrain_gpu_fixture_path);
+    FILE *f=length>0 && (size_t)length<sizeof path?fopen(path,"wb"):NULL;
+    if(f) {
+        int ok=fwrite(&header,sizeof header,1,f)==1 &&
+               fwrite(vga_dac,1,768u,f)==768u &&
+               fwrite(memory+0x00362A54u,1,64u*256u,f)==64u*256u &&
+               fwrite(memory+ring,1,GW_CANVAS_W*GW_CANVAS_H,f)==GW_CANVAS_W*GW_CANVAS_H;
+        for(unsigned i=0;ok && i<header.count;i++) {
+            const uint32_t tex=mesh[i].texture;
+            if(!tex || tex>GUEST_LIMIT-(31u*256u+32u)) { ok=0; break; }
+            gw_terrain_gpu_triangle triangle;
+            triangle.mode=mesh[i].mode;
+            memcpy(triangle.vertex,mesh[i].vertex,sizeof triangle.vertex);
+            for(unsigned y=0;y<32u;y++) memcpy(triangle.texels+y*32u,memory+tex+y*256u,32u);
+            ok=fwrite(&triangle,sizeof triangle,1,f)==1;
+        }
+        if(fclose(f)==0 && ok)
+            gw_flag_trace("TRACE terrain grid fixture count=%u turn=%u%c",header.count,header.turn,10);
+    }
+    free(mesh);
+}
 static void terrain_gpu_publish(const uint8_t *memory,uint32_t ring) {
     if(!g_terrain_gpu_fixture_path || !g_terrain_gpu_fixture ||
        g_terrain_gpu_fixture_ring!=ring) return;
@@ -17200,7 +17268,10 @@ static void terrain_gpu_publish(const uint8_t *memory,uint32_t ring) {
             fwrite(memory+0x00362A54u,1,64u*256u,f)==64u*256u &&
             fwrite(memory+ring,1,GW_CANVAS_W*GW_CANVAS_H,f)==GW_CANVAS_W*GW_CANVAS_H &&
             fwrite(g_terrain_gpu_fixture,sizeof *g_terrain_gpu_fixture,h->count,f)==h->count;
-        if(fclose(f)==0 && ok) gw_flag_trace("TRACE terrain GPU fixture count=%u turn=%u%c",h->count,h->turn,10);
+        if(fclose(f)==0 && ok) {
+            gw_flag_trace("TRACE terrain GPU fixture count=%u turn=%u%c",h->count,h->turn,10);
+            terrain_visible_fixture(memory,ring,*h);
+        }
     }
     free(g_terrain_gpu_fixture); g_terrain_gpu_fixture=NULL;
     g_terrain_gpu_fixture_path=NULL;
@@ -20317,10 +20388,13 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         g_interactive_published_snapshot.in_mission=in_ifc_main;
         if(canvas && in_ifc_main && ring && ring<=GUEST_LIMIT-GW_CANVAS_W*GW_CANVAS_H)
             terrain_gpu_publish(memory,ring);
+        g_interactive_published_snapshot.terrain_mesh.count=0;
+        if(canvas && in_ifc_main && g_cli_play_mode)
+            gw_terrain_prepare_draw(memory,GUEST_LIMIT,GW_CANVAS_W,GW_CANVAS_H,&g_interactive_published_snapshot.terrain_mesh);
         if(g_cli_play_mode) write_probe_frame(memory,in_ifc_main);
         g_interactive_published_snapshot.spr_valid=0;
         g_interactive_published_snapshot.ev_ship_n=g_interactive_published_snapshot.ev_beam_n=0;
-        if(g_cli_play_mode && (g_ini_soft_shadows || g_ini_hd2d_particles)) {
+        if(g_cli_play_mode && (g_ini_soft_shadows || g_ini_hd2d_particles || (canvas && in_ifc_main))) {
             const uint32_t ws=*(const uint32_t *)(memory+0x00376A5Cu),sw=*(const uint32_t *)(memory+0x00376A78u),sh=*(const uint32_t *)(memory+0x00376A7Cu);
             if(g_spr_on && in_ifc_main && (size_t)sw*sh<=sizeof g_spr_mask && g_spr_lo==ws && g_spr_hi==ws+sw*sh) {
                 memcpy(g_interactive_published_snapshot.spr_mask,g_spr_mask,(size_t)sw*sh);
@@ -20352,7 +20426,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         }
         {   static uint32_t pubs; if(g_th_force && ++pubs%300u==0u) th_dump(); }
         g_interactive_published_snapshot.fx_ring_valid=0; g_interactive_published_snapshot.th_valid=0;
-        if(g_cli_play_mode && (g_ini_water_effects || g_ini_emissive_bloom || g_ini_terrain_ao || g_ini_soft_shadows) && ring && ring<=GUEST_LIMIT-rw*rh &&
+        if(g_cli_play_mode && (canvas || g_ini_water_effects || g_ini_emissive_bloom || g_ini_terrain_ao || g_ini_soft_shadows) && ring && ring<=GUEST_LIMIT-rw*rh &&
            rw*rh<=sizeof g_interactive_published_snapshot.fx_ring && in_ifc_main) {
             memcpy(g_interactive_published_snapshot.fx_ring,memory+ring,(size_t)rw*rh);
             g_interactive_published_snapshot.fx_ring_w=rw; g_interactive_published_snapshot.fx_ring_h=rh;

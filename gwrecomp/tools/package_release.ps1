@@ -1,4 +1,4 @@
-﻿<#
+<#
  Portable release folder from a completed build (scripts\build.ps1 -Level B / tools\rebuild\rebuild.ps1).
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\package_release.ps1 [-Build <rebuild dir>] [-Name GWRecomp-v1.0-win32] [-Test]
  Writes dist\<Name>\ (dist\ is git-ignored):
@@ -112,6 +112,7 @@ resolution = auto
 fullscreen = 0
 fps = 120
 filter = sharp
+terrain_3d = 1
 clean_horizon = 1
 water_effects = 1
 enhanced_audio = 1
@@ -160,6 +161,7 @@ CÓMO EMPEZAR
      deben ponerse en verde.
   4. INICIAR JUEGO (menú original), CONTINUAR ÚLTIMA PARTIDA, o en la pestaña MISIONES elige una y JUGAR MISIÓN.
      La imagen (modo de vista, resolución, filtro...) se ajusta en la pestaña GRÁFICOS.
+  Ctrl+F9 alterna el terreno 2D/3D en misiones con zoomout.
   Todo lo que cambies en el lanzador se guarda en gwrecomp.ini, junto a gwrecomp.exe.
 
 TECLAS EN PARTIDA
@@ -208,6 +210,7 @@ HOW TO START
   Everything you change in the launcher is saved in gwrecomp.ini, next to gwrecomp.exe.
 
 IN-GAME KEYS
+  Ctrl+F9 switches terrain 2D/3D in zoomout missions.
   F7 filter (sharp / EPX / CRT)   F8 turbo 1x/2x/4x   TAB (hold) turbo 4x   Wheel zoom   Home zoom 1x
   F10 release the mouse   WASD / arrows / middle button scroll the map   ESC game options
 
