@@ -11160,13 +11160,14 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                     }
                 }
                 if(g_interactive_perf_frequency) { g_hostprof_epx_ms+=(double)(SDL_GetPerformanceCounter()-epx0)*1000.0/(double)g_interactive_perf_frequency; g_hostprof_epx_n++; }
-            } else
+            } else {
             const uint64_t vu0=SDL_GetPerformanceCounter();
             const int vup=SDL_UpdateTexture(g_ifclevel_demo_texture,vconv_w<g_present_w?&(SDL_Rect){0,0,vconv_w,480}:NULL,g_ifclevel_demo_rgba,
                                  texture_w*(int)sizeof(uint32_t));
             g_ph[8]+=ph_ms(vu0);
             if(vup!=0) {
                 fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
+            }
             }
             if(panel_split) for(int y=0;y<480;y++) for(int x=0;x<48;x++)
                 g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+128u+(unsigned)x]=g_interp_panel_saved[y*48+x];
