@@ -8237,6 +8237,7 @@ static void hud_sentinel_collect(uint8_t *memory);
 static int g_present_w=640,g_present_pitch=640;
 /* Host presentation breakdown (main thread, GW_TICK_PROFILE), reported every 10 s: palette conversion + texture
    upload, render copies (frame + pointer), SDL_RenderPresent, pacing wait. */
+static double g_hostprof_fx_ms,g_hostprof_bloom_ms;
 static double g_hostprof_convert_ms,g_hostprof_copy_ms,g_hostprof_present_ms,g_hostprof_wait_ms,g_hostprof_frame_ms;
 /* GW_GPU_TIMING=1 (diagnostics): GPU-synchronised time of composition + scaled copy (1-pixel readbacks bracket it,
    so it is an upper bound that includes one readback); reported per frame in the host_window line */
@@ -10743,8 +10744,11 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         }
     }
     /* water_effects: every presented frame, map area of the current textures re-converted with the effect */
-    if(visual && !g_terrain_modern_backend)
+    if(visual && !g_terrain_modern_backend) {
+        const uint64_t hp_fx0=SDL_GetPerformanceCounter();
         fx_refresh(visual,g_ifclevel_demo_texture,g_present_w,g_canvas_tex[1],g_canvas_live && g_canvas_tex_ready);
+        if(g_interactive_perf_frequency) g_hostprof_fx_ms+=(double)(SDL_GetPerformanceCounter()-hp_fx0)*1000.0/(double)g_interactive_perf_frequency;
+    }
     {   /* QA aid (opt-in, read-only): GW_ORDER_TRACE=<file>. Once per presented frame, samples a few guest fields that decide
            whether a map click becomes an order (selected specialist, MapDisplay candidate/flags, the 11-byte action packet) and
            appends a line whenever one of them changes. Never writes guest memory. Local diagnostics only. */
@@ -11012,7 +11016,10 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             fprintf(stderr,"SDL demo present: %s\n",SDL_GetError()); return 0;
         }
         SDL_RenderFlush(g_ifclevel_demo_renderer);
-        if(!bloom_render_and_composite(visual,scale_target,&geo,bloom_a)) {
+        const uint64_t hp_bl0=SDL_GetPerformanceCounter();
+        const int bloom_done=bloom_render_and_composite(visual,scale_target,&geo,bloom_a);
+        if(g_interactive_perf_frequency) g_hostprof_bloom_ms+=(double)(SDL_GetPerformanceCounter()-hp_bl0)*1000.0/(double)g_interactive_perf_frequency;
+        if(!bloom_done) {
             if(SDL_SetTextureScaleMode(scale_target,geo.nearest?SDL_ScaleModeNearest:SDL_ScaleModeLinear)!=0 ||
                SDL_RenderCopy(g_ifclevel_demo_renderer,scale_target,&geo.src,&geo.dst)!=0) {
                 fprintf(stderr,"SDL scaled present: %s\n",SDL_GetError()); return 0;
@@ -20307,11 +20314,12 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
             const double hsecs=(double)(frame_end-g_hostprof_window_start)/(double)g_interactive_perf_frequency;
             if(hsecs>=10.0) {
                 const double n=g_hostprof_frames?(double)g_hostprof_frames:1.0,u=g_hostprof_uploads?(double)g_hostprof_uploads:1.0;
-                fprintf(g_tick_profile_file,"TRACE host_window seconds=%.1f render_fps=%.1f texture_uploads_per_s=%.1f mean_frame_ms=%.3f convert_upload_ms_per_upload=%.3f render_copy_ms=%.3f sdl_present_ms=%.3f input_ms=%.3f pacing_wait_ms=%.3f gpu_compose_scale_ms=%.3f epx_ms=%.3f\n",
+                fprintf(g_tick_profile_file,"TRACE host_window seconds=%.1f render_fps=%.1f texture_uploads_per_s=%.1f mean_frame_ms=%.3f convert_upload_ms_per_upload=%.3f render_copy_ms=%.3f sdl_present_ms=%.3f input_ms=%.3f pacing_wait_ms=%.3f gpu_compose_scale_ms=%.3f epx_ms=%.3f fx_ms=%.3f bloom_ao_ms=%.3f\n",
                     hsecs,g_hostprof_frames/hsecs,g_hostprof_uploads/hsecs,g_hostprof_frame_ms/n,g_hostprof_convert_ms/u,
                     g_hostprof_copy_ms/n,g_hostprof_present_ms/n,input_ms,g_hostprof_wait_ms/n,
                     g_hostprof_gpu_frames?g_hostprof_gpu_ms/g_hostprof_gpu_frames:-1.0,
-                    g_hostprof_epx_n?g_hostprof_epx_ms/g_hostprof_epx_n:-1.0);
+                    g_hostprof_epx_n?g_hostprof_epx_ms/g_hostprof_epx_n:-1.0,g_hostprof_fx_ms/n,g_hostprof_bloom_ms/n);
+                g_hostprof_fx_ms=g_hostprof_bloom_ms=0.0;
                 g_hostprof_gpu_ms=0.0; g_hostprof_gpu_frames=0u; g_hostprof_epx_ms=0.0; g_hostprof_epx_n=0u;
                 fflush(g_tick_profile_file);
                 g_hostprof_window_start=frame_end; g_hostprof_frames=g_hostprof_uploads=0u;
