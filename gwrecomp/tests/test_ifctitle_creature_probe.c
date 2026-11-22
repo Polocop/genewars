@@ -10502,7 +10502,7 @@ static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_
     const int ring_w_view=(int)v->wscreen_pitch-128;
     const int cv_ring_ok=v->canvas_valid && (int)v->fx_ring_w==(int)GW_CANVAS_W && v->fx_ring_h==GW_CANVAS_H;
     const int cv_rw=(int)GW_CANVAS_W-128;
-    const int hud_only=cv_ring_ok && g_canvas_live && g_zoom<0.9999 && g_bloom.canvas_ready>=1;
+    const int hud_only=cv_ring_ok && g_canvas_live && (g_zoom<0.9999 || g_gm_frame) && g_bloom.canvas_ready>=1;
     bu_ctx buc={v,source,view_w,panel_split,th,ring_on_view,ring_w_view,cv_ring_ok,cv_rw,hud_only};
     hp_par(480,bu_view_rows,&buc);
     if(!hud_only) {
@@ -10572,13 +10572,13 @@ static int part_active(const gw_interactive_visual_snapshot *v) {
 }
 /* the source frame the map layers show: the zoom-out canvas or the frame at its pitch, and its map rectangle */
 static void pt_source(const gw_interactive_visual_snapshot *v,const uint8_t **src,int *pitch,int *rows,int *x0,int *x1) {
-    if(v->canvas_valid && g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999) { *src=v->canvas; *pitch=(int)GW_CANVAS_W; *rows=(int)GW_CANVAS_H; }
+    if(v->canvas_valid && g_canvas_live && g_bloom.canvas_ready && (g_zoom<0.9999 || g_gm_frame)) { *src=v->canvas; *pitch=(int)GW_CANVAS_W; *rows=(int)GW_CANVAS_H; }
     else { *src=v->wscreen; *pitch=(int)v->wscreen_pitch; *rows=480; }
     *x0=176; *x1=*pitch;
 }
 /* source position (current snapshot) -> logical view position, as bloom_draw_map_layers draws the current layer */
 static void pt_project(double sx,double sy,double a,double *lx,double *ly) {
-    if(g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999) {
+    if(g_canvas_live && g_bloom.canvas_ready && (g_zoom<0.9999 || g_gm_frame)) {
         const double ux=GW_CANVAS_VX0+g_zoom_x,uy=GW_CANVAS_VY0+g_zoom_y,z=g_zoom;
         const int on=(g_bloom.canvas_ready>=2 && (g_interp_dx||g_interp_dy) && a<1.0);
         const double idx=on?g_interp_dx:0,idy=on?g_interp_dy:0;
@@ -10591,7 +10591,7 @@ static void pt_project(double sx,double sy,double a,double *lx,double *ly) {
         *lx=128.0+((sx-128.0)-(1.0-a)*dx-zx)*zz; *ly=(sy-(1.0-a)*dy-zy)*zz;
     }
 }
-static double pt_zoom(void) { return (g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999)?g_zoom:(g_zoom>1.0001?g_zoom:1.0); }
+static double pt_zoom(void) { return (g_canvas_live && g_bloom.canvas_ready && (g_zoom<0.9999 || g_gm_frame))?g_zoom:(g_zoom>1.0001?g_zoom:1.0); }
 static void pt_biome(const gw_interactive_visual_snapshot *v) {
     /* per-pixel vote of the ring's terrain colours (6-bit palette): the surface that covers most of the map wins, so a
        sea of an unusual colour or patches of another ground do not tip an average */
@@ -10836,7 +10836,7 @@ static void bloom_draw_map_rect(float lx0,float ly0,float lw,float lh,
 static int g_layers_cur_only;   /* 1: bloom_draw_map_layers draws only the current snapshot's layer (water pass) */
 static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
     const int vw=g_present_w;
-    if(g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999) {
+    if(g_canvas_live && g_bloom.canvas_ready && (g_zoom<0.9999 || g_gm_frame)) {
         const double ux=GW_CANVAS_VX0+g_zoom_x,uy=GW_CANVAS_VY0+g_zoom_y,z=g_zoom;
         const float tw=(float)(GW_CANVAS_TEX_W*z),th=(float)(GW_CANVAS_H*z);
         const int idx=(g_bloom.canvas_ready>=2 && (g_interp_dx||g_interp_dy) && interp_a<1.0)?g_interp_dx:0;
@@ -11159,7 +11159,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
         g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_bloom.u_wt_lut,1);
         g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.kind_tex); g_bloom.Uniform1i(g_bloom.u_wt_kind,2);
         g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.Uniform1i(g_bloom.u_wt_idx,0);
-        const int canvas_layer=g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999;
+        const int canvas_layer=g_canvas_live && g_bloom.canvas_ready && (g_zoom<0.9999 || g_gm_frame);
         g_bloom.Uniform2f(g_bloom.u_wt_off,(float)((canvas_layer?128.0:0.0)+(double)g_fx_wx),(float)(double)g_fx_wy);
         {   const uint64_t f=SDL_GetPerformanceFrequency(),t=SDL_GetPerformanceCounter();
             g_bloom.Uniform1f(g_bloom.u_wt_tq,(float)((double)(t%(f*4096u))*64.0/(double)f)); }
@@ -11239,7 +11239,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                                        const gw_interactive_visual_snapshot *visual) {
     const char *terrain_capture_path=capture_path;
     /* this frame's zoomed-out map comes from the GPU composition (decided once, before any conversion) */
-    g_gm_frame=visual && gm_frame_ok(visual) && g_zoom<0.9999 &&
+    g_gm_frame=visual && gm_frame_ok(visual) && g_zoom<=1.0001 &&
                (bloom_active(visual) || ao_gpu_active(visual) || part_active(visual) || fx_active(visual) || depth_active(visual));
     {   static int last=-1; static unsigned nfr;
         if(visual && visual->in_mission && ++nfr%600u==0u)
@@ -11496,7 +11496,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 lut[k]=0xFF000000u|((uint32_t)palette[k*3u+0u]*255u/63u<<16)|((uint32_t)palette[k*3u+1u]*255u/63u<<8)|((uint32_t)palette[k*3u+2u]*255u/63u);
             /* zoomed out with the canvas in use, the view texture only shows its HUD strip (x < 176): only that part
                is converted and uploaded */
-            const int vconv_w=(visual && visual->canvas_valid && g_zoom<0.9 && g_canvas_tex_ready>=1 && g_tex_scale==1 &&
+            const int vconv_w=(visual && visual->canvas_valid && (g_zoom<0.9 || g_gm_frame) && g_canvas_tex_ready>=1 && g_tex_scale==1 &&
                                g_present_w>176)?176:g_present_w;
             for(int y=0;y<480;y++) {
                 const uint8_t *row=gw_video_surface_row(source,y);
@@ -11800,7 +11800,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
             if(!world_ok) { fprintf(stderr,"SDL original terrain composition: %s\n",SDL_GetError()); return 0; }
         }
-    } else if(!g_terrain_modern_backend && g_canvas_live && g_canvas_tex_ready && g_zoom<0.9999) {
+    } else if(!g_terrain_modern_backend && g_canvas_live && g_canvas_tex_ready && (g_zoom<0.9999 || g_gm_frame)) {
         /* zoomed out: the map window on the canvas (canvas x -> 128 + (x - ux) * z, y -> (y - uy) * z), with the
            scroll interpolation between the previous and current canvas frames; HUD and panel art at 1x on top */
         double a=1.0; int idx=0,idy=0;
