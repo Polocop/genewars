@@ -9490,6 +9490,40 @@ static inline uint32_t dp_apply(uint32_t p,int f) {
 }
 /* Re-converts the map area (source x >= 176) of the current frame textures with the effect at the present time.
    x < 176 (HUD, panel art and its overlay split) is never written. */
+/* host presentation thread pool: hp_par(n, fn, ctx) runs fn(ctx, i0, i1) over [0, n) split between up to 3 workers
+   and the calling (presentation) thread, and returns when all parts are done. Only the presentation thread calls it.
+   Host buffers only (texture packing, water, colour conversion); never guest memory. */
+typedef void (*hp_fn)(void *ctx,int i0,int i1);
+enum { HP_MAX=3 };
+static int g_hp_n=-1;
+static SDL_sem *g_hp_go[HP_MAX],*g_hp_done;
+static hp_fn g_hp_fn; static void *g_hp_ctx; static int g_hp_a[HP_MAX+1],g_hp_b[HP_MAX+1];
+static int hp_worker(void *arg) {
+    const int t=(int)(intptr_t)arg;
+    for(;;) { SDL_SemWait(g_hp_go[t]); g_hp_fn(g_hp_ctx,g_hp_a[t],g_hp_b[t]); SDL_SemPost(g_hp_done); }
+    return 0;
+}
+static void hp_par(int n,hp_fn fn,void *ctx) {
+    if(g_hp_n<0) {
+        g_hp_n=0;
+        int want=SDL_GetCPUCount()-2; if(want>HP_MAX) want=HP_MAX;
+        g_hp_done=want>0?SDL_CreateSemaphore(0):NULL;
+        for(int t=0;t<want && g_hp_done;t++) {
+            g_hp_go[t]=SDL_CreateSemaphore(0);
+            if(!g_hp_go[t] || !SDL_CreateThread(hp_worker,"gw_present_pool",(void *)(intptr_t)t)) break;
+            g_hp_n++;
+        }
+        gw_flag_trace("TRACE present_pool worker_threads=%d%c",g_hp_n,10);
+    }
+    if(n<=0) return;
+    const int parts=(g_hp_n>0 && n>=64)?g_hp_n+1:1;
+    if(parts==1) { fn(ctx,0,n); return; }
+    g_hp_fn=fn; g_hp_ctx=ctx;
+    for(int t=0;t<parts;t++) { g_hp_a[t]=(int)((int64_t)n*t/parts); g_hp_b[t]=(int)((int64_t)n*(t+1)/parts); }
+    for(int t=0;t<g_hp_n;t++) SDL_SemPost(g_hp_go[t]);
+    fn(ctx,g_hp_a[g_hp_n],g_hp_b[g_hp_n]);
+    for(int t=0;t<g_hp_n;t++) SDL_SemWait(g_hp_done);
+}
 /* water_effects per pixel (x, y of the source; the pixel is water or GOOP ground, see g_fx_g): the effect colour, or
    base when GOOP has no highlight there. Same formulas as before; the displacement only pulls from water ground. */
 typedef struct { int32_t o; int16_t x,y; uint32_t base; } fx_wpx;
@@ -9532,6 +9566,32 @@ static inline uint32_t fx_px(int x,int y,const uint8_t *src,int pitch,int rows,c
     if(b>255) b=255;
     return 0xFF000000u|((uint32_t)r<<16)|((uint32_t)g<<8)|(uint32_t)b;
 }
+/* fx_refresh work items for the presentation pool */
+typedef struct { const gw_interactive_visual_snapshot *v; const uint8_t *src; int pitch,rows; const uint32_t *lut; int tq,dp,r; } fx_ctx;
+static void fx_ground_rows(void *cp,int y0,int y1) {   /* g_fx_g: kind where the pixel equals the ring terrain */
+    const fx_ctx *c=(const fx_ctx *)cp; const gw_interactive_visual_snapshot *v=c->v; const int pitch=c->pitch,rows=c->rows;
+    const int left=128,rw=pitch-left; int rx0=(v->ring_x-left)%rw; if(rx0<0) rx0+=rw;
+    for(int y=y0;y<y1;y++) {
+        int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
+        const uint8_t *s=c->src+(size_t)y*pitch,*rr=v->fx_ring+(size_t)ry*pitch+left; uint8_t *g=g_fx_g+(size_t)y*pitch;
+        memset(g,0,(size_t)left); int rx=rx0;
+        for(int x=left;x<pitch;x++) { const uint8_t k=s[x]; g[x]=(g_fx_kind[k] && k==rr[rx])?g_fx_kind[k]:0u; if(++rx==rw) rx=0; }
+    }
+}
+static void fx_base_rows(void *cp,int y0,int y1) {     /* region r: terrain colour with the AO/shadow factors */
+    const fx_ctx *c=(const fx_ctx *)cp; const gw_interactive_visual_snapshot *v=c->v; const int r=c->r,w=g_fxr[r].w,pitch=c->pitch;
+    for(int y=y0;y<y1;y++) {
+        uint32_t *o=g_fxr[r].buf+(size_t)y*(size_t)w;
+        const uint8_t *row=r==1?v->canvas+(size_t)y*GW_CANVAS_W:
+                           (v->canvas_valid?v->wscreen+(size_t)y*v->wscreen_pitch:c->src+(size_t)y*pitch);
+        if(c->dp) { const uint8_t *di=g_dp_idx+(size_t)y*pitch+176,*df=g_dp_fac+(size_t)y*pitch+176; for(int x=0;x<w;x++) o[x]=dp_apply(c->lut[di[x]],df[x]); }
+        else for(int x=0;x<w;x++) o[x]=c->lut[row[176+x]];
+    }
+}
+static void fx_water_px(void *cp,int i0,int i1) {      /* region r: the listed water/GOOP pixels */
+    const fx_ctx *c=(const fx_ctx *)cp; const fx_wpx *e=g_fxr[c->r].px; uint32_t *b=g_fxr[c->r].buf;
+    for(int i=i0;i<i1;i++) b[e[i].o]=fx_px(e[i].x,e[i].y,c->src,c->pitch,c->rows,c->lut,c->tq,e[i].base);
+}
 static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view_tex,int view_w,
                        SDL_Texture *canvas_tex,int canvas_ready) {
     const int water=fx_active(v),depth=depth_active(v);
@@ -9569,48 +9629,37 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
     const int tq=(int)((SDL_GetPerformanceCounter()%(freq*4096u))*64u/freq);   /* 64 steps per second, wraps */
     /* cache per game frame (generation): the converted map area of both textures and the list of water/GOOP ground
        pixels are built once; on the presented frames in between only those pixels are recomputed, only when the
-       64 Hz wave phase moves, and only the band of rows holding them is uploaded */
+       64 Hz wave phase moves, and only the band of rows holding them is uploaded. The loops run on the presentation
+       pool (hp_par). */
     const int use_view=view_tex && view_w>176,use_canvas=canvas_tex && canvas_ready && v->canvas_valid;
     const int key=dp|(water<<1)|(use_view<<2)|(use_canvas<<3)|(view_w<<4);
     const int rebuild=v->generation!=g_fxc_gen || key!=g_fxc_key || memcmp(g_fxc_pal,v->palette,768)!=0 ||
                       (use_view && g_fxc_tex[0]!=view_tex) || (use_canvas && g_fxc_tex[1]!=canvas_tex);
     if(!rebuild && (!water || tq==g_fxc_tq)) return;
+    fx_ctx fc={v,src,pitch,rows,lut,tq,dp,0};
     if(rebuild) {
         if(!g_fx_g) g_fx_g=(uint8_t *)malloc(1152u*640u);
         for(int r=0;r<2;r++) if(!g_fxr[r].buf) g_fxr[r].buf=(uint32_t *)malloc(1152u*640u*sizeof(uint32_t));
         if(!g_fx_g || !g_fxr[0].buf || !g_fxr[1].buf) return;
-        /* water/GOOP ground map of the source: its kind where the pixel equals the ring terrain at its ring position */
-        if(water) {
-            const int left=128,rw=pitch-left; int rx0=(v->ring_x-left)%rw; if(rx0<0) rx0+=rw;
-            for(int y=0;y<rows;y++) {
-                int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
-                const uint8_t *s=src+(size_t)y*pitch,*rr=v->fx_ring+(size_t)ry*pitch+left; uint8_t *g=g_fx_g+(size_t)y*pitch;
-                memset(g,0,(size_t)left); int rx=rx0;
-                for(int x=left;x<pitch;x++) { const uint8_t k=s[x]; g[x]=(g_fx_kind[k] && k==rr[rx])?g_fx_kind[k]:0u; if(++rx==rw) rx=0; }
-            }
-        }
+        if(water) hp_par(rows,fx_ground_rows,&fc);   /* water/GOOP ground map of the source */
         for(int r=0;r<2;r++) {
             g_fxr[r].n=0; g_fxr[r].y0=0x7FFFFFFF; g_fxr[r].y1=-1;
             if(r==0?!use_view:!use_canvas) continue;
-            const int w=r==0?view_w-176:(int)GW_CANVAS_W-176,h=r==0?480:(int)GW_CANVAS_H;
-            g_fxr[r].w=w; g_fxr[r].h=h;
+            g_fxr[r].w=r==0?view_w-176:(int)GW_CANVAS_W-176; g_fxr[r].h=r==0?480:(int)GW_CANVAS_H;
+            fc.r=r; hp_par(g_fxr[r].h,fx_base_rows,&fc);
+            if(!water) continue;
+            const int w=g_fxr[r].w,h=g_fxr[r].h<rows?g_fxr[r].h:rows;
             for(int y=0;y<h;y++) {
-                uint32_t *o=g_fxr[r].buf+(size_t)y*(size_t)w;
-                const uint8_t *row=r==1?v->canvas+(size_t)y*GW_CANVAS_W:
-                                   (v->canvas_valid?v->wscreen+(size_t)y*v->wscreen_pitch:src+(size_t)y*pitch);
-                if(dp) { const uint8_t *di=g_dp_idx+(size_t)y*pitch+176,*df=g_dp_fac+(size_t)y*pitch+176; for(int x=0;x<w;x++) o[x]=dp_apply(lut[di[x]],df[x]); }
-                else for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
-                if(water && y<rows) {
-                    const uint8_t *g=g_fx_g+(size_t)y*pitch+176;
-                    for(int x=0;x<w && 176+x<pitch;x++) if(g[x]) {
-                        if(g_fxr[r].n==g_fxr[r].cap) {
-                            const int nc=g_fxr[r].cap?g_fxr[r].cap*2:65536; fx_wpx *np=(fx_wpx *)realloc(g_fxr[r].px,(size_t)nc*sizeof *np);
-                            if(!np) break;
-                            g_fxr[r].px=np; g_fxr[r].cap=nc; }
-                        fx_wpx *e=&g_fxr[r].px[g_fxr[r].n++]; e->o=y*w+x; e->x=(int16_t)(176+x); e->y=(int16_t)y; e->base=o[x];
-                        if(y<g_fxr[r].y0) g_fxr[r].y0=y;
-                        if(y>g_fxr[r].y1) g_fxr[r].y1=y;
-                    }
+                const uint8_t *g=g_fx_g+(size_t)y*pitch+176; const uint32_t *o=g_fxr[r].buf+(size_t)y*(size_t)w;
+                const int xe=w<pitch-176?w:pitch-176;
+                for(int x=0;x<xe;x++) if(g[x]) {
+                    if(g_fxr[r].n==g_fxr[r].cap) {
+                        const int nc=g_fxr[r].cap?g_fxr[r].cap*2:65536; fx_wpx *np=(fx_wpx *)realloc(g_fxr[r].px,(size_t)nc*sizeof *np);
+                        if(!np) break;
+                        g_fxr[r].px=np; g_fxr[r].cap=nc; }
+                    fx_wpx *e=&g_fxr[r].px[g_fxr[r].n++]; e->o=y*w+x; e->x=(int16_t)(176+x); e->y=(int16_t)y; e->base=o[x];
+                    if(y<g_fxr[r].y0) g_fxr[r].y0=y;
+                    if(y>g_fxr[r].y1) g_fxr[r].y1=y;
                 }
             }
         }
@@ -9618,10 +9667,7 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
         g_fxc_tex[0]=use_view?view_tex:NULL; g_fxc_tex[1]=use_canvas?canvas_tex:NULL;
     }
     /* water and GOOP: only their pixels, from the cached base */
-    if(water) for(int r=0;r<2;r++) {
-        const fx_wpx *e=g_fxr[r].px; uint32_t *b=g_fxr[r].buf;
-        for(int i=0;i<g_fxr[r].n;i++) b[e[i].o]=fx_px(e[i].x,e[i].y,src,pitch,rows,lut,tq,e[i].base);
-    }
+    if(water) for(int r=0;r<2;r++) { fc.r=r; hp_par(g_fxr[r].n,fx_water_px,&fc); }
     g_fxc_tq=tq;
     for(int r=0;r<2;r++) {
         SDL_Texture *t=r==0?(use_view?view_tex:NULL):(use_canvas?canvas_tex:NULL);
@@ -10115,6 +10161,66 @@ static void bloom_alloc_rg_tex(GLuint *tex,int w,int h) {
     g_bloom.TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);   /* R index, G flags, B height, A ao mask */
 }
 
+/* bloom/AO texture packing, by rows (run on the presentation pool): R = index, G = flags + low height bits,
+   B = high height bits, A = AO mask; the ring column steps by one per pixel instead of a modulo per pixel */
+typedef struct { const gw_interactive_visual_snapshot *v; const gw_video_surface *source;
+                 int view_w,panel_split,th,ring_on_view,ring_w_view,cv_ring_ok,cv_rw; } bu_ctx;
+static void bu_view_rows(void *cp,int y0,int y1) {
+    const bu_ctx *c=(const bu_ctx *)cp; const gw_interactive_visual_snapshot *v=c->v; const int view_w=c->view_w,th=c->th;
+    for(int y=y0;y<y1;y++) {
+        const uint8_t *row=gw_video_surface_row(c->source,y);
+        uint8_t *dst=g_bloom.up_buf+(size_t)y*(size_t)view_w*4u;
+        uint8_t *hd=g_bloom.hud_buf+(size_t)y*(size_t)view_w;
+        int ry=0;
+        if(c->ring_on_view) { ry=(y+v->ring_y)%480; if(ry<0) ry+=480; }
+        else if(c->cv_ring_ok) { ry=(y+GW_CANVAS_VY0+v->ring_y)%(int)GW_CANVAS_H; if(ry<0) ry+=(int)GW_CANVAS_H; }
+        int rv=0,rc=0;   /* ring columns at x=128 (view ring) and x=176 (canvas ring) */
+        if(c->ring_on_view) { rv=(v->ring_x-128)%c->ring_w_view; if(rv<0) rv+=c->ring_w_view; }
+        if(c->cv_ring_ok) { rc=(176+(GW_CANVAS_VX0-128)-128)+(v->ring_x-128); rc%=c->cv_rw; if(rc<0) rc+=c->cv_rw; }
+        for(int x=0;x<view_w;x++) {
+            uint8_t k=row[x];
+            int is_panel=x<128;
+            if(!is_panel && x<176 && c->panel_split) {
+                is_panel=(g_interp_panel_rgba[y*48+(x-128)]>>24)!=0u;
+                if(is_panel && v->panel_bg_valid) k=v->panel_bg[y*48+(x-128)];
+            }
+            int is_gnd=0,have_ri=0; size_t ri=0;
+            if(!is_panel) {
+                if(c->ring_on_view) { ri=(size_t)ry*v->fx_ring_w+128u+(unsigned)rv; have_ri=1; is_gnd=(k==v->fx_ring[ri]); }
+                else if(c->cv_ring_ok && x>=176) { ri=(size_t)ry*GW_CANVAS_W+128u+(unsigned)rc; have_ri=1; is_gnd=(k==v->fx_ring[ri]); }
+            }
+            dst[x*4+0]=k;
+            {   int hv=(th && have_ri)?v->th_ring[ri]:0; hv=hv<0?0:hv>4095?4095:hv;   /* 12 bits: B = high 8, G bits 4..7 = low 4 */
+                dst[x*4+1]=(uint8_t)((is_panel?0:1)|(is_gnd?2:0)|((hv&15)<<4));
+                dst[x*4+2]=(uint8_t)(hv>>4);
+                dst[x*4+3]=(uint8_t)((th && have_ri && is_gnd && x>=176 && g_fx_kind[k]==FX_NONE)?255:0); }
+            hd[x]=(uint8_t)(is_panel?255:0);
+            if(x>=128 && ++rv==c->ring_w_view) rv=0;
+            if(x>=176 && ++rc==c->cv_rw) rc=0;
+        }
+    }
+}
+static void bu_canvas_rows(void *cp,int y0,int y1) {
+    const bu_ctx *c=(const bu_ctx *)cp; const gw_interactive_visual_snapshot *v=c->v; const int th=c->th,cv_rw=c->cv_rw;
+    for(int y=y0;y<y1;y++) {
+        const uint8_t *row=v->canvas+(size_t)y*GW_CANVAS_W+128u;
+        uint8_t *dst=g_bloom.up_buf+(size_t)y*GW_CANVAS_TEX_W*4u;
+        int ry=(y+v->ring_y)%(int)GW_CANVAS_H; if(ry<0) ry+=(int)GW_CANVAS_H;
+        int rx=(v->ring_x-128)%cv_rw; if(rx<0) rx+=cv_rw;
+        const uint8_t *rr=v->fx_ring+(size_t)ry*GW_CANVAS_W+128u; const int16_t *hr=v->th_ring+(size_t)ry*GW_CANVAS_W+128u;
+        for(int x=0;x<GW_CANVAS_TEX_W;x++) {
+            uint8_t k=row[x];
+            if(y<480 && x<48 && v->panel_bg_valid && v->canvas_panel[y*48+x]) k=v->panel_bg[y*48+x];
+            const int is_gnd=(k==rr[rx]);
+            dst[x*4+0]=k;
+            {   int hv=th?hr[rx]:0; hv=hv<0?0:hv>4095?4095:hv;
+                dst[x*4+1]=(uint8_t)(1|(is_gnd?2:0)|((hv&15)<<4));
+                dst[x*4+2]=(uint8_t)(hv>>4);
+                dst[x*4+3]=(uint8_t)((th && is_gnd && x>=48 && g_fx_kind[k]==FX_NONE)?255:0); }
+            if(++rx==cv_rw) rx=0;
+        }
+    }
+}
 static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_video_surface *source,
                                int view_w,int panel_split) {
     if(!(bloom_active(v) || ao_gpu_active(v)) || !source) return;
@@ -10154,39 +10260,8 @@ static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_
     const int ring_w_view=(int)v->wscreen_pitch-128;
     const int cv_ring_ok=v->canvas_valid && (int)v->fx_ring_w==(int)GW_CANVAS_W && v->fx_ring_h==GW_CANVAS_H;
     const int cv_rw=(int)GW_CANVAS_W-128;
-    for(int y=0;y<480;y++) {
-        const uint8_t *row=gw_video_surface_row(source,y);
-        uint8_t *dst=g_bloom.up_buf+(size_t)y*(size_t)view_w*4u;
-        uint8_t *hd=g_bloom.hud_buf+(size_t)y*(size_t)view_w;
-        int ry=0;
-        if(ring_on_view) { ry=(y+v->ring_y)%480; if(ry<0) ry+=480; }
-        else if(cv_ring_ok) { ry=(y+GW_CANVAS_VY0+v->ring_y)%(int)GW_CANVAS_H; if(ry<0) ry+=(int)GW_CANVAS_H; }
-        for(int x=0;x<view_w;x++) {
-            uint8_t k=row[x];
-            int is_panel=x<128;
-            if(!is_panel && x<176 && panel_split) {
-                is_panel=(g_interp_panel_rgba[y*48+(x-128)]>>24)!=0u;
-                if(is_panel && v->panel_bg_valid) k=v->panel_bg[y*48+(x-128)];
-            }
-            int is_gnd=0,have_ri=0; size_t ri=0;
-            if(!is_panel) {
-                if(ring_on_view) {
-                    int rx=(x-128)+(v->ring_x-128); rx%=ring_w_view; if(rx<0) rx+=ring_w_view;
-                    ri=(size_t)ry*v->fx_ring_w+128u+(unsigned)rx; have_ri=1; is_gnd=(k==v->fx_ring[ri]);
-                } else if(cv_ring_ok && x>=176) {
-                    int cx=x+(GW_CANVAS_VX0-128);
-                    int rx=(cx-128)+(v->ring_x-128); rx%=cv_rw; if(rx<0) rx+=cv_rw;
-                    ri=(size_t)ry*GW_CANVAS_W+128u+(unsigned)rx; have_ri=1; is_gnd=(k==v->fx_ring[ri]);
-                }
-            }
-            dst[x*4+0]=k;
-            {   int hv=(th && have_ri)?v->th_ring[ri]:0; hv=hv<0?0:hv>4095?4095:hv;   /* 12 bits: B = high 8, G bits 4..7 = low 4 */
-                dst[x*4+1]=(uint8_t)((is_panel?0:1)|(is_gnd?2:0)|((hv&15)<<4));
-                dst[x*4+2]=(uint8_t)(hv>>4);
-                dst[x*4+3]=(uint8_t)((th && have_ri && is_gnd && x>=176 && g_fx_kind[k]==FX_NONE)?255:0); }
-            hd[x]=(uint8_t)(is_panel?255:0);
-        }
-    }
+    bu_ctx buc={v,source,view_w,panel_split,th,ring_on_view,ring_w_view,cv_ring_ok,cv_rw};
+    hp_par(480,bu_view_rows,&buc);
     g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.view_tex[1]);
     g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,view_w,480,GL_RGBA,GL_UNSIGNED_BYTE,g_bloom.up_buf);
     g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.hud_tex);
@@ -10199,23 +10274,7 @@ static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_
             bloom_alloc_rg_tex(&g_bloom.canvas_tex[1],GW_CANVAS_TEX_W,(int)GW_CANVAS_H);
         }
         GLuint sw=g_bloom.canvas_tex[0]; g_bloom.canvas_tex[0]=g_bloom.canvas_tex[1]; g_bloom.canvas_tex[1]=sw;
-        for(int y=0;y<(int)GW_CANVAS_H;y++) {
-            const uint8_t *row=v->canvas+(size_t)y*GW_CANVAS_W+128u;
-            uint8_t *dst=g_bloom.up_buf+(size_t)y*GW_CANVAS_TEX_W*4u;
-            int ry=(y+v->ring_y)%(int)GW_CANVAS_H; if(ry<0) ry+=(int)GW_CANVAS_H;
-            for(int x=0;x<GW_CANVAS_TEX_W;x++) {
-                uint8_t k=row[x];
-                if(y<480 && x<48 && v->panel_bg_valid && v->canvas_panel[y*48+x]) k=v->panel_bg[y*48+x];
-                int rx=x+(v->ring_x-128); rx%=cv_rw; if(rx<0) rx+=cv_rw;
-                const size_t ri=(size_t)ry*GW_CANVAS_W+128u+(unsigned)rx;
-                const int is_gnd=(k==v->fx_ring[ri]);
-                dst[x*4+0]=k;
-                {   int hv=th?v->th_ring[ri]:0; hv=hv<0?0:hv>4095?4095:hv;
-                    dst[x*4+1]=(uint8_t)(1|(is_gnd?2:0)|((hv&15)<<4));
-                    dst[x*4+2]=(uint8_t)(hv>>4);
-                    dst[x*4+3]=(uint8_t)((th && is_gnd && x>=48 && g_fx_kind[k]==FX_NONE)?255:0); }
-            }
-        }
+        hp_par((int)GW_CANVAS_H,bu_canvas_rows,&buc);
         g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[1]);
         g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,GW_CANVAS_TEX_W,(int)GW_CANVAS_H,GL_RGBA,GL_UNSIGNED_BYTE,g_bloom.up_buf);
         g_bloom.canvas_ready=g_bloom.canvas_ready<2?g_bloom.canvas_ready+1:2;
@@ -10313,8 +10372,6 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     GLint prev_fbo=0,prev_prog=0,prev_act=0,prev_vbo=0,prev_vp[4]={0},prev_sc[4]={0},prev_align=4,prev_rl=0;
     GLint prev_tex0=0,prev_tex1=0,prev_tex2=0,prev_bsrc_r=0,prev_bdst_r=0,prev_bsrc_a=0,prev_bdst_a=0;
     GLboolean prev_sc_en=0,prev_bl_en=0;
-    GLfloat prev_clear[4]={0.0f,0.0f,0.0f,1.0f};   /* SDL caches its clear colour: it must find it unchanged */
-    g_bloom.GetFloatv(GL_COLOR_CLEAR_VALUE,prev_clear);
     g_bloom.GetIntegerv(GL_FRAMEBUFFER_BINDING,&prev_fbo);
     g_bloom.GetIntegerv(GL_CURRENT_PROGRAM,&prev_prog);
     g_bloom.GetIntegerv(GL_ACTIVE_TEXTURE,&prev_act);
@@ -10470,7 +10527,8 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.BlendFuncSeparate((GLenum)prev_bsrc_r,(GLenum)prev_bdst_r,(GLenum)prev_bsrc_a,(GLenum)prev_bdst_a);
     g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,prev_align);
     g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,prev_rl);
-    g_bloom.ClearColor(prev_clear[0],prev_clear[1],prev_clear[2],prev_clear[3]);
+    /* SDL caches its clear colour (the presentation clears with black): leave black, without querying the GPU */
+    g_bloom.ClearColor(0.0f,0.0f,0.0f,1.0f);
     return 1;
 }
 
@@ -10872,7 +10930,13 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 if(!strncmp(stem,"pres_",5)) { snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s",out);
                     if(getenv("GW_SPR_MASK_DUMP") && visual && visual->spr_valid) {   /* QA: the soft_shadows mask (1 sprite, 2+caller shade) */
                         char mp[900]; snprintf(mp,sizeof mp,"%s/%s.sprmask",dump_dir,stem);
-                        FILE *mf=fopen(mp,"wb"); if(mf) { fwrite(visual->spr_mask,1,sizeof visual->spr_mask,mf); fclose(mf); } }
+                        FILE *mf=fopen(mp,"wb"); if(mf) { fwrite(visual->spr_mask,1,sizeof visual->spr_mask,mf); fclose(mf); }
+                        /* and the heights of this snapshot with its ring scroll and ring terrain (terrain_ao QA) */
+                        snprintf(mp,sizeof mp,"%s/%s.thring",dump_dir,stem);
+                        mf=fopen(mp,"wb");
+                        if(mf) { const int32_t hd[6]={visual->ring_x,visual->ring_y,(int32_t)visual->fx_ring_w,(int32_t)visual->fx_ring_h,visual->th_valid,visual->canvas_valid};
+                            fwrite(hd,4,6,mf); fwrite(visual->th_ring,2,(size_t)visual->fx_ring_w*visual->fx_ring_h,mf);
+                            fwrite(visual->fx_ring,1,(size_t)visual->fx_ring_w*visual->fx_ring_h,mf); fclose(mf); } }
                 } else {
                 SDL_Surface *ds=SDL_CreateRGBSurfaceWithFormatFrom((void *)g_ifclevel_demo_rgba,g_present_w,480,32,texture_w*(int)sizeof(uint32_t),SDL_PIXELFORMAT_ARGB8888);
                 if(ds) { SDL_SaveBMP(ds,out); SDL_FreeSurface(ds); }
