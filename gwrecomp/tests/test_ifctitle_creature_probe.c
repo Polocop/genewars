@@ -10021,7 +10021,11 @@ static int bloom_ensure_init(int logical_w) {
             "void main(){\n"
             "  vec3 base=texture2D(u_base,v_uv).rgb;\n"
             "  if(texture2D(u_hud_mask,v_suv).r>0.5){ if(u_map_on>0.5 && v_suv.x<u_hud_x) base=texture2D(u_map,v_suv).rgb; gl_FragColor=vec4(base,1.0); return; }\n"
-            "  if(u_map_on>0.5) base=texture2D(u_map,v_suv).rgb;\n"
+            "  if(u_map_on>0.5){ vec2 mu=v_suv;\n"
+            /* the HUD's transparent columns just left of x = 128 show the map's first column (the canvas there is the
+               unzoomed map and drew a seam next to the HUD at any zoom other than 1x) */
+            "    if(mu.x<u_hud_x && mu.x>u_hud_x*0.95) mu.x=u_hud_x*1.003;\n"
+            "    base=texture2D(u_map,mu).rgb; }\n"
             "  if(u_wt_on>0.5){ vec4 w=texture2D(u_wt,v_suv); base=mix(base,w.rgb,w.a); }\n"
             "  if(u_ao_on>0.5) base*=texture2D(u_ao,v_suv).r;\n"
             "  vec3 b=texture2D(u_bloom,v_suv).rgb*u_intensity;\n"
@@ -10470,7 +10474,7 @@ static int gm_init(void) {
         "    if(Ln.a>0.05) under=L.rgb;\n"
         "    if(mod(floor(G/8.0),2.0)>0.5 && Ln.a>0.05){\n"
         "      float lc=dot(lut(c),vec3(0.3,0.59,0.11)), lg=dot(lut(g),vec3(0.3,0.59,0.11));\n"
-        "      col=L.rgb*clamp(lc/max(lg,0.004),0.0,1.0);\n"
+        "      col=min(lut(c),L.rgb*pow(clamp(lc/max(lg,0.004),0.0,1.0),2.0));\n"
         "    }\n"
         "    if(lt>0.5 && Ln.a>0.05){\n"
         "      col=L.rgb;\n"
