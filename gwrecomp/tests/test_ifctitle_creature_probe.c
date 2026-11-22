@@ -20922,10 +20922,14 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
         static uint64_t pace_target;
         if(!pace_target || frame_start>pace_target+2u*frame_period) pace_target=frame_start;
         pace_target+=frame_period;
-        static int pace_legacy=-1;   /* QA: GW_PACER_LEGACY=1 = the previous pacer (deadline from the frame start, present first) */
-        if(pace_legacy<0) { const char *e=getenv("GW_PACER_LEGACY"); pace_legacy=e && e[0]=='1'; }
+        static int pace_legacy=-1,pace_mode=-1;   /* QA: GW_PACER_LEGACY=1 = the previous pacer (deadline from the frame start, present first) */
+        if(pace_legacy<0) { const char *e=getenv("GW_PACER_LEGACY"); pace_legacy=e && e[0]=='1';
+                            e=getenv("GW_PACER_MODE"); pace_mode=e && e[0]?atoi(e):1; }
         const uint64_t deadline=pace_legacy?frame_start+frame_period:pace_target;
-        g_present_deadline=(requested_fps && !pace_legacy)?deadline:0u;
+        /* mode 1: render, then wait for the instant right before the present; mode 2: wait for the instant first, then
+           render and present (the GPU has drained before the frame's uploads) */
+        if(requested_fps && !pace_legacy && pace_mode==2) { present_wait_until(deadline-frame_period); g_present_deadline=0u; }
+        else g_present_deadline=(requested_fps && !pace_legacy)?deadline:0u;
         const uint64_t render_start=SDL_GetPerformanceCounter();
         int present_ok=0;
         if(smk_owns) present_ok=1;
