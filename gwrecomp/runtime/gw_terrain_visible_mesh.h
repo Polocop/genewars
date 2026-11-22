@@ -26,6 +26,7 @@ typedef struct gw_terrain_visible_triangle {
     gw_terrain_gpu_vertex vertex[3];
     uint32_t texture;
     uint8_t mode;
+    int16_t wc[3],wr[3];   /* world cell of each corner relative to the display origin (unwrapped) */
 } gw_terrain_visible_triangle;
 
 static inline int16_t gw_terrain_read_i16(const uint8_t *p) {
@@ -54,6 +55,7 @@ static inline gw_terrain_gpu_vertex gw_terrain_corner(const uint8_t *cell,int x,
 static inline int gw_terrain_emit_visible(const uint8_t *ds,const uint8_t *tile,const uint8_t *extra,
                                          gw_terrain_gpu_vertex a,gw_terrain_gpu_vertex b,
                                          gw_terrain_gpu_vertex c,unsigned second,int height,
+                                         int wcol,int wrow,
                                          gw_terrain_visible_triangle *out,size_t capacity,size_t *n) {
     if((a.y<0 && b.y<0 && c.y<0) || (a.y>=height && b.y>=height && c.y>=height)) return 1;
     const uint8_t *uv=ds+GW_TERRAIN_UV_TABLE+((unsigned)tile[5]&0x70u)*2u;
@@ -62,15 +64,17 @@ static inline int gw_terrain_emit_visible(const uint8_t *ds,const uint8_t *tile,
     b.u=(int32_t)gw_terrain_read_u32(uv+b_uv); b.v=(int32_t)gw_terrain_read_u32(uv+b_uv+4);
     c.u=(int32_t)gw_terrain_read_u32(uv+c_uv); c.v=(int32_t)gw_terrain_read_u32(uv+c_uv+4);
     if(*n==capacity) return 0;
+    /* corners: first triangle (col,row) (col+1,row+1) (col,row+1); second (col,row+1) (col+1,row+1) (col+1,row+2) */
+    const int16_t wc0=(int16_t)wcol,wc1=(int16_t)(wcol+1),wr0=(int16_t)(second?wrow+1:wrow),wr1=(int16_t)(wrow+1),wr2=(int16_t)(second?wrow+2:wrow+1);
     const uint32_t texture=gw_terrain_read_u32(ds+GW_TERRAIN_B32_TABLE+4u*tile[4]);
     out[(*n)++]=(gw_terrain_visible_triangle){{a,b,c},texture,
-        (uint8_t)((a.light || b.light || c.light)?5u:0u)};
+        (uint8_t)((a.light || b.light || c.light)?5u:0u),{wc0,wc1,second?wc1:wc0},{wr0,wr1,wr2}};
     const unsigned kind=extra[13];
     if(kind<=1u) return 1;
     if(*n==capacity) return 0;
     const unsigned bank=kind>=97u?2u:(kind-1u)/32u;
     out[(*n)++]=(gw_terrain_visible_triangle){{a,b,c},
-        gw_terrain_read_u32(ds+GW_TERRAIN_COMPLEMENT_TABLE+4u*bank),6u};
+        gw_terrain_read_u32(ds+GW_TERRAIN_COMPLEMENT_TABLE+4u*bank),6u,{wc0,wc1,second?wc1:wc0},{wr0,wr1,wr2}};
     return 1;
 }
 
@@ -110,8 +114,9 @@ static inline size_t gw_terrain_build_visible(const uint8_t *ds,unsigned width,u
             const uint8_t *d=gw_terrain_cell(map,col+1,row+2);
             const gw_terrain_gpu_vertex vc=gw_terrain_corner(c,x+dx,y+dy*2,scale);
             const gw_terrain_gpu_vertex vd=gw_terrain_corner(d,x,y+dy*3,scale);
-            if(!gw_terrain_emit_visible(ds,a,a,va,vc,vb,0,(int)height,out,capacity,&n) ||
-               !gw_terrain_emit_visible(ds,b,b,vb,vc,vd,1,(int)height,out,capacity,&n)) return 0;
+            const int wcol=col-view_col,wrow=row-view_row;
+            if(!gw_terrain_emit_visible(ds,a,a,va,vc,vb,0,(int)height,wcol,wrow,out,capacity,&n) ||
+               !gw_terrain_emit_visible(ds,b,b,vb,vc,vd,1,(int)height,wcol,wrow,out,capacity,&n)) return 0;
             /* 0x66583/0x66592 compare the two advancing strip edges. */
             if(vc.y>=(int)height && vd.y>=(int)height) break;
             col++; row++; y+=dy*2;
@@ -127,10 +132,15 @@ enum { GW_MESH_TILES=259, GW_MESH_ATLAS_COLS=16, GW_MESH_ATLAS_W=512 };
 
 typedef struct gw_terrain_mesh_vertex {
     float x,y,depth,u,v,light,tile,mode;
+    float wx,wy,wz;   /* world cell relative to the display origin, height in screen pixels (step x scale) */
 } gw_terrain_mesh_vertex;
 
 typedef struct gw_terrain_mesh_draw {
     unsigned count,tiles;
+    /* the whole planet's height grid (cell +2, raw signed), the display origin and the projection's height scale:
+       lighting, shadows and water depth of the 3D terrain (presentation only) */
+    int16_t planet_h[128u*128u];
+    int view_col,view_row,height_scale;
     gw_terrain_mesh_vertex vertex[3u*GW_TERRAIN_GPU_FIXTURE_CAP];
     uint8_t texels[GW_MESH_TILES][1024];
     uint8_t fade[64u*256u];
@@ -143,6 +153,13 @@ static inline void gw_terrain_prepare_draw(const uint8_t *ds,size_t bound,unsign
     const size_t count=gw_terrain_build_visible(ds,width,height,mesh,GW_TERRAIN_GPU_FIXTURE_CAP);
     unsigned tiles=0;
     draw->count=0;
+    draw->height_scale=(int)gw_terrain_read_u32(ds+GW_TERRAIN_HEIGHT_SCALE);
+    draw->view_col=gw_terrain_read_i16(ds+GW_TERRAIN_MAP_DISPLAY);
+    draw->view_row=gw_terrain_read_i16(ds+GW_TERRAIN_MAP_DISPLAY+2);
+    if(count) {
+        const uint8_t *map=ds+GW_TERRAIN_MAP;
+        for(unsigned i=0;i<128u*128u;i++) draw->planet_h[i]=gw_terrain_read_i16(map+14u*i+2u);
+    }
     for(size_t i=0;i<count;i++) {
         const gw_terrain_visible_triangle *tri=&mesh[i];
         const uint32_t tex=tri->texture;
@@ -158,7 +175,8 @@ static inline void gw_terrain_prepare_draw(const uint8_t *ds,size_t bound,unsign
             const gw_terrain_gpu_vertex *v=&tri->vertex[k];
             draw->vertex[3*i+k]=(gw_terrain_mesh_vertex){
                 (float)v->x,(float)v->y,0.75f-(float)i/(float)GW_TERRAIN_GPU_FIXTURE_CAP,
-                v->u/65536.0f,v->v/65536.0f,v->light/65536.0f,(float)slot,(float)tri->mode
+                v->u/65536.0f,v->v/65536.0f,v->light/65536.0f,(float)slot,(float)tri->mode,
+                (float)tri->wc[k],(float)tri->wr[k],(float)v->height*(float)draw->height_scale
             };
         }
     }

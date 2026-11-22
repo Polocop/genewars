@@ -8316,6 +8316,10 @@ static uint32_t g_interp_panel_rgba[480*48],g_interp_panel_saved[480*48];
 static int g_interp_panel_active;
 static SDL_atomic_t g_interp_panel_reset;   /* set by the widescreen switch: relearn the panel mask from scratch */
 static char g_present_dump_path[900];
+/* QA (GW_FRAME_DUMP_DIR, stem pair_<name>): the presentation holds its current snapshot, captures the composed window,
+   toggles the 2D/3D terrain (Ctrl+F9's switch), captures the same game frame again and restores both: <name>_3d.bmp and
+   <name>_2d.bmp of one tick. Presentation only; the simulation keeps running. */
+static int g_qa_hold,g_qa_pair_stage; static char g_qa_pair_base[900];
 static char g_present_burst_dir[700]; static unsigned g_present_burst_left,g_present_burst_index;   /* QA: stem burst_N */
 static uint8_t *g_interp_idx[2];      /* indexed map copies: [0] previous, [1] current, pitch 864 */
 static int g_interp_have_prev,g_interp_dx,g_interp_dy,g_interp_last_dx,g_interp_last_dy;
@@ -8484,6 +8488,9 @@ static unsigned g_ini_fps;   /* gwrecomp.ini fps = N (play mode) */
 static char g_ini_path_used[MAX_PATH];
 static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launcher=1,g_ini_last_mission=1;
 static int g_terrain_3d=1;  /* host presentation thread only */
+static int g_ini_terrain_3d_shadows=1;   /* terrain_3d_shadows: directional shadow map of hills and craters (3D terrain) */
+static int g_ini_terrain_3d_water=1;     /* terrain_3d_water: coastal depth colour, foam, waves, Fresnel and glints (3D terrain) */
+static int g_tl_scale=2;                 /* 3D terrain: lit layers at this many times the canvas resolution */
 static int g_ini_clean_horizon=1;   /* clean_horizon: drop 1-pixel horizon slivers from the presented frame */
 static int g_ini_water_effects=1;   /* water_effects: animated water ripples/caustics and GOOP highlights (presented frame only) */
 static int g_ini_enhanced_audio=1;  /* enhanced_audio: positional sound fitted to the view, SFX pitch variation, CD-DA ducking */
@@ -8584,6 +8591,8 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"last_mission")) { const int v=atoi(val); if(v>=1 && v<=24) g_ini_last_mission=v; }
         else if(!strcmp(key,"cd_cue")) snprintf(g_ini_cd_cue,sizeof g_ini_cd_cue,"%s",val);
         else if(!strcmp(key,"terrain_3d")) g_terrain_3d=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_shadows")) g_ini_terrain_3d_shadows=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_water")) g_ini_terrain_3d_water=atoi(val)!=0;
         else if(!strcmp(key,"clean_horizon")) g_ini_clean_horizon=atoi(val)!=0;
         else if(!strcmp(key,"water_effects")) g_ini_water_effects=atoi(val)!=0;
         else if(!strcmp(key,"enhanced_audio")) g_ini_enhanced_audio=atoi(val)!=0;
@@ -10316,17 +10325,17 @@ static void bu_canvas_rows(void *cp,int y0,int y1) {
 #define GL_RG8 0x822B
 #endif
 static struct {
-    int ready,failed,have,pending,shadows,th,msk_zero,mesh_enabled,mesh_applied;
+    int ready,failed,have,pending,shadows,th,msk_zero,mesh_enabled,mesh_applied,lit_applied;
     const gw_terrain_mesh_draw *mesh;
     GLuint t_idx,t_ring,t_hgt,t_msk,t_shade,t_kind,tmp1,tmp2,fbo,map_fbo,map_tex;
     GLuint aux[3];
     int map_w,map_h,ring_x,ring_y,kind_ok;
     GLuint p_pack,p_cand,p_blurh,p_blurv,p_map,p_hud;
     GLint hu_idx,hu_lut;
-    GLint pk_idx,pk_ring,pk_hgt,pk_kind,pk_off,pk_th,pk_mesh,pk_mesh_on,pk_mask;
+    GLint pk_idx,pk_ring,pk_hgt,pk_kind,pk_off,pk_th,pk_mesh,pk_mesh_on,pk_mask,pk_lit_on;
     GLint cd_idx,cd_ring,cd_msk,cd_shade,cd_lut,cd_kind,cd_off;
     GLint bh_src,bv_src,bv_cand,bv_ring,bv_off,bv_on,bv_mesh,bv_mesh_on;
-    GLint mp_pk,mp_aux,mp_lut;
+    GLint mp_pk,mp_aux,mp_lut,mp_lit,mp_view,mp_lsz,mp_time,mp_sun,mp_sunc,mp_sky;
     uint8_t kind_pal[768];
     uint8_t *ring_last; int16_t *hgt_last; int last_valid;
 } g_gm;
@@ -10345,6 +10354,7 @@ static GLuint gm_tex(int w,int h,GLenum ifmt,GLenum fmt) {
     return t;
 }
 #include "gw_terrain_mesh_gl.h"
+#include "gw_terrain_lit_gl.h"
 #define GM_GLSL_COMMON \
     "#version 120\n" \
     "float rd(sampler2D t,vec2 p,vec2 sz){ return floor(texture2D(t,(p+0.5)/sz).r*255.0+0.5); }\n" \
@@ -10360,7 +10370,7 @@ static int gm_init(void) {
     /* packing: one texel per canvas pixel at canvas x = 128 + texel x (the layer texture's own layout) */
     static const char *fs_pack= GM_GLSL_COMMON
         "uniform sampler2D u_idx; uniform sampler2D u_ring; uniform sampler2D u_hgt; uniform sampler2D u_kind;\n"
-        "uniform vec2 u_off; uniform float u_th; uniform sampler2D u_mesh, u_mask; uniform float u_mesh_on;\n"
+        "uniform vec2 u_off; uniform float u_th; uniform sampler2D u_mesh, u_mask; uniform float u_mesh_on, u_lit_on;\n"
         "void main(){\n"
         "  vec2 S=vec2(1152.0,640.0); vec2 tp=floor(gl_FragCoord.xy); float cx=tp.x+128.0, y=tp.y;\n"
         "  float c=rd(u_idx,vec2(cx,y),S);\n"
@@ -10369,11 +10379,17 @@ static int gm_init(void) {
         "  float hy=(y>638.5)?mod(ry-1.0,640.0):ry;\n"
         "  vec2 hh=texture2D(u_hgt,(vec2(128.0+rx,hy)+0.5)/S).rg; float lo=floor(hh.r*255.0+0.5), hi=floor(hh.g*255.0+0.5);\n"
         "  float h=(hi>=128.0)?0.0:min(lo+256.0*hi,4095.0); h*=u_th;\n"
-        "  if(u_mesh_on>0.5 && gnd>0.5 && rd(u_mask,vec2(cx,y),S)<0.5){\n"
+        "  float lt=0.0;\n"
+        /* the game leaves the canvas black off the playable map (and beyond its terrain pass): the mesh only replaces
+           pixels where the game drew terrain, or within 2 pixels of it (1:1 with the 2D frame) */
+        "  float gx0=rd(u_ring,vec2(128.0+mod(rx+2.0,1024.0),ry),S), gx1=rd(u_ring,vec2(128.0+mod(rx+1022.0,1024.0),ry),S);\n"
+        "  float gy0=rd(u_ring,vec2(128.0+rx,mod(ry+2.0,640.0)),S), gy1=rd(u_ring,vec2(128.0+rx,mod(ry+638.0,640.0)),S);\n"
+        "  float drawn=(g+gx0+gx1+gy0+gy1>0.5)?1.0:0.0;\n"
+        "  if(u_mesh_on>0.5 && gnd>0.5 && drawn>0.5 && rd(u_mask,vec2(cx,y),S)<0.5){\n"
         "    vec2 m=texture2D(u_mesh,(vec2(cx,y)+0.5)/S).rg;\n"
-        "    if(m.g>0.5) c=floor(m.r*255.0+0.5);\n"
+        "    if(m.g>0.5) { c=floor(m.r*255.0+0.5); lt=u_lit_on; }\n"
         "  }\n"
-        "  float G=1.0+2.0*gnd+16.0*mod(h,16.0), B=floor(h/16.0);\n"
+        "  float G=1.0+2.0*gnd+4.0*lt+16.0*mod(h,16.0), B=floor(h/16.0);\n"
         "  float A=(u_th>0.5 && gnd>0.5 && tp.x>=48.0 && k256(u_kind,c)<0.5)?255.0:0.0;\n"
         "  gl_FragColor=vec4(c,G,B,A)/255.0;\n"
         "}\n";
@@ -10414,16 +10430,54 @@ static int gm_init(void) {
         "  float cd=texture2D(u_cand,p/S).r;\n"
         "  gl_FragColor=vec4(g/255.0,u_on*v/9.0,u_on*cd,1.0); }\n";
     /* map colour of a layer: palette, and the soft shadow redraw from the terrain */
+    /* 3D terrain (bit 2 of G): the lit layer (bilinear, up to 4x the canvas), and on water the per-frame waves (world
+       anchored: canvas position + the layer's display origin, integer wave numbers so the planet wrap is seamless),
+       Fresnel sky reflection, sun glints and shore foam; GOOP pulses. u_view = (origin col, row, lit layer present) */
     static const char *fs_map=
-        "#version 120\n uniform sampler2D u_pk; uniform sampler2D u_aux; uniform sampler2D u_lut;\n varying vec2 v_uv;\n"
+        "#version 120\n uniform sampler2D u_pk; uniform sampler2D u_aux; uniform sampler2D u_lut; uniform sampler2D u_lit;\n"
+        "uniform vec3 u_view; uniform vec2 u_lsz; uniform float u_time; uniform vec3 u_sun,u_sunc,u_sky;\n varying vec2 v_uv;\n"
         "vec3 lut(float k){ return texture2D(u_lut,vec2((k+0.5)/256.0,0.25)).rgb; }\n"
         "void main(){\n"
         "  vec4 p=texture2D(u_pk,v_uv); vec4 a=texture2D(u_aux,v_uv);\n"
-        "  float c=floor(p.r*255.0+0.5), gnd=mod(floor(floor(p.g*255.0+0.5)/2.0),2.0);\n"
+        "  float G=floor(p.g*255.0+0.5);\n"
+        "  float c=floor(p.r*255.0+0.5), gnd=mod(floor(G/2.0),2.0), lt=mod(floor(G/4.0),2.0)*step(0.5,u_view.z);\n"
         "  float m=floor(a.g*255.0+0.5)/255.0, g=floor(a.r*255.0+0.5);\n"
-        "  vec3 col=lut(c);\n"
-        "  if(m>0.0 && (a.b>0.5 || gnd>0.5)) col=lut(g)*(1.0-m*0.68);\n"
-        "  gl_FragColor=vec4(col,1.0);\n"
+        "  vec3 col=lut(c), under=lut(g);\n"
+        "  if(u_view.z>0.5){\n"
+        "    vec4 Ln=texture2D(u_lit,(floor(v_uv*u_lsz)+0.5)/u_lsz), L=texture2D(u_lit,v_uv);\n"
+        "    if(Ln.a>0.05) under=L.rgb;\n"
+        "    if(lt>0.5 && Ln.a>0.05){\n"
+        "      col=L.rgb;\n"
+        "      if(Ln.a<0.875){\n"
+        "        vec2 cp=vec2(128.0+v_uv.x*1024.0,v_uv.y*640.0);\n"
+        "        float dd=cp.x/32.0+(u_view.x-u_view.y), ss=cp.y/16.0+(u_view.x+u_view.y);\n"
+        "        vec2 q=vec2(ss+dd,ss-dd)*(0.5*6.2831853/128.0);\n"
+        "        float t=u_time;\n"
+        "        if(Ln.a>0.625){\n"
+        "          float pu=0.5+0.5*sin(t*2.0+q.x*53.0+q.y*29.0)*sin(t*1.3-q.x*31.0+q.y*47.0);\n"
+        "          col=L.rgb*(1.0+0.20*pu)+vec3(0.10,0.04,0.17)*pu;\n"
+        "        } else {\n"
+        "          vec2 k1=vec2(83.0,31.0),k2=vec2(-47.0,71.0),k3=vec2(233.0,-97.0),k4=vec2(61.0,257.0);\n"
+        "          float a1=dot(k1,q)+t*1.9,a2=dot(k2,q)-t*1.6,a3=dot(k3,q)+t*3.1,a4=dot(k4,q)-t*2.7;\n"
+        "          vec2 gr=k1*cos(a1)+k2*cos(a2)*0.8+k3*cos(a3)*0.30+k4*cos(a4)*0.26;\n"
+        "          vec3 N=normalize(vec3(-gr*0.0011,1.0));\n"
+        "          vec3 V=vec3(0.6124,0.6124,0.5);\n"
+        "          float F=0.03+0.97*pow(1.0-max(dot(N,V),0.0),5.0);\n"
+        "          vec3 R=reflect(-V,N);\n"
+        "          float sp=pow(max(dot(R,u_sun),0.0),160.0)*1.5+pow(max(dot(R,u_sun),0.0),20.0)*0.05;\n"
+        "          float dep=clamp((Ln.a-0.1)/0.4,0.0,1.0);\n"
+        "          float lb=dot(L.rgb,vec3(0.3,0.59,0.11));\n"
+        "          col=mix(L.rgb,u_sky*(0.70+0.30*R.z)*clamp(lb*2.5,0.0,1.0),clamp(F*2.2,0.0,0.45))+u_sunc*sp*clamp(lb*3.0,0.0,1.0);\n"
+        "          float fn=0.5+0.5*sin(q.x*41.0+q.y*17.0+t*0.7)*sin(-q.x*23.0+q.y*37.0-t*0.9);\n"
+        "          float band=0.5+0.5*sin(dep*70.0-t*2.4+3.0*fn);\n"
+        "          float foam=smoothstep(0.10,0.0,dep)*band*(0.45+0.55*fn);\n"
+        "          col=mix(col,vec3(0.86,0.93,0.97),clamp(foam*0.45,0.0,0.45));\n"
+        "        }\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  if(m>0.0 && (a.b>0.5 || gnd>0.5)) col=under*(1.0-m*0.68);\n"
+        "  gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);\n"
         "}\n";
     /* HUD (canvas x < 128, rows < 480) from the same raw canvas: palette only */
     static const char *fs_hud=
@@ -10438,13 +10492,15 @@ static int gm_init(void) {
     #define GMU(prog,name) g_bloom.GetUniformLocation(g_gm.prog,name)
     g_gm.pk_idx=GMU(p_pack,"u_idx"); g_gm.pk_ring=GMU(p_pack,"u_ring"); g_gm.pk_hgt=GMU(p_pack,"u_hgt"); g_gm.pk_kind=GMU(p_pack,"u_kind");
     g_gm.pk_off=GMU(p_pack,"u_off"); g_gm.pk_th=GMU(p_pack,"u_th");
-    g_gm.pk_mesh=GMU(p_pack,"u_mesh"); g_gm.pk_mesh_on=GMU(p_pack,"u_mesh_on"); g_gm.pk_mask=GMU(p_pack,"u_mask");
+    g_gm.pk_mesh=GMU(p_pack,"u_mesh"); g_gm.pk_mesh_on=GMU(p_pack,"u_mesh_on"); g_gm.pk_mask=GMU(p_pack,"u_mask"); g_gm.pk_lit_on=GMU(p_pack,"u_lit_on");
     g_gm.cd_idx=GMU(p_cand,"u_idx"); g_gm.cd_ring=GMU(p_cand,"u_ring"); g_gm.cd_msk=GMU(p_cand,"u_msk"); g_gm.cd_shade=GMU(p_cand,"u_shade");
     g_gm.cd_lut=GMU(p_cand,"u_lut"); g_gm.cd_kind=GMU(p_cand,"u_kind"); g_gm.cd_off=GMU(p_cand,"u_off");
     g_gm.bh_src=GMU(p_blurh,"u_src");
     g_gm.bv_src=GMU(p_blurv,"u_src"); g_gm.bv_cand=GMU(p_blurv,"u_cand"); g_gm.bv_ring=GMU(p_blurv,"u_ring"); g_gm.bv_off=GMU(p_blurv,"u_off"); g_gm.bv_on=GMU(p_blurv,"u_on");
     g_gm.bv_mesh=GMU(p_blurv,"u_mesh"); g_gm.bv_mesh_on=GMU(p_blurv,"u_mesh_on");
     g_gm.mp_pk=GMU(p_map,"u_pk"); g_gm.mp_aux=GMU(p_map,"u_aux"); g_gm.mp_lut=GMU(p_map,"u_lut");
+    g_gm.mp_lit=GMU(p_map,"u_lit"); g_gm.mp_view=GMU(p_map,"u_view"); g_gm.mp_lsz=GMU(p_map,"u_lsz"); g_gm.mp_time=GMU(p_map,"u_time");
+    g_gm.mp_sun=GMU(p_map,"u_sun"); g_gm.mp_sunc=GMU(p_map,"u_sunc"); g_gm.mp_sky=GMU(p_map,"u_sky");
     g_gm.hu_idx=GMU(p_hud,"u_idx"); g_gm.hu_lut=GMU(p_hud,"u_lut");
     #undef GMU
     g_gm.t_idx=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_ring=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_hgt=gm_tex(1152,640,GL_RG8,GL_RG);
@@ -10469,6 +10525,7 @@ static void gm_rows(GLuint t,int y0,int y1,GLenum fmt,const void *base,size_t bp
 static void gm_upload(const gw_interactive_visual_snapshot *v) {
     {   GLuint t=g_bloom.canvas_tex[0]; g_bloom.canvas_tex[0]=g_bloom.canvas_tex[1]; g_bloom.canvas_tex[1]=g_bloom.canvas_tex[2]; g_bloom.canvas_tex[2]=t;
         t=g_gm.aux[0]; g_gm.aux[0]=g_gm.aux[1]; g_gm.aux[1]=g_gm.aux[2]; g_gm.aux[2]=t; }
+    if(g_t3.ready) tl_rotate();
     gm_rows(g_gm.t_idx,0,639,GL_RED,v->canvas,1u);
     if(v->panel_bg_valid) {   /* panel art on x = 128..175: the map under it, as the CPU conversion does */
         static uint8_t patch[48u*480u];
@@ -10877,6 +10934,13 @@ static void bloom_draw_map_rect(float lx0,float ly0,float lw,float lh,
 /* draws the map layers (zoom-out canvas, interpolated view pair, zoomed or plain view) into the bound FBO with the
    bound program; texture unit 0 gets the index/flags/height textures, texel_loc the source texel size */
 static int g_layers_cur_only;   /* 1: bloom_draw_map_layers draws only the current snapshot's layer (water pass) */
+static GLint g_layers_view_loc=-1;   /* map pass: per layer, its lit 3D texture on unit 7 and (origin col, row, present) */
+static void gm_layer_lit(int k) {
+    if(g_layers_view_loc<0) return;
+    const int on=g_t3.ready && g_gm.lit_applied && g_t3.lhave[k] && g_t3.lit[k];
+    g_bloom.ActiveTexture(GL_TEXTURE7); g_bloom.BindTexture(GL_TEXTURE_2D,on?g_t3.lit[k]:0u); g_bloom.ActiveTexture(GL_TEXTURE0);
+    if(g_t3.Uniform3f) g_t3.Uniform3f(g_layers_view_loc,(float)g_t3.lview[k][0],(float)g_t3.lview[k][1],on?1.0f:0.0f);
+}
 static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
     const int vw=g_present_w;
     if(g_canvas_live && g_bloom.canvas_ready && (g_zoom<0.9999 || g_gm_frame)) {
@@ -10886,12 +10950,12 @@ static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
         const int idy=(g_bloom.canvas_ready>=2 && (g_interp_dx||g_interp_dy) && interp_a<1.0)?g_interp_dy:0;
         g_bloom.Uniform2f(texel_loc,1.0f/(float)GW_CANVAS_TEX_W,1.0f/(float)GW_CANVAS_H);
         if(interp_a<1.0 && (idx||idy) && !g_layers_cur_only) {
-            if(g_layers_aux) { g_bloom.ActiveTexture(GL_TEXTURE5); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.aux[0]); g_bloom.ActiveTexture(GL_TEXTURE0); }
+            if(g_layers_aux) { g_bloom.ActiveTexture(GL_TEXTURE5); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.aux[0]); g_bloom.ActiveTexture(GL_TEXTURE0); gm_layer_lit(0); }
             g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[0]);
             bloom_draw_map_rect((float)(128.0+(GW_CANVAS_MAPX0+interp_a*idx-ux)*z),(float)((interp_a*idy-uy)*z),
                                 tw,th,0.0f,0.0f,1.0f,1.0f,vw);
         }
-        if(g_layers_aux) { g_bloom.ActiveTexture(GL_TEXTURE5); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.aux[1]); g_bloom.ActiveTexture(GL_TEXTURE0); }
+        if(g_layers_aux) { g_bloom.ActiveTexture(GL_TEXTURE5); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.aux[1]); g_bloom.ActiveTexture(GL_TEXTURE0); gm_layer_lit(1); }
         g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[1]);
         bloom_draw_map_rect((float)(128.0+(GW_CANVAS_MAPX0-(1.0-interp_a)*idx-ux)*z),
                             (float)((-(1.0-interp_a)*idy-uy)*z),tw,th,0.0f,0.0f,1.0f,1.0f,vw);
@@ -11013,6 +11077,7 @@ static void gm_passes(int in_mission) {
     const int toggled=desired!=g_gm.mesh_enabled;
     g_gm.mesh_enabled=desired;
     g_gm.mesh_applied=desired && terrain_gl_render(g_gm.mesh);
+    g_gm.lit_applied=g_gm.mesh_applied && tl_render(g_gm.mesh,g_tl_scale);
     if(toggled) g_bloom.canvas_ready=1; /* previous layer used the other renderer */
     const float ox=(float)g_gm.ring_x,oy=(float)g_gm.ring_y;
     gm_target(g_bloom.canvas_tex[1]);
@@ -11020,6 +11085,7 @@ static void gm_passes(int in_mission) {
     gm_bind(0,g_gm.t_idx,g_gm.pk_idx); gm_bind(1,g_gm.t_ring,g_gm.pk_ring); gm_bind(2,g_gm.t_hgt,g_gm.pk_hgt); gm_bind(3,g_gm.t_kind,g_gm.pk_kind);
     gm_bind(4,g_gm.mesh_applied?g_gl_mesh.color:g_gm.t_kind,g_gm.pk_mesh); gm_bind(5,g_gm.t_msk,g_gm.pk_mask);
     g_bloom.Uniform1f(g_gm.pk_mesh_on,g_gm.mesh_applied?1.0f:0.0f);
+    g_bloom.Uniform1f(g_gm.pk_lit_on,g_gm.lit_applied?1.0f:0.0f);
     g_bloom.Uniform2f(g_gm.pk_off,ox,oy); g_bloom.Uniform1f(g_gm.pk_th,g_gm.th?1.0f:0.0f);
     bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
     if(g_gm.shadows) {
@@ -11061,9 +11127,21 @@ static int gm_map(const gw_present_geo *geo,double interp_a) {
     g_bloom.UseProgram(g_gm.p_map);
     g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_gm.mp_lut,1);
     g_bloom.Uniform1i(g_gm.mp_aux,5);
+    g_bloom.Uniform1i(g_gm.mp_lit,7);
+    if(g_t3.ready) {
+        g_bloom.Uniform2f(g_gm.mp_lsz,(float)g_t3.w,(float)g_t3.h);
+        const uint64_t f=SDL_GetPerformanceFrequency(),t=SDL_GetPerformanceCounter();
+        const double per=20.0*3.14159265358979;   /* every wave speed is a multiple of 0.1 rad/s: seamless period */
+        g_bloom.Uniform1f(g_gm.mp_time,(float)fmod((double)t/(double)f,per));
+        g_t3.Uniform3f(g_gm.mp_sun,g_t3.sun[0],g_t3.sun[1],g_t3.sun[2]);
+        g_t3.Uniform3f(g_gm.mp_sunc,g_t3.sunc[0],g_t3.sunc[1],g_t3.sunc[2]);
+        g_t3.Uniform3f(g_gm.mp_sky,g_t3.sky[0],g_t3.sky[1],g_t3.sky[2]);
+    }
     g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.Uniform1i(g_gm.mp_pk,0);
     GLint dummy=-1;
+    g_layers_view_loc=g_gm.mp_view;
     g_layers_aux=1; bloom_draw_map_layers(interp_a,dummy); g_layers_aux=0;
+    g_layers_view_loc=-1;
     g_bloom.Disable(GL_SCISSOR_TEST);
     /* the HUD: the canvas' own x < 128 at 1x on the left of the logical view (the composite takes it there) */
     g_bloom.UseProgram(g_gm.p_hud);
@@ -11122,6 +11200,17 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.Disable(GL_SCISSOR_TEST);
     g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,1);
     g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    {   /* 3D terrain: lit layers at the window's resolution (1 canvas pixel = oh/480 output pixels at zoom 1, up to 4x),
+           the sun and sky of the biome (re-voted every 2 s) */
+        static int env_s=-1; if(env_s<0) { const char *e=getenv("GW_TERRAIN_3D_SCALE"); env_s=e&&e[0]?atoi(e):0; }
+        int sc=(geo->oh+479)/480; if(sc<2) sc=2;
+        if(sc>4) sc=4;
+        if(env_s>0) sc=env_s>4?4:env_s;
+        g_tl_scale=sc;
+        static uint64_t bt; const uint64_t now=SDL_GetPerformanceCounter(),fq=SDL_GetPerformanceFrequency();
+        if(g_terrain_3d && v && v->in_mission && v->fx_ring_valid && (!bt || now-bt>2u*fq)) {
+            bt=now; pt_biome(v); if(g_t3.ready && g_pt_biome!=g_t3.biome) tl_biome(g_pt_biome); }
+    }
     gm_passes(v && v->valid && v->in_mission && v->canvas_valid);   /* GPU map composition: packing and soft shadows of a new game frame */
 
     if(bloom_on) {
@@ -11194,13 +11283,14 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
         g_bloom.Enable(GL_SCISSOR_TEST); g_bloom.Scissor(128,0,g_present_w-128,480);
         g_bloom.UseProgram(g_bloom.prog_ao);
         g_bloom.Uniform1i(g_bloom.u_ao_idx,0);
-        g_bloom.Uniform1f(g_bloom.u_ao_strength,g_ini_terrain_ao_strength);
+        /* the lit 3D terrain already shades slopes and valleys: half the screen-space AO, no double darkening */
+        g_bloom.Uniform1f(g_bloom.u_ao_strength,g_ini_terrain_ao_strength*((g_gm_frame && g_gm.lit_applied)?0.5f:1.0f));
         g_bloom.ActiveTexture(GL_TEXTURE0);
         bloom_draw_map_layers(interp_a,g_bloom.u_ao_texel);
         g_bloom.Disable(GL_SCISSOR_TEST);
     }
     /* water_effects (GPU): current layer, at the scaled frame's resolution */
-    int wt_on=active && wt_on0 && wt_init() && g_bloom.kind_ok;
+    int wt_on=active && wt_on0 && !(g_gm_frame && g_gm.lit_applied && g_ini_terrain_3d_water) && wt_init() && g_bloom.kind_ok;
     if(wt_on && (g_bloom.wt_w!=geo->tw || g_bloom.wt_h!=geo->th || !g_bloom.fbo_wt)) {
         if(g_bloom.fbo_wt) { g_bloom.DeleteFramebuffers(1,&g_bloom.fbo_wt); g_bloom.DeleteTextures(1,&g_bloom.tex_wt); g_bloom.fbo_wt=g_bloom.tex_wt=0; }
         if(bloom_make_fbo(&g_bloom.fbo_wt,&g_bloom.tex_wt,geo->tw,geo->th,GL_RGBA8)) {
@@ -11301,8 +11391,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                                        const gw_interactive_visual_snapshot *visual) {
     const char *terrain_capture_path=capture_path;
     /* this frame's zoomed-out map comes from the GPU composition (decided once, before any conversion) */
-    g_gm_frame=visual && gm_frame_ok(visual) && g_zoom<=1.0001 &&
-               (bloom_active(visual) || ao_gpu_active(visual) || part_active(visual) || fx_active(visual) || depth_active(visual));
+    g_gm_frame=visual && gm_frame_ok(visual) && g_zoom<=2.0001 &&
+               ((g_terrain_3d && visual->terrain_mesh.count) ||
+                bloom_active(visual) || ao_gpu_active(visual) || part_active(visual) || fx_active(visual) || depth_active(visual));
     {   static int last=-1; static unsigned nfr;
         if(visual && visual->in_mission && ++nfr%600u==0u)
             gw_flag_trace("TRACE gpu_map status frame=%d ready=%d have=%d pending=%d passes=%u uploads=%u zoom=%.3f%c",g_gm_frame,g_gm.ready,g_gm.have,g_gm.pending,g_gm_npass,g_gm_nup,g_zoom,10);
@@ -11747,6 +11838,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 char out[900]; snprintf(out,sizeof out,"%s/%s.bmp",dump_dir,stem);
                 /* stems starting with pres_ capture the composed window output (after interpolation and pointer) */
                 /* stem burst_<N>: the next N composed window frames go to <dir>/burst_000.bmp.. (QA, scroll artefacts) */
+                if(!strncmp(stem,"pair_",5)) { snprintf(g_qa_pair_base,sizeof g_qa_pair_base,"%s/%s",dump_dir,stem+5); g_qa_pair_stage=1; } else
                 if(!strncmp(stem,"burst_",6)) { const int nb=atoi(stem+6); snprintf(g_present_burst_dir,sizeof g_present_burst_dir,"%s",dump_dir);
                     g_present_burst_left=(unsigned)(nb>0&&nb<=400?nb:60); g_present_burst_index=0u; } else
                 if(!strncmp(stem,"pres_",5)) { snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s",out);
@@ -12146,6 +12238,13 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             SDL_RenderCopy(g_ifclevel_demo_renderer,pointer_texture,NULL,&pointer_dst);
             }
         }
+    }
+    if(g_qa_pair_stage) {   /* frames 1-6: hold and settle; 6: first capture + toggle; 12: second capture + restore */
+        const int st=g_qa_pair_stage++;
+        g_qa_hold=1;
+        if(st==6 || st==12) snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s_%s.bmp",g_qa_pair_base,g_terrain_3d?"3d":"2d");
+        if(st==7 || st==13) { g_terrain_3d=!g_terrain_3d; gw_flag_trace("TRACE qa_pair terrain_3d=%d%c",g_terrain_3d,10); }
+        if(st==13) { g_qa_pair_stage=0; g_qa_hold=0; }
     }
     if(!g_present_dump_path[0] && g_present_burst_left) {
         snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s/burst_%03u.bmp",g_present_burst_dir,g_present_burst_index++);
@@ -21555,7 +21654,7 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
         SDL_LockMutex(g_interactive_snapshot_mutex);
         gw_interactive_visual_snapshot *present_current=
             &g_interactive_present_snapshots[g_interactive_present_current_index];
-        if(g_interactive_published_snapshot.valid &&
+        if(g_interactive_published_snapshot.valid && !g_qa_hold &&
            (!present_current->valid ||
             g_interactive_published_snapshot.generation!=present_current->generation)) {
             const unsigned next_index=present_current->valid?
@@ -22299,49 +22398,52 @@ static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
 }
 static void gl_draw_display(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
-    /* rows every 27 units: 55, 82, ..., 325 (11 rows, panel 52..352) */
+    /* rows every 24 units: 54, 78, ..., 318 (12 rows, panel 52..352; a choice is 22 tall, the last subtitle ends by 345) */
     const wchar_t *const modes[3]={GWT(L"CLÁSICO 4:3",L"CLASSIC 4:3"),GWT(L"PANORÁMICO 854×480",L"WIDESCREEN 854×480"),L"ZOOM OUT 1152×640"};
-    gl_row_label(55,GWT(L"MODO DE VISTA",L"VIEW MODE"),GWT(L"Zoom: rueda; Inicio = 1x",L"Zoom: wheel; Home = 1x"));
+    gl_row_label(54,GWT(L"MODO DE VISTA",L"VIEW MODE"),GWT(L"Zoom: rueda; Inicio = 1x",L"Zoom: wheel; Home = 1x"));
     int cur=g_ws_canvas?2:g_ws_requested?1:0;
-    int c=gl_choice(228,55,390,22,modes,3,cur,0u);
+    int c=gl_choice(228,54,390,22,modes,3,cur,0u);
     if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
     static const wchar_t *const res[5]={L"AUTO",L"900p",L"1080p",L"1440p",L"2160p"};
     unsigned dis=0u; for(int i=1;i<5;i++) if(GL.desk_w && (gl_res_w[i]>GL.desk_w || gl_res_h[i]>GL.desk_h)) dis|=1u<<i;
-    gl_row_label(82,GWT(L"RESOLUCIÓN",L"RESOLUTION"),GWT(L"Tamaño de la ventana",L"Window size"));
-    cur=gl_res_index(); c=gl_choice(228,82,390,22,res,5,cur,dis);
+    gl_row_label(78,GWT(L"RESOLUCIÓN",L"RESOLUTION"),GWT(L"Tamaño de la ventana",L"Window size"));
+    cur=gl_res_index(); c=gl_choice(228,78,390,22,res,5,cur,dis);
     if(c>=0 && c!=cur) { g_cli_res_w=gl_res_w[c]; g_cli_res_h=gl_res_h[c]; (void)gwrecomp_ini_set("resolution",gl_res_ini[c]); }
     const wchar_t *const fs[2]={GWT(L"VENTANA",L"WINDOW"),GWT(L"COMPLETA SIN BORDES",L"BORDERLESS FULLSCREEN")};
-    gl_row_label(109,GWT(L"PANTALLA",L"SCREEN"),GWT(L"Sin bordes = escritorio",L"Borderless = desktop size"));
-    c=gl_choice(228,109,390,22,fs,2,g_cli_fullscreen,0u);
+    gl_row_label(102,GWT(L"PANTALLA",L"SCREEN"),GWT(L"Sin bordes = escritorio",L"Borderless = desktop size"));
+    c=gl_choice(228,102,390,22,fs,2,g_cli_fullscreen,0u);
     if(c>=0 && c!=g_cli_fullscreen) { g_cli_fullscreen=c; gwrecomp_ini_set_int("fullscreen",c); }
     const wchar_t *const fps[2]={GWT(L"60 FPS CLÁSICO",L"60 FPS CLASSIC"),GWT(L"120 FPS INTERPOLADO",L"120 FPS INTERPOLATED")};
-    gl_row_label(136,GWT(L"FOTOGRAMAS",L"FRAME RATE"),GWT(L"El ritmo del juego no cambia",L"The game speed stays the same"));
-    cur=g_ini_fps==60u?0:1; c=gl_choice(228,136,390,22,fps,2,cur,0u);
+    gl_row_label(126,GWT(L"FOTOGRAMAS",L"FRAME RATE"),GWT(L"El ritmo del juego no cambia",L"The game speed stays the same"));
+    cur=g_ini_fps==60u?0:1; c=gl_choice(228,126,390,22,fps,2,cur,0u);
     if(c>=0 && c!=cur) { g_ini_fps=c?120u:60u; gwrecomp_ini_set_int("fps",(int)g_ini_fps); }
     const wchar_t *const flt[3]={GWT(L"NÍTIDO",L"SHARP"),GWT(L"EPX SUAVE",L"EPX SMOOTH"),L"CRT"};
-    gl_row_label(163,GWT(L"FILTRO (F7)",L"FILTER (F7)"),GWT(L"También con F7 al jugar",L"Also with F7 while playing"));
-    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,163,390,22,flt,3,cur,0u);
+    gl_row_label(150,GWT(L"FILTRO (F7)",L"FILTER (F7)"),GWT(L"También con F7 al jugar",L"Also with F7 while playing"));
+    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,150,390,22,flt,3,cur,0u);
     if(c>=0 && c!=cur) { g_filter_mode=c; (void)gwrecomp_ini_set("filter",g_filter_names[c]); }
     const wchar_t *const hz[2]={L"ORIGINAL",GWT(L"LIMPIO",L"CLEAN")};
-    gl_row_label(190,GWT(L"HORIZONTE",L"HORIZON"),GWT(L"Quita píxeles sueltos",L"Removes stray pixels"));
-    c=gl_choice(228,190,390,22,hz,2,g_ini_clean_horizon,0u);
+    gl_row_label(174,GWT(L"HORIZONTE",L"HORIZON"),GWT(L"Quita píxeles sueltos",L"Removes stray pixels"));
+    c=gl_choice(228,174,390,22,hz,2,g_ini_clean_horizon,0u);
     if(c>=0 && c!=g_ini_clean_horizon) { g_ini_clean_horizon=c; gwrecomp_ini_set_int("clean_horizon",c); }
     const wchar_t *const fx[2]={L"NO",GWT(L"SÍ",L"YES")};
-    gl_row_label(217,GWT(L"EFECTOS AGUA / GOOP",L"WATER / GOOP EFFECTS"),GWT(L"Olas y brillos animados",L"Animated waves and glints"));
-    c=gl_choice(228,217,390,22,fx,2,g_ini_water_effects,0u);
+    gl_row_label(198,GWT(L"EFECTOS AGUA / GOOP",L"WATER / GOOP EFFECTS"),GWT(L"Olas y brillos animados",L"Animated waves and glints"));
+    c=gl_choice(228,198,390,22,fx,2,g_ini_water_effects,0u);
     if(c>=0 && c!=g_ini_water_effects) { g_ini_water_effects=c; gwrecomp_ini_set_int("water_effects",c); }
-    gl_row_label(244,GWT(L"BLOOM EMISIVO",L"EMISSIVE BLOOM"),GWT(L"Halo en energía, explosiones y GOOP",L"Soft glow on energy, blasts and GOOP"));
-    c=gl_choice(228,244,390,22,fx,2,g_ini_emissive_bloom,0u);
+    gl_row_label(222,GWT(L"BLOOM EMISIVO",L"EMISSIVE BLOOM"),GWT(L"Halo en energía, explosiones y GOOP",L"Soft glow on energy, blasts and GOOP"));
+    c=gl_choice(228,222,390,22,fx,2,g_ini_emissive_bloom,0u);
     if(c>=0 && c!=g_ini_emissive_bloom) { g_ini_emissive_bloom=c; gwrecomp_ini_set_int("emissive_bloom",c); }
-    gl_row_label(271,GWT(L"OCLUSIÓN TERRENO",L"TERRAIN AO"),GWT(L"Sombra en cráteres, valles y pie de colinas",L"Shade in craters, valleys, hill bases"));
-    c=gl_choice(228,271,390,22,fx,2,g_ini_terrain_ao,0u);
+    gl_row_label(246,GWT(L"OCLUSIÓN TERRENO",L"TERRAIN AO"),GWT(L"Sombra en cráteres, valles y pie de colinas",L"Shade in craters, valleys, hill bases"));
+    c=gl_choice(228,246,390,22,fx,2,g_ini_terrain_ao,0u);
     if(c>=0 && c!=g_ini_terrain_ao) { g_ini_terrain_ao=c; gwrecomp_ini_set_int("terrain_ao",c); }
-    gl_row_label(298,GWT(L"SOMBRAS SUAVES",L"SOFT SHADOWS"),GWT(L"Bordes suaves en las sombras",L"Soft edges on shadows"));
-    c=gl_choice(228,298,390,22,fx,2,g_ini_soft_shadows,0u);
+    gl_row_label(270,GWT(L"SOMBRAS SUAVES",L"SOFT SHADOWS"),GWT(L"Bordes suaves en las sombras",L"Soft edges on shadows"));
+    c=gl_choice(228,270,390,22,fx,2,g_ini_soft_shadows,0u);
     if(c>=0 && c!=g_ini_soft_shadows) { g_ini_soft_shadows=c; gwrecomp_ini_set_int("soft_shadows",c); }
-    gl_row_label(325,GWT(L"PARTÍCULAS 4K",L"4K PARTICLES"),GWT(L"Esporas, polvo y chispas en el mapa",L"Spores, dust and sparks on the map"));
-    c=gl_choice(228,325,390,22,fx,2,g_ini_hd2d_particles,0u);
+    gl_row_label(294,GWT(L"PARTÍCULAS 4K",L"4K PARTICLES"),GWT(L"Esporas, polvo y chispas en el mapa",L"Spores, dust and sparks on the map"));
+    c=gl_choice(228,294,390,22,fx,2,g_ini_hd2d_particles,0u);
     if(c>=0 && c!=g_ini_hd2d_particles) { g_ini_hd2d_particles=c; gwrecomp_ini_set_int("hd2d_particles",c); }
+    gl_row_label(318,GWT(L"TERRENO 3D",L"3D TERRAIN"),GWT(L"Relieve, luz y sombras; Ctrl+F9",L"Relief, light and shadows; Ctrl+F9"));
+    c=gl_choice(228,318,390,22,fx,2,g_terrain_3d,0u);
+    if(c>=0 && c!=g_terrain_3d) { g_terrain_3d=c; gwrecomp_ini_set_int("terrain_3d",c); }
 }
 static void gl_draw_controls(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
