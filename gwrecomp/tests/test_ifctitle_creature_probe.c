@@ -10533,6 +10533,13 @@ static void pt_draw(const gw_interactive_visual_snapshot *v,double interp_a) {
             const int ix=(int)sx,iy=(int)sy;
             if(ix>=128 && ix<pitch && iy>=0 && iy<rows && src[(size_t)iy*pitch+ix]==0) continue;
             if((p->flags&2) && ix>=128 && ix<pitch && iy>=0 && iy<rows && g_fx_kind[src[(size_t)iy*pitch+ix]]!=FX_WATER) continue;
+            /* atmosphere only over the terrain itself (the frame pixel equals the ring terrain there), so it passes
+               behind units, buildings and the game's own dialog boxes; event particles stay on top */
+            if((p->flags&1) && ix>=128 && ix<pitch && iy>=0 && iy<rows && (int)v->fx_ring_w==pitch && (int)v->fx_ring_h==rows) {
+                const int rw=pitch-128; int rx=(ix-128)+(v->ring_x-128); rx%=rw; if(rx<0) rx+=rw;
+                int ry=(iy+v->ring_y)%rows; if(ry<0) ry+=rows;
+                if(src[(size_t)iy*pitch+ix]!=v->fx_ring[(size_t)ry*pitch+128+rx]) continue;
+            }
         }
         double lx,ly; pt_project(sx,sy,interp_a,&lx,&ly);
         const float t=p->age/p->life,fade=t<0.15f?t/0.15f:(t>0.7f?(1.0f-t)/0.3f:1.0f);
