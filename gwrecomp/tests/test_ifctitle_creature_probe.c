@@ -9554,19 +9554,26 @@ static uint8_t g_fx_rowany[640];   /* 1 for source rows holding water/GOOP groun
 static uint8_t *g_fx_g;
 static uint64_t g_fxc_gen=UINT64_MAX; static int g_fxc_key=-1,g_fxc_tq=-1; static uint8_t g_fxc_pal[768];
 static SDL_Texture *g_fxc_tex[2];
+/* terms of the water/GOOP formulas that depend only on the row or only on the column, built once per presented frame
+   (fx_terms): the per-pixel work keeps two mixed table lookups; the results are bit-identical */
+static int g_fxt_ra[640],g_fxt_rw[640],g_fxt_cdy[1152],g_fxt_cw[1152];
+static void fx_terms(int pitch,int rows,int tq) {
+    for(int y=0;y<rows && y<640;y++) { const int wy=(int)(y+g_fx_wy); g_fxt_ra[y]=FX_S(wy*24+tq*5)*13; g_fxt_rw[y]=FX_S(wy*9+tq*2)/56; }
+    for(int x=0;x<pitch && x<1152;x++) { const int wx=(int)(x+g_fx_wx); const int dyq=FX_S(wx*19+tq*9/2);
+        g_fxt_cdy[x]=(dyq*6/10+(dyq>=0?2048:-2048))/4096; g_fxt_cw[x]=FX_S(wx*7-tq*3)/72; }
+}
 static inline uint32_t fx_px(int x,int y,const uint8_t *src,int pitch,int rows,const uint32_t *lut,int tq,uint32_t base) {
     const uint8_t k=src[y*pitch+x];
     const int wy=(int)(y+g_fx_wy),wx=(int)(x+g_fx_wx);
     if(g_fx_kind[k]==FX_WATER) {
-        const int dxq=(FX_S(wy*24+tq*5)*13+FX_S((wx+wy)*13-tq*7/2)*7)/20;
-        const int dyq=FX_S(wx*19+tq*9/2);
-        const int dx=(dxq*12/10+(dxq>=0?2048:-2048))/4096,dy=(dyq*6/10+(dyq>=0?2048:-2048))/4096;
+        const int dxq=(g_fxt_ra[y]+FX_S((wx+wy)*13-tq*7/2)*7)/20;
+        const int dx=(dxq*12/10+(dxq>=0?2048:-2048))/4096,dy=g_fxt_cdy[x];
         uint8_t ks=k;
         if(dx || dy) {
             const int sx=x+dx,sy=y+dy;
             if(sx>=128 && sx<pitch && sy>=0 && sy<rows && g_fx_g[sy*pitch+sx]==FX_WATER) ks=src[sy*pitch+sx];
         }
-        const int warp=FX_S(wy*9+tq*2)/56+FX_S(wx*7-tq*3)/72;
+        const int warp=g_fxt_rw[y]+g_fxt_cw[x];
         int cq=4096-abs(FX_S(wx*11+wy*5+warp+tq*2));
         cq=cq*cq/4096; cq=cq*cq/4096;
         const uint32_t p=lut[ks];
@@ -9689,6 +9696,7 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
         g_fxc_tex[0]=use_view?view_tex:NULL; g_fxc_tex[1]=use_canvas?canvas_tex:NULL;
     }
     /* water and GOOP: only their pixels, from the cached base */
+    if(water) fx_terms(pitch,rows,tq);
     if(water) for(int r=0;r<2;r++) if(g_fxr[r].y1>=g_fxr[r].y0) { fc.r=r; hp_par(g_fxr[r].y1-g_fxr[r].y0+1,fx_water_rows,&fc); }
     g_fxc_tq=tq;
     for(int r=0;r<2;r++) {
