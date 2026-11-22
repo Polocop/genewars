@@ -7933,6 +7933,7 @@ typedef struct gw_interactive_visual_snapshot {
     int th_valid;
     /* soft_shadows: 1 where a sprite routine wrote the frame this game frame (instrumented writes) */
     uint8_t spr_mask[1152u*640u];
+    uint8_t shade_t[256];            /* the shadow routine's remap row (flat 0x366A54): shadow = shade_t[terrain] */
     int spr_valid;
     int in_mission;
     gw_info_overlay info;
@@ -9356,6 +9357,13 @@ static inline int dp_ao_at(int rx,int ry) {
    in g_dp_mask and lists them in cand[] (count in *count). Rows are independent, so bands run on worker threads. */
 static int g_dp_rxm[1152],g_dp_qx0m[1152],g_dp_qx1m[1152],g_dp_wxm[1152];
 static struct { const gw_interactive_visual_snapshot *v; const uint8_t *src,*lum; int pitch,rows,qw,qh,ao; } g_dpj;
+/* a pixel the shadow routine wrote still holds its shadow only if it is the remap of the terrain under it (one
+   shadow) or of an already shadowed pixel (two or three overlapping shadows); anything drawn over it afterwards by
+   a routine whose stores are not observed (e.g. a plant under the pointer) breaks that, and the pixel is left as is */
+static inline int dp_is_shadow_of(const uint8_t *t,uint8_t c,uint8_t g) {
+    const uint8_t t1=t[g],t2=t[t1];
+    return c==t1 || c==t2 || c==t[t2];
+}
 static void dp_rows(int y0,int y1,int *cand,int *count) {
     const gw_interactive_visual_snapshot *v=g_dpj.v; const uint8_t *src=g_dpj.src,*lum=g_dpj.lum;
     const int pitch=g_dpj.pitch,rows=g_dpj.rows,qw=g_dpj.qw,qh=g_dpj.qh,ao=g_dpj.ao,left=128,shadows=g_ini_soft_shadows;
@@ -9377,7 +9385,7 @@ static void dp_rows(int y0,int y1,int *cand,int *count) {
                 }
                 continue;
             }
-            if(shadows && v->spr_valid && v->spr_mask[(size_t)y*pitch+x]>=2u && lum[c]<lum[g] && g_fx_kind[g]!=FX_WATER &&
+            if(shadows && v->spr_valid && v->spr_mask[(size_t)y*pitch+x]>=2u && dp_is_shadow_of(v->shade_t,c,g) && lum[c]<lum[g] && g_fx_kind[g]!=FX_WATER &&
                y>0 && y<rows-1 && x>176 && x<pitch-1) { const int i=y*pitch+x; g_dp_mask[i]=1; cand[nc++]=i; }
         }
     }
@@ -19287,6 +19295,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
             if(g_spr_on && in_ifc_main && (size_t)sw*sh<=sizeof g_spr_mask && g_spr_lo==ws && g_spr_hi==ws+sw*sh) {
                 memcpy(g_interactive_published_snapshot.spr_mask,g_spr_mask,(size_t)sw*sh);
                 g_interactive_published_snapshot.spr_valid=1;
+                memcpy(g_interactive_published_snapshot.shade_t,memory+0x00366A54u,256u);
             }
             if((size_t)sw*sh<=sizeof g_spr_mask) {
                 memset(g_spr_mask,0,(size_t)sw*sh); g_spr_lo=ws; g_spr_hi=ws+sw*sh;
