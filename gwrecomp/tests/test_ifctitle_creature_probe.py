@@ -4697,6 +4697,16 @@ def main()->None:
     for k,site in enumerate((0x10EF0,0x43C61,0x56974,0x56A7F,0x852C8,0x8551F,0x85EE1,0x95A66,0x95B92)):
         lifted_text=before_call_line(lifted_text,f"/* 0x{site:08X}: call 0x91c10 */",f"gw_shade_caller({k+1});")
     lifted_text=("void gw_shade_caller(int);\n"+lifted_text)
+    # hd2d_particles: which caller of the frame drawers 0x919C0 / 0x91AE0 runs, and each frame they draw (x, y, frame)
+    for k,site in enumerate((0x109AF,0x22ECA,0x38B4A,0x38BE6,0x43D02,0x43DBA,0x67A93,0x85318,0x85E35)):
+        lifted_text=before_call_line(lifted_text,f"/* 0x{site:08X}: call 0x919c0 */",f"gw_draw_caller({k+1});")
+    for k,site in enumerate((0x1F489,0x38B91,0x38C2D,0x43D58,0x43E06,0x67B39,0x85347,0x85E65)):
+        lifted_text=before_call_line(lifted_text,f"/* 0x{site:08X}: call 0x91ae0 */",f"gw_draw_caller({k+11});")
+    for fn in (0x919C0,0x91AE0):
+        mk=f"RECOMP_ENTER(0x{fn:08X}u);"
+        if lifted_text.count(mk)!=1: raise SystemExit(f"frame drawer entry {mk} missing or ambiguous")
+        lifted_text=lifted_text.replace(mk,mk+f"\n    gw_frame_drawn(0x{fn:08X}u,eax,edx,ebx);",1)
+    lifted_text=("void gw_draw_caller(int);\nvoid gw_frame_drawn(unsigned int,unsigned int,unsigned int,unsigned int);\n"+lifted_text)
     lifted_text=("void gw_terrain_vertex_height(unsigned int,unsigned int,unsigned int);\n"
                  "void gw_terrain_record_node(unsigned int,unsigned int);\n"
                  "void gw_terrain_record_world(unsigned int,unsigned int,unsigned int);\n"+lifted_text)

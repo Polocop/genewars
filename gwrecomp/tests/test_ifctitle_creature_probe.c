@@ -7937,6 +7937,9 @@ typedef struct gw_interactive_visual_snapshot {
     /* hd2d_particles events of this game frame, in frame coordinates: the Ethereal ship's shadow (caller 0x10EF0)
        and the teleport beam (stores 0x9941E/0x9946E); n = pixels written, then the bounding box */
     int ev_ship_n,ev_ship_x,ev_ship_y,ev_ship_w,ev_ship_h,ev_beam_n,ev_beam_x,ev_beam_y,ev_beam_w,ev_beam_h;
+    /* frames the game drew this game frame through 0x919C0 / 0x91AE0: caller site, frame address, position */
+    struct { uint32_t frame; int16_t x,y,wx,wy; uint8_t caller,fn,pad[2]; } frames[768];
+    unsigned frames_n;
     int spr_valid;
     int in_mission;
     gw_info_overlay info;
@@ -11233,7 +11236,11 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                             fwrite(hd,4,6,mf); fwrite(visual->th_ring,2,(size_t)visual->fx_ring_w*visual->fx_ring_h,mf);
                             fwrite(visual->fx_ring,1,(size_t)visual->fx_ring_w*visual->fx_ring_h,mf);
                             if(visual->canvas_valid) fwrite(visual->canvas,1,(size_t)GW_CANVAS_W*GW_CANVAS_H,mf);   /* the presented frame */
-                            fwrite(visual->palette,1,768,mf); fclose(mf); } }
+                            fwrite(visual->palette,1,768,mf); fclose(mf); }
+                        snprintf(mp,sizeof mp,"%s/%s.frames",dump_dir,stem);   /* frames drawn: caller frame x y wx wy */
+                        mf=fopen(mp,"w");
+                        if(mf) { for(unsigned i=0;i<visual->frames_n;i++) fprintf(mf,"%u %u %08x %d %d %d %d\n",visual->frames[i].caller,visual->frames[i].fn,
+                            visual->frames[i].frame,visual->frames[i].x,visual->frames[i].y,visual->frames[i].wx,visual->frames[i].wy); fclose(mf); } }
                 } else {
                 SDL_Surface *ds=SDL_CreateRGBSurfaceWithFormatFrom((void *)g_ifclevel_demo_rgba,g_present_w,480,32,texture_w*(int)sizeof(uint32_t),SDL_PIXELFORMAT_ARGB8888);
                 if(ds) { SDL_SaveBMP(ds,out); SDL_FreeSurface(ds); }
@@ -19484,6 +19491,19 @@ static uint32_t g_spr_lo,g_spr_hi,g_spr_writes;
 static int g_spr_on;
 static uint32_t g_spr_w=1;   /* frame width of the mask (pixels per row) */
 static struct { int n,x0,y0,x1,y1; } g_ev[2];   /* [0] ship shadow, [1] teleport beam */
+/* hd2d_particles: the frame drawers 0x919C0 / 0x91AE0 (eax = x, edx = y, ebx = frame: element list at [frame],
+   count at [frame+0xB]) are called by 17 sites; the lifted code marks the site and reports each call here. Host
+   memory only. Position = the drawer's x, y plus the clip window origin (lbDisplay 0x376A80/84) at that moment. */
+static volatile int g_draw_caller;
+static struct { uint32_t frame; int16_t x,y,wx,wy; uint8_t caller,fn,pad[2]; } g_fr[768];
+static unsigned g_fr_n; static int g_fr_on;
+void gw_draw_caller(int k) { g_draw_caller=k; }
+void gw_frame_drawn(unsigned int fn,unsigned int x,unsigned int y,unsigned int frame) {
+    if(!g_fr_on || !guest_memory || g_fr_n>=768u) return;
+    g_fr[g_fr_n].frame=frame; g_fr[g_fr_n].x=(int16_t)(int32_t)x; g_fr[g_fr_n].y=(int16_t)(int32_t)y;
+    g_fr[g_fr_n].wx=(int16_t)*(const int32_t *)(guest_memory+0x00376A80u); g_fr[g_fr_n].wy=(int16_t)*(const int32_t *)(guest_memory+0x00376A84u);
+    g_fr[g_fr_n].caller=(uint8_t)g_draw_caller; g_fr[g_fr_n].fn=(uint8_t)(fn==0x919C0u?0:1); g_fr_n++;
+}
 static void ev_add(int e,uint32_t off) { const int x=(int)(off%g_spr_w),y=(int)(off/g_spr_w);
     if(!g_ev[e].n) { g_ev[e].x0=g_ev[e].x1=x; g_ev[e].y0=g_ev[e].y1=y; }
     else { if(x<g_ev[e].x0) g_ev[e].x0=x; if(x>g_ev[e].x1) g_ev[e].x1=x; if(y<g_ev[e].y0) g_ev[e].y0=y; if(y>g_ev[e].y1) g_ev[e].y1=y; }
@@ -19647,6 +19667,9 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
                     ps->ev_ship_n=g_ev[0].n; ps->ev_ship_x=g_ev[0].x0; ps->ev_ship_y=g_ev[0].y0; ps->ev_ship_w=g_ev[0].x1-g_ev[0].x0+1; ps->ev_ship_h=g_ev[0].y1-g_ev[0].y0+1;
                     ps->ev_beam_n=g_ev[1].n; ps->ev_beam_x=g_ev[1].x0; ps->ev_beam_y=g_ev[1].y0; ps->ev_beam_w=g_ev[1].x1-g_ev[1].x0+1; ps->ev_beam_h=g_ev[1].y1-g_ev[1].y0+1;
                 }
+                g_interactive_published_snapshot.frames_n=0;
+                if(g_spr_on && in_ifc_main && g_fr_on) { memcpy(g_interactive_published_snapshot.frames,g_fr,g_fr_n*sizeof g_fr[0]); g_interactive_published_snapshot.frames_n=g_fr_n; }
+                g_fr_n=0; g_fr_on=g_ini_hd2d_particles || getenv("GW_SPR_MASK_DUMP")!=NULL;
                 memset(g_ev,0,sizeof g_ev); g_spr_w=sw?sw:1u;
                 memset(g_spr_mask,0,(size_t)sw*sh); g_spr_lo=ws; g_spr_hi=ws+sw*sh;
                 if(!g_spr_on) { g_spr_on=1; recomp_set_guest_write_observer(write_probe_observer,NULL);
