@@ -11844,6 +11844,50 @@ static void host_eip_dump(void) {
     fclose(f);
 }
 
+/* QA (GW_PACE_STATS=1, or with GW_TICK_PROFILE): frame pacing over 30 s windows of mission frames. interval = time
+   between consecutive presentations (end of the present call), work = frame start .. present end; tick frames are the
+   ones that took a new game frame (texture conversion, uploads), sub frames only re-present with the interpolated
+   camera. Percentiles p50/p95/p99/p99.9/max and the share of intervals and works above the 8.33 ms budget. */
+enum { PACE_N=8192 };
+static float g_pace_iv[PACE_N],g_pace_wk[PACE_N]; static uint8_t g_pace_tk[PACE_N]; static unsigned g_pace_n; static int g_pace_on=-1;
+static uint64_t g_pace_last,g_pace_t0;
+static double g_pace_snap_sum,g_pace_snap_max; static unsigned g_pace_snap_n;   /* snapshot lock + copy in the present loop */
+static int pace_cmp(const void *a,const void *b) { const float x=*(const float *)a,y=*(const float *)b; return x<y?-1:x>y; }
+static void pace_pct(const char *name,float *v,unsigned n,double budget) {
+    if(!n) return;
+    qsort(v,n,sizeof *v,pace_cmp);
+    unsigned over=0; for(unsigned i=0;i<n;i++) if(v[i]>budget) over++;
+    #define PQ(q) v[(unsigned)((double)(n-1)*(q))]
+    gw_flag_trace("TRACE pace %s n=%u p50=%.3f p95=%.3f p99=%.3f p99.9=%.3f max=%.3f over_8.33=%.2f%%%c",name,n,
+        (double)PQ(0.50),(double)PQ(0.95),(double)PQ(0.99),(double)PQ(0.999),(double)v[n-1],100.0*over/n,10);
+    #undef PQ
+}
+static void pace_stats_frame(uint64_t present_end,uint64_t work,int tick) {
+    if(g_pace_on<0) { const char *e=getenv("GW_PACE_STATS"),*t=getenv("GW_TICK_PROFILE"); g_pace_on=(e && e[0]=='1') || (t && t[0]); }
+    if(!g_pace_on || !g_interactive_perf_frequency) return;
+    const double f=(double)g_interactive_perf_frequency;
+    if(g_pace_last && g_pace_n<PACE_N) {
+        g_pace_iv[g_pace_n]=(float)((double)(present_end-g_pace_last)*1000.0/f);
+        g_pace_wk[g_pace_n]=(float)((double)work*1000.0/f); g_pace_tk[g_pace_n]=(uint8_t)tick; g_pace_n++;
+    }
+    g_pace_last=present_end;
+    if(!g_pace_t0) g_pace_t0=present_end;
+    if((double)(present_end-g_pace_t0)/f>=30.0 || g_pace_n==PACE_N) {
+        static float a[PACE_N],b[PACE_N];
+        const double secs=(double)(present_end-g_pace_t0)/f;
+        gw_flag_trace("TRACE pace window seconds=%.1f frames=%u fps=%.2f snapshot_lock_copy avg=%.3f max=%.3f ms%c",secs,g_pace_n,g_pace_n/secs,
+            g_pace_snap_n?g_pace_snap_sum/g_pace_snap_n:0.0,g_pace_snap_max,10);
+        g_pace_snap_sum=g_pace_snap_max=0.0; g_pace_snap_n=0u;
+        memcpy(a,g_pace_iv,g_pace_n*sizeof *a); pace_pct("interval_all",a,g_pace_n,8.334);
+        unsigned na=0,nb=0;
+        for(unsigned i=0;i<g_pace_n;i++) { if(g_pace_tk[i]) a[na++]=g_pace_wk[i]; else b[nb++]=g_pace_wk[i]; }
+        pace_pct("work_tick",a,na,8.334); pace_pct("work_sub",b,nb,8.334);
+        na=nb=0;
+        for(unsigned i=0;i<g_pace_n;i++) { if(g_pace_tk[i]) a[na++]=g_pace_iv[i]; else b[nb++]=g_pace_iv[i]; }
+        pace_pct("interval_tick",a,na,8.334); pace_pct("interval_sub",b,nb,8.334);
+        g_pace_n=0; g_pace_t0=present_end;
+    }
+}
 static void tick_profile_start(void) {
     if(!g_tick_profile_file) {
         const char *path=getenv("GW_TICK_PROFILE");
@@ -20741,6 +20785,7 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
         const uint64_t input_end=SDL_GetPerformanceCounter();
         if(g_ifclevel_demo_closed) break;
         int published_new_snapshot=0;
+        const uint64_t snap_t0=SDL_GetPerformanceCounter();
         SDL_LockMutex(g_interactive_snapshot_mutex);
         gw_interactive_visual_snapshot *present_current=
             &g_interactive_present_snapshots[g_interactive_present_current_index];
@@ -20756,6 +20801,8 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
             published_new_snapshot=1;
         }
         SDL_UnlockMutex(g_interactive_snapshot_mutex);
+        {   const double ms=(double)(SDL_GetPerformanceCounter()-snap_t0)*1000.0/(double)(g_interactive_perf_frequency?g_interactive_perf_frequency:1u);
+            g_pace_snap_sum+=ms; g_pace_snap_n++; if(ms>g_pace_snap_max) g_pace_snap_max=ms; }
         const gw_interactive_visual_snapshot *visual=
             &g_interactive_present_snapshots[g_interactive_present_current_index];
         const gw_interactive_visual_snapshot *previous_visual=
@@ -20781,12 +20828,22 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
         if(have_visual) record_interactive_camera_presentation(previous_visual,visual,
             visual_eval_counter,g_interactive_frame_count);
         if(update_texture && !smk_owns) last_visual_generation=visual->generation;
-        const uint64_t deadline=frame_start+frame_period;
+        /* fixed-step pacer: the next presentation instant advances by exactly one period from the previous target (no
+           drift from the time spent in the frame); it resynchronises only after a delay of more than 2 periods. Sleeps
+           (1 ms granularity, timeBeginPeriod(1)) only while more than 2.5 ms remain, then spins with pause. */
+        static uint64_t pace_target;
+        if(!pace_target || frame_start>pace_target+2u*frame_period) pace_target=frame_start;
+        pace_target+=frame_period;
+        static int pace_legacy=-1;   /* QA: GW_PACER_LEGACY=1 = the previous pacer (deadline from the frame start) */
+        if(pace_legacy<0) { const char *e=getenv("GW_PACER_LEGACY"); pace_legacy=e && e[0]=='1'; }
+        const uint64_t deadline=pace_legacy?frame_start+frame_period:pace_target;
         if(requested_fps) {
             const uint64_t wait0=SDL_GetPerformanceCounter();
-            while(SDL_GetPerformanceCounter()<deadline) {
+            const uint64_t sleep_margin=pace_legacy?g_interactive_perf_frequency/500u:g_interactive_perf_frequency*5u/2000u;
+            for(;;) {
                 const uint64_t now=SDL_GetPerformanceCounter();
-                if(deadline-now>g_interactive_perf_frequency/500u) SDL_Delay(1u);
+                if(now>=deadline) break;
+                if(deadline-now>sleep_margin) SDL_Delay(1u);
                 else YieldProcessor();
             }
             const uint64_t wait1=SDL_GetPerformanceCounter();
@@ -20798,6 +20855,7 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
         const double render_ms=(double)(render_end-render_start)*1000.0/(double)g_interactive_perf_frequency;
         const double frame_ms=(double)(frame_end-frame_start)*1000.0/(double)g_interactive_perf_frequency;
         g_interactive_frame_count++;
+        pace_stats_frame(render_end,render_end-frame_start,update_texture && !smk_owns && have_visual && visual->in_mission);
         g_interactive_sum_render_ms+=render_ms; g_interactive_sum_input_ms+=input_ms;
         g_interactive_sum_frame_ms+=frame_ms;
         if(g_interactive_host_frame_time_count<
