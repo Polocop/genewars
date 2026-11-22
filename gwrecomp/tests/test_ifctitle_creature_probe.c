@@ -8247,7 +8247,7 @@ static int g_present_w=640,g_present_pitch=640;
 static double g_hostprof_fx_ms,g_hostprof_bloom_ms,g_hostprof_bu_ms;
 static double g_ph[9];   /* this frame: convert (incl. bloom upload), bloom upload, fx, bloom/AO pass, SDL present,
                             canvas texture write+upload, bloom canvas TexSubImage, fx texture uploads, view texture upload (ms) */
-static uint64_t g_present_deadline,g_present_waited; static void present_wait_until(uint64_t deadline);
+static uint64_t g_present_deadline,g_present_waited,g_present_wait_cycles; static void present_wait_until(uint64_t deadline);
 static double ph_ms(uint64_t t0) { const uint64_t f=SDL_GetPerformanceFrequency(); return (double)(SDL_GetPerformanceCounter()-t0)*1000.0/(double)(f?f:1u); }
 static double g_hostprof_convert_ms,g_hostprof_copy_ms,g_hostprof_present_ms,g_hostprof_wait_ms,g_hostprof_frame_ms;
 /* GW_GPU_TIMING=1 (diagnostics): GPU-synchronised time of composition + scaled copy (1-pixel readbacks bracket it,
@@ -12342,7 +12342,8 @@ enum { PACE_N=8192 };
 static float g_pace_iv[PACE_N],g_pace_wk[PACE_N]; static uint8_t g_pace_tk[PACE_N]; static unsigned g_pace_n; static int g_pace_on=-1;
 static uint64_t g_pace_last,g_pace_t0;
 static float g_pace_ph[9][PACE_N];
-static double g_pace_snap_sum,g_pace_snap_max; static unsigned g_pace_snap_n;   /* snapshot lock + copy in the present loop */
+static double g_pace_snap_sum,g_pace_snap_max; static unsigned g_pace_snap_n;
+static uint64_t g_pace_cpu_cycles; static double g_pace_cyc_per_ms; static float g_pace_cpu[PACE_N];   /* snapshot lock + copy in the present loop */
 static int pace_cmp(const void *a,const void *b) { const float x=*(const float *)a,y=*(const float *)b; return x<y?-1:x>y; }
 static void pace_pct(const char *name,float *v,unsigned n,double budget) {
     if(!n) return;
@@ -12360,6 +12361,11 @@ static void pace_stats_frame(uint64_t present_end,uint64_t work,int tick) {
     if(g_pace_last && g_pace_n<PACE_N) {
         g_pace_iv[g_pace_n]=(float)((double)(present_end-g_pace_last)*1000.0/f);
         for(int k=0;k<9;k++) g_pace_ph[k][g_pace_n]=(float)g_ph[k];
+        if(g_pace_cyc_per_ms<=0.0) {   /* calibration: thread cycles per ms over a 20 ms busy loop */
+            ULONG64 a=0,b=0; QueryThreadCycleTime(GetCurrentThread(),&a); const uint64_t t0=SDL_GetPerformanceCounter();
+            while((double)(SDL_GetPerformanceCounter()-t0)*1000.0/f<20.0) YieldProcessor();
+            QueryThreadCycleTime(GetCurrentThread(),&b); g_pace_cyc_per_ms=(double)(b-a)/20.0; if(g_pace_cyc_per_ms<1.0) g_pace_cyc_per_ms=1.0; }
+        g_pace_cpu[g_pace_n]=(float)((double)g_pace_cpu_cycles/g_pace_cyc_per_ms);
         g_pace_wk[g_pace_n]=(float)((double)work*1000.0/f); g_pace_tk[g_pace_n]=(uint8_t)tick; g_pace_n++;
     }
     g_pace_last=present_end; memset(g_ph,0,sizeof g_ph);
@@ -12374,6 +12380,9 @@ static void pace_stats_frame(uint64_t present_end,uint64_t work,int tick) {
         unsigned na=0,nb=0;
         for(unsigned i=0;i<g_pace_n;i++) { if(g_pace_tk[i]) a[na++]=g_pace_wk[i]; else b[nb++]=g_pace_wk[i]; }
         pace_pct("work_tick",a,na,8.334); pace_pct("work_sub",b,nb,8.334);
+        na=nb=0;
+        for(unsigned i=0;i<g_pace_n;i++) { if(g_pace_tk[i]) a[na++]=g_pace_cpu[i]; else b[nb++]=g_pace_cpu[i]; }
+        pace_pct("cpu_tick",a,na,8.334); pace_pct("cpu_sub",b,nb,8.334);
         na=nb=0;
         for(unsigned i=0;i<g_pace_n;i++) { if(g_pace_tk[i]) a[na++]=g_pace_iv[i]; else b[nb++]=g_pace_iv[i]; }
         pace_pct("interval_tick",a,na,8.334); pace_pct("interval_sub",b,nb,8.334);
@@ -12391,6 +12400,7 @@ static void present_wait_until(uint64_t deadline) {
     g_present_waited=0;
     if(!deadline || !g_interactive_perf_frequency) return;
     const uint64_t w0=SDL_GetPerformanceCounter();
+    ULONG64 c0=0; QueryThreadCycleTime(GetCurrentThread(),&c0);
     const uint64_t sleep_margin=g_interactive_perf_frequency*5u/2000u;   /* 2.5 ms */
     for(;;) {
         const uint64_t now=SDL_GetPerformanceCounter();
@@ -12398,6 +12408,7 @@ static void present_wait_until(uint64_t deadline) {
         if(deadline-now>sleep_margin) SDL_Delay(1u); else YieldProcessor();
     }
     g_present_waited=SDL_GetPerformanceCounter()-w0;
+    { ULONG64 c1=0; QueryThreadCycleTime(GetCurrentThread(),&c1); g_present_wait_cycles=c1-c0; }
 }
 static void tick_profile_start(void) {
     if(!g_tick_profile_file) {
@@ -21293,6 +21304,7 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
           (!g_interactive_frame_limit || g_interactive_frame_count<g_interactive_frame_limit) &&
           SDL_AtomicGet(&g_interactive_worker_status)>=0) {
         const uint64_t frame_start=SDL_GetPerformanceCounter();
+        ULONG64 frame_cyc0=0; QueryThreadCycleTime(GetCurrentThread(),&frame_cyc0); g_present_wait_cycles=0;
         {   static uint64_t v14_last_hb;
             if(InterlockedCompareExchange(&g_v14_in_tick,0,0)) {
                 const double in_ms=(double)(frame_start-g_v14_tick_begin)*1000.0/(double)g_interactive_perf_frequency;
@@ -21404,6 +21416,7 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
         const double render_ms=(double)(render_end-render_start)*1000.0/(double)g_interactive_perf_frequency;
         const double frame_ms=(double)(frame_end-frame_start)*1000.0/(double)g_interactive_perf_frequency;
         g_interactive_frame_count++;
+        { ULONG64 c=0; QueryThreadCycleTime(GetCurrentThread(),&c); g_pace_cpu_cycles=c-frame_cyc0-g_present_wait_cycles; }
         pace_stats_frame(render_end,render_end-frame_start-g_present_waited,update_texture && !smk_owns && have_visual && visual->in_mission);
         g_interactive_sum_render_ms+=render_ms; g_interactive_sum_input_ms+=input_ms;
         g_interactive_sum_frame_ms+=frame_ms;
