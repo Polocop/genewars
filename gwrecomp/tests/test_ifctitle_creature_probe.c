@@ -10944,7 +10944,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                         mf=fopen(mp,"wb");
                         if(mf) { const int32_t hd[6]={visual->ring_x,visual->ring_y,(int32_t)visual->fx_ring_w,(int32_t)visual->fx_ring_h,visual->th_valid,visual->canvas_valid};
                             fwrite(hd,4,6,mf); fwrite(visual->th_ring,2,(size_t)visual->fx_ring_w*visual->fx_ring_h,mf);
-                            fwrite(visual->fx_ring,1,(size_t)visual->fx_ring_w*visual->fx_ring_h,mf); fclose(mf); } }
+                            fwrite(visual->fx_ring,1,(size_t)visual->fx_ring_w*visual->fx_ring_h,mf);
+                            if(visual->canvas_valid) fwrite(visual->canvas,1,(size_t)GW_CANVAS_W*GW_CANVAS_H,mf);   /* the presented frame */
+                            fwrite(visual->palette,1,768,mf); fclose(mf); } }
                 } else {
                 SDL_Surface *ds=SDL_CreateRGBSurfaceWithFormatFrom((void *)g_ifclevel_demo_rgba,g_present_w,480,32,texture_w*(int)sizeof(uint32_t),SDL_PIXELFORMAT_ARGB8888);
                 if(ds) { SDL_SaveBMP(ds,out); SDL_FreeSurface(ds); }
@@ -16207,10 +16209,12 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
         C[k]=(int64_t)4*((int64_t)ex[k]*fy[k]-(int64_t)fx[k]*ey[k])*sgn;
     }
     for(int py=miny;py<=maxy;py++) {
-        /* the row's pixels that fall inside the ring: a row that only partly fits (the destination's x offset carries
+        /* the row's pixels that fall inside the ring (a row that only partly fits keeps those pixels;
            the last pixels of the last ring row past the end) keeps the pixels that fit instead of being dropped whole,
            which left that ring row without heights (a 1-pixel AO line moving with the terrain) */
-        const int64_t rowi=off0+(int64_t)py*pitch,total=(int64_t)w*hgt;
+        /* the ring is circular: the full redraw targets ring - 1 row (destination offset -pitch, 640 rows), so its
+           first row is the ring's last row, which the game keeps in step with that row (measured: GW_TH_LOG) */
+        const int64_t total=(int64_t)w*hgt; int64_t rowi=(off0+(int64_t)py*pitch)%total; if(rowi<0) rowi+=total;
         int lo=minx,hi=maxx;
         if(rowi+lo<0) lo=(int)(-rowi);
         if(rowi+hi>=total) hi=(int)(total-1-rowi);
