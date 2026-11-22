@@ -28,9 +28,9 @@ static struct {
     int failed,ready,scale,w,h,biome,nrm_ok,hs_last;
     GLuint prog_lit,prog_sh,prog_bump;
     GLuint lit[3],fbo,depth_rb;
-    GLuint sh_tex,sh_fbo,sh_rb,nrm_tex,bump_tex,bump_fbo,grid_vbo,grid_ibo;
+    GLuint ao_tex,sh_tex,sh_fbo,sh_rb,nrm_tex,bump_tex,bump_fbo,grid_vbo,grid_ibo;
     int lview[3][2],lhave[3];            /* per canvas layer: display origin (mod 128) and whether it holds a lit frame */
-    GLint l_tiles,l_fade,l_lut,l_kind,l_nrm,l_sh,l_bump,l_view,l_lx,l_ly,l_lz,l_zs,l_sun,l_sunc,l_sky,l_gnd,l_shon,l_wton,l_mix;
+    GLint l_ao,l_tiles,l_fade,l_lut,l_kind,l_nrm,l_sh,l_bump,l_view,l_lx,l_ly,l_lz,l_zs,l_sun,l_sunc,l_sky,l_gnd,l_shon,l_wton,l_mix;
     GLint s_lx,s_ly,s_lz,s_zs;
     GLint b_tiles,b_lut;
     float lx[4],ly[4],lz[4];
@@ -68,9 +68,9 @@ static void tl_biome(int bi) {
     if(bi<0 || bi>3) bi=0;
     g_t3.biome=bi;
     static const float az[4][2]={{-1.0f,-0.35f},{-1.0f,-0.25f},{-1.0f,-0.45f},{-1.0f,-0.30f}};
-    static const float el[4]={0.62f,0.70f,0.55f,0.52f};   /* elevation (rad) */
-    static const float sc[4][3]={{1.00f,0.93f,0.80f},{1.00f,0.86f,0.66f},{1.00f,0.70f,0.50f},{0.90f,0.96f,1.06f}};
-    static const float sk[4][3]={{0.52f,0.66f,0.95f},{0.66f,0.68f,0.86f},{0.55f,0.44f,0.62f},{0.58f,0.74f,1.02f}};
+    static const float el[4]={0.44f,0.50f,0.40f,0.38f};   /* elevation (rad): a low sun sculpts the relief */
+    static const float sc[4][3]={{1.05f,0.95f,0.78f},{1.06f,0.88f,0.64f},{1.06f,0.72f,0.50f},{0.94f,0.99f,1.08f}};
+    static const float sk[4][3]={{0.46f,0.62f,1.00f},{0.58f,0.62f,0.90f},{0.50f,0.42f,0.66f},{0.52f,0.70f,1.06f}};
     static const float gd[4][3]={{0.34f,0.36f,0.26f},{0.44f,0.34f,0.24f},{0.36f,0.22f,0.18f},{0.42f,0.46f,0.54f}};
     const float hx=az[bi][0],hy=az[bi][1],hl=sqrtf(hx*hx+hy*hy),c=cosf(el[bi]),s=sinf(el[bi]);
     g_t3.sun[0]=hx/hl*c; g_t3.sun[1]=hy/hl*c; g_t3.sun[2]=s;
@@ -108,11 +108,20 @@ static int tl_init(void) {
         "  v_material=a_uv; v_tile_mode=a_suv; v_world=vec3(a_world.xy,a_world.z*u_zs);\n"
         "}\n";
     static const char *fs_lit= TL_GLSL_COMMON
-        "uniform sampler2D u_tiles,u_fade,u_lut,u_kind,u_nrm,u_sh,u_bump;\n"
+        "uniform sampler2D u_tiles,u_fade,u_lut,u_kind,u_nrm,u_sh,u_bump,u_ao;\n"
         "uniform vec2 u_view; uniform vec4 u_lx,u_ly,u_lz;\n"
         "uniform vec3 u_sun,u_sunc,u_sky,u_gnd; uniform float u_shon,u_wton,u_mix,u_zs;\n"
         "varying vec3 v_material; varying vec2 v_tile_mode; varying vec3 v_world;\n"
         "float shdec(vec2 uv){ vec4 t=texture2D(u_sh,uv); return t.r+t.g/255.0; }\n"
+        "float hh(vec2 q){ vec3 p3=fract(vec3(q.xyx)*0.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }\n"
+        "float vn(vec2 p,float P){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);\n"
+        "  float a=hh(mod(i,P)), b=hh(mod(i+vec2(1.0,0.0),P)), c=hh(mod(i+vec2(0.0,1.0),P)), d=hh(mod(i+vec2(1.0,1.0),P));\n"
+        "  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y); }\n"
+        "float det(vec2 W){ return 0.5*vn(W*24.0,3072.0)+0.3*vn(W*56.0,7168.0)+0.2*vn(W*120.0,15360.0); }\n"
+        "float texel(vec2 base,vec2 t,float shade,out float raw){\n"
+        "  raw=rd8(u_tiles,base+clamp(t,0.0,31.0),vec2(512.0,544.0));\n"
+        "  float i2=raw; if(v_tile_mode.y>0.5) i2=floor(texture2D(u_fade,(vec2(raw,shade)+0.5)/vec2(256.0,64.0)).r*255.0+0.5);\n"
+        "  return i2; }\n"
         "void main(){\n"
         "  float tile=floor(v_tile_mode.x+0.5);\n"
         "  vec2 base=vec2(mod(tile,16.0),floor(tile/16.0))*32.0;\n"
@@ -120,13 +129,21 @@ static int tl_init(void) {
         "  float idx=rd8(u_tiles,base+tp,vec2(512.0,544.0));\n"
         "  if(v_tile_mode.y>5.5 && idx==0.0) discard;\n"
         "  float shade=clamp(floor(v_material.z),0.0,63.0);\n"
-        "  float i2=idx; if(v_tile_mode.y>0.5) i2=floor(texture2D(u_fade,(vec2(idx,shade)+0.5)/vec2(256.0,64.0)).r*255.0+0.5);\n"
-        "  vec3 c2=lut(u_lut,i2), alb=lut(u_lut,idx);\n"
+        "  /* sharp bilinear of the B32 texels: solid texel interiors, a one-pixel antialiased seam between texels */\n"
+        "  vec2 pt=v_material.xy-0.5; vec2 i0=floor(pt); vec2 fw=max(fwidth(v_material.xy),vec2(1e-4));\n"
+        "  vec2 f=clamp((fract(pt)-0.5)/fw+0.5,0.0,1.0);\n"
+        "  float r00,r10,r01,r11;\n"
+        "  float t00=texel(base,i0,shade,r00), t10=texel(base,i0+vec2(1.0,0.0),shade,r10);\n"
+        "  float t01=texel(base,i0+vec2(0.0,1.0),shade,r01), t11=texel(base,i0+vec2(1.0,1.0),shade,r11);\n"
+        "  vec3 c2=mix(mix(lut(u_lut,t00),lut(u_lut,t10),f.x),mix(lut(u_lut,t01),lut(u_lut,t11),f.x),f.y);\n"
+        "  vec3 alb=mix(mix(lut(u_lut,r00),lut(u_lut,r10),f.x),mix(lut(u_lut,r01),lut(u_lut,r11),f.x),f.y);\n"
+        "  if(v_tile_mode.y>5.5){ vec3 cc=lut(u_lut,idx); float i2=idx;\n"
+        "    i2=floor(texture2D(u_fade,(vec2(idx,shade)+0.5)/vec2(256.0,64.0)).r*255.0+0.5); c2=lut(u_lut,i2); alb=cc; }\n"
         "  float kind=floor(texture2D(u_kind,vec2((idx+0.5)/256.0,0.5)).r*255.0+0.5);\n"
-        /* smooth normal of the planet grid at this point (texel centres = grid vertices, wrap by GL_REPEAT) */
-        "  vec4 nt=texture2D(u_nrm,(v_world.xy+u_view+0.5)/128.0);\n"
+        "  vec2 W=v_world.xy+u_view;\n"
+        "  vec4 nt=texture2D(u_nrm,(W+0.5)/128.0);\n"
+        "  float ao=texture2D(u_ao,(W+0.5)/128.0).r;\n"
         "  vec3 N=normalize(nt.xyz*2.0-1.0);\n"
-        /* micro-relief: luminance gradient of the tile (texel space) taken to the surface by the cotangent frame */
         "  vec3 bm=texture2D(u_bump,(base+clamp(v_material.xy,0.5,31.5))/vec2(512.0,544.0)).rgb;\n"
         "  vec2 gr=bm.gb*2.0-1.0;\n"
         "  vec3 dp1=dFdx(v_world), dp2=dFdy(v_world); vec2 du1=dFdx(v_material.xy), du2=dFdy(v_material.xy);\n"
@@ -134,8 +151,10 @@ static int tl_init(void) {
         "  vec3 T=p2*du1.x+p1*du2.x, B=p2*du1.y+p1*du2.y;\n"
         "  float im=inversesqrt(max(max(dot(T,T),dot(B,B)),1e-12));\n"
         "  float water=(u_wton>0.5 && kind==1.0)?1.0:0.0;\n"
-        "  vec3 Nm=normalize(N-(1.0-water)*0.9*(gr.x*T+gr.y*B)*im);\n"
-        /* shadow map, 3x3 PCF; normal offset against acne */
+        "  /* 4K micro-detail in world coordinates (periodic over the 128-cell planet): albedo +-10 %, normal relief */\n"
+        "  float dn=det(W), dx=det(W+vec2(0.004,0.0))-dn, dy=det(W+vec2(0.0,0.004))-dn;\n"
+        "  vec3 Nm=normalize(N-(1.0-water)*(0.9*(gr.x*T+gr.y*B)*im+vec3(dx,dy,0.0)*1.4));\n"
+        "  alb*=1.0+(1.0-water)*0.32*(dn-0.5);\n"
         "  float sh=1.0;\n"
         "  if(u_shon>0.5){\n"
         "    vec4 P=vec4(v_world+N*0.06,1.0);\n"
@@ -146,27 +165,24 @@ static int tl_init(void) {
         "  }\n"
         "  float ndl=max(dot(Nm,u_sun),0.0);\n"
         "  vec3 hemi=mix(u_gnd,u_sky,Nm.z*0.5+0.5);\n"
-        /* tactical floor: a shadowed slope keeps the sky light and a share of the sun */
-        "  float vis=mix(0.30,1.0,sh);\n"
-        "  vec3 light=hemi*0.62+u_sunc*(ndl*vis*0.95);\n"
+        "  /* low warm sun against a cooler, deeper sky light; valley/cavity AO from the height grid; shadows never black */\n"
+        "  float vis=mix(0.14,1.0,sh);\n"
+        "  vec3 light=hemi*(0.40*ao)+u_sunc*(ndl*vis*1.30*mix(0.65,1.0,ao));\n"
         "  vec3 V=vec3(0.6124,0.6124,0.5);\n"
         "  float sat=max(alb.r,max(alb.g,alb.b))-min(alb.r,min(alb.g,alb.b));\n"
         "  float rock=clamp(1.0-sat*3.0,0.0,1.0);\n"
         "  vec3 H=normalize(u_sun+V);\n"
-        "  float spec=pow(max(dot(Nm,H),0.0),28.0)*0.16*rock*sh;\n"
-        "  vec3 lit=alb*light*1.08+u_sunc*spec;\n"
-        "  vec3 col=mix(c2,lit,u_mix);\n"
+        "  float spec=pow(max(dot(Nm,H),0.0),32.0)*0.20*rock*sh;\n"
+        "  vec3 lit=alb*light*1.12+u_sunc*spec;\n"
+        "  vec3 col=mix(c2*mix(0.75,1.0,ao),lit,u_mix);\n"
         "  float a=1.0;\n"
         "  if(water>0.5){\n"
-        /* depth: the game raises the shallows towards the coast (sea surface cells at height 0 are open sea), and
-           the distance from real land; the original shading (horizon fade) is kept by the luminance ratio */
         "    float hpx=v_world.z/u_zs;\n"
-        "    float dep=clamp(clamp(1.0-hpx/22.0,0.0,1.0)*0.55+0.45*nt.a,0.0,1.0);\n"
-        "    float l2=dot(c2,vec3(0.3,0.59,0.11)), la=max(dot(alb,vec3(0.3,0.59,0.11)),0.02);\n"
-        "    float fs=clamp(l2/la,0.0,1.15);\n"
-        "    vec3 shallow=alb*vec3(0.92,1.06,1.03)+vec3(0.00,0.05,0.05);\n"
-        "    vec3 deep=alb*vec3(0.58,0.68,0.86);\n"
-        "    col=mix(shallow,deep,smoothstep(0.0,1.0,dep))*mix(0.65,1.0,sh)*fs;\n"
+        "    float dep=clamp(1.0-hpx/22.0,0.0,1.0)*0.55+0.45*nt.a;\n"
+        "    dep=clamp(dep+(vn(W*2.5,320.0)-0.5)*0.30+(vn(W*7.0,896.0)-0.5)*0.12,0.0,1.0);\n"
+        "    vec3 shallow=alb*vec3(0.90,1.08,1.04)+vec3(0.00,0.045,0.045);\n"
+        "    vec3 deep=alb*vec3(0.30,0.40,0.60);\n"
+        "    col=mix(shallow,deep,smoothstep(0.0,1.0,dep))*mix(0.55,1.0,sh);\n"
         "    a=0.1+0.4*dep;\n"
         "  } else if(u_wton>0.5 && kind==2.0) a=0.75;\n"
         "  gl_FragColor=vec4(clamp(col,0.0,1.0),a);\n"
@@ -197,7 +213,7 @@ static int tl_init(void) {
     TLU(prog_lit,l_nrm,"u_nrm"); TLU(prog_lit,l_sh,"u_sh"); TLU(prog_lit,l_bump,"u_bump"); TLU(prog_lit,l_view,"u_view");
     TLU(prog_lit,l_lx,"u_lx"); TLU(prog_lit,l_ly,"u_ly"); TLU(prog_lit,l_lz,"u_lz"); TLU(prog_lit,l_zs,"u_zs");
     TLU(prog_lit,l_sun,"u_sun"); TLU(prog_lit,l_sunc,"u_sunc"); TLU(prog_lit,l_sky,"u_sky"); TLU(prog_lit,l_gnd,"u_gnd");
-    TLU(prog_lit,l_shon,"u_shon"); TLU(prog_lit,l_wton,"u_wton"); TLU(prog_lit,l_mix,"u_mix");
+    TLU(prog_lit,l_shon,"u_shon"); TLU(prog_lit,l_wton,"u_wton"); TLU(prog_lit,l_mix,"u_mix"); TLU(prog_lit,l_ao,"u_ao");
     TLU(prog_sh,s_lx,"u_lx"); TLU(prog_sh,s_ly,"u_ly"); TLU(prog_sh,s_lz,"u_lz"); TLU(prog_sh,s_zs,"u_zs");
     TLU(prog_bump,b_tiles,"u_tiles"); TLU(prog_bump,b_lut,"u_lut");
     #undef TLU
@@ -215,6 +231,7 @@ static int tl_init(void) {
     if(g_bloom.CheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE) goto fail;
     /* normals + sea depth of the planet grid, bilinear, wrapping */
     g_t3.nrm_tex=tl_tex(128,128,GL_LINEAR,GL_REPEAT);
+    g_t3.ao_tex=tl_tex(128,128,GL_LINEAR,GL_REPEAT);
     /* bump atlas (same layout as the tile atlas), bilinear inside a tile */
     g_t3.bump_tex=tl_tex(512,544,GL_LINEAR,GL_CLAMP_TO_EDGE);
     g_bloom.GenFramebuffers(1,&g_t3.bump_fbo);
@@ -310,6 +327,23 @@ static void tl_planet(const gw_terrain_mesh_draw *d) {
     }
     g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.nrm_tex);
     g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,128,128,GL_RGBA,GL_UNSIGNED_BYTE,px);
+    /* cavity / valley AO: how far the surrounding terrain (rings of radius 1, 2 and 3 cells) rises above the cell */
+    static uint8_t aopx[128u*128u*4u];
+    for(int r=0;r<128;r++) for(int c=0;c<128;c++) {
+        const float h=(float)tl_hpx(d,c,r); float occ=0.0f;
+        static const float wr[4]={0.0f,0.50f,0.32f,0.18f};
+        for(int k=1;k<=3;k++) {
+            float m=0.0f; int n=0;
+            for(int j=-k;j<=k;j++) for(int i=-k;i<=k;i++) if((i==-k||i==k||j==-k||j==k)) { m+=(float)tl_hpx(d,c+i,r+j); n++; }
+            const float rise=m/(float)n-h;
+            if(rise>0.0f) occ+=wr[k]*rise/(float)k;
+        }
+        float v=1.0f-occ*0.075f; if(v<0.30f) v=0.30f;
+        if(v>1.0f) v=1.0f;
+        uint8_t *o=aopx+((size_t)r*128u+(size_t)c)*4u; o[0]=o[1]=o[2]=(uint8_t)(v*255.0f+0.5f); o[3]=255;
+    }
+    g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.ao_tex);
+    g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,128,128,GL_RGBA,GL_UNSIGNED_BYTE,aopx);
     g_t3.nrm_ok=1;
 }
 
@@ -400,6 +434,7 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_bloom.ActiveTexture(GL_TEXTURE4); g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.nrm_tex); g_bloom.Uniform1i(g_t3.l_nrm,4);
     g_bloom.ActiveTexture(GL_TEXTURE5); g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.sh_tex); g_bloom.Uniform1i(g_t3.l_sh,5);
     g_bloom.ActiveTexture(GL_TEXTURE6); g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.bump_tex); g_bloom.Uniform1i(g_t3.l_bump,6);
+    g_bloom.ActiveTexture(GL_TEXTURE7); g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.ao_tex); g_bloom.Uniform1i(g_t3.l_ao,7);
     g_bloom.ActiveTexture(GL_TEXTURE0);
     const int vc=d->view_col&127,vr=d->view_row&127;
     g_bloom.Uniform2f(g_t3.l_view,(float)vc,(float)vr);
@@ -413,7 +448,7 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_t3.Uniform3f(g_t3.l_gnd,g_t3.gnd[0],g_t3.gnd[1],g_t3.gnd[2]);
     g_bloom.Uniform1f(g_t3.l_shon,shadows?1.0f:0.0f);
     g_bloom.Uniform1f(g_t3.l_wton,g_ini_terrain_3d_water?1.0f:0.0f);
-    g_bloom.Uniform1f(g_t3.l_mix,0.80f);
+    g_bloom.Uniform1f(g_t3.l_mix,0.90f);
     g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_gl_mesh.vbo);   /* uploaded by terrain_gl_render this game frame */
     g_bloom.BindBuffer(GL_ELEMENT_ARRAY_BUFFER,g_gl_mesh.ibo);
     const GLsizei stride=sizeof d->vertex[0];

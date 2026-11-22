@@ -10335,7 +10335,7 @@ static struct {
     GLint pk_idx,pk_ring,pk_hgt,pk_kind,pk_off,pk_th,pk_mesh,pk_mesh_on,pk_mask,pk_lit_on;
     GLint cd_idx,cd_ring,cd_msk,cd_shade,cd_lut,cd_kind,cd_off;
     GLint bh_src,bv_src,bv_cand,bv_ring,bv_off,bv_on,bv_mesh,bv_mesh_on;
-    GLint mp_pk,mp_aux,mp_lut,mp_lit,mp_view,mp_lsz,mp_time,mp_sun,mp_sunc,mp_sky;
+    GLint mp_pk,mp_aux,mp_lut,mp_lit,mp_view,mp_lsz,mp_time,mp_sun,mp_sunc,mp_sky,mp_kind;
     uint8_t kind_pal[768];
     uint8_t *ring_last; int16_t *hgt_last; int last_valid;
 } g_gm;
@@ -10428,15 +10428,28 @@ static int gm_init(void) {
         "    if(mesh.g>0.5) g=floor(mesh.r*255.0+0.5);\n"
         "  }\n"
         "  float cd=texture2D(u_cand,p/S).r;\n"
-        "  gl_FragColor=vec4(g/255.0,u_on*v/9.0,u_on*cd,1.0); }\n";
+        "  float cov=0.0;\n"
+        "  for(int j=-3;j<=3;j++) for(int i=-3;i<=3;i++){ vec2 o=clamp(tp+vec2(float(i),float(j))*2.0,vec2(0.0),vec2(1023.0,639.0));\n"
+        "    float ox=mod(o.x+(u_off.x-128.0),1024.0), oy=mod(o.y+u_off.y,640.0);\n"
+        "    cov+=(rd(u_ring,vec2(128.0+ox,oy),vec2(1152.0,640.0))>0.5)?1.0:0.0; }\n"
+        "  gl_FragColor=vec4(g/255.0,u_on*v/9.0,u_on*cd,cov/49.0); }\n";
     /* map colour of a layer: palette, and the soft shadow redraw from the terrain */
-    /* 3D terrain (bit 2 of G): the lit layer (bilinear, up to 4x the canvas), and on water the per-frame waves (world
-       anchored: canvas position + the layer's display origin, integer wave numbers so the planet wrap is seamless),
-       Fresnel sky reflection, sun glints and shore foam; GOOP pulses. u_view = (origin col, row, lit layer present) */
+    /* 3D terrain (bit 2 of G): the lit layer (sharp bilinear, up to 4x the canvas); water per presented frame (two
+       crossed wave layers, caustics, Fresnel, glints, foam on the texel coastline); a soft fade into the undrawn black */
     static const char *fs_map=
-        "#version 120\n uniform sampler2D u_pk; uniform sampler2D u_aux; uniform sampler2D u_lut; uniform sampler2D u_lit;\n"
-        "uniform vec3 u_view; uniform vec2 u_lsz; uniform float u_time; uniform vec3 u_sun,u_sunc,u_sky;\n varying vec2 v_uv;\n"
+        "#version 120\n"
+        "uniform sampler2D u_pk; uniform sampler2D u_aux; uniform sampler2D u_lut; uniform sampler2D u_lit; uniform sampler2D u_kind;\n"
+        "uniform vec3 u_view; uniform vec2 u_lsz; uniform float u_time; uniform vec3 u_sun,u_sunc,u_sky;\n"
+        "varying vec2 v_uv;\n"
         "vec3 lut(float k){ return texture2D(u_lut,vec2((k+0.5)/256.0,0.25)).rgb; }\n"
+        "float hh(vec2 q){ vec3 p3=fract(vec3(q.xyx)*0.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }\n"
+        "float vn(vec2 p,float P){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);\n"
+        "  float a=hh(mod(i,P)), b=hh(mod(i+vec2(1.0,0.0),P)), c=hh(mod(i+vec2(0.0,1.0),P)), d=hh(mod(i+vec2(1.0,1.0),P));\n"
+        "  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y); }\n"
+        "/* 1 where the packed pixel at canvas offset o is terrain that is not water (the coastline, texel exact) */\n"
+        "float landat(vec2 o){ vec4 p=texture2D(u_pk,v_uv+o*vec2(1.0/1024.0,1.0/640.0)); float G=floor(p.g*255.0+0.5);\n"
+        "  float k=floor(texture2D(u_kind,vec2((floor(p.r*255.0+0.5)+0.5)/256.0,0.5)).r*255.0+0.5);\n"
+        "  return (mod(floor(G/2.0),2.0)>0.5 && k!=1.0 && p.r>0.0)?1.0:0.0; }\n"
         "void main(){\n"
         "  vec4 p=texture2D(u_pk,v_uv); vec4 a=texture2D(u_aux,v_uv);\n"
         "  float G=floor(p.g*255.0+0.5);\n"
@@ -10444,36 +10457,55 @@ static int gm_init(void) {
         "  float m=floor(a.g*255.0+0.5)/255.0, g=floor(a.r*255.0+0.5);\n"
         "  vec3 col=lut(c), under=lut(g);\n"
         "  if(u_view.z>0.5){\n"
-        "    vec4 Ln=texture2D(u_lit,(floor(v_uv*u_lsz)+0.5)/u_lsz), L=texture2D(u_lit,v_uv);\n"
+        "    vec2 px=v_uv*u_lsz; vec2 fl=floor(px-0.5); vec2 fr=px-0.5-fl; vec2 fw=max(fwidth(px),vec2(1e-4));\n"
+        "    vec2 sb=(fl+0.5+clamp((fr-0.5)/fw+0.5,0.0,1.0))/u_lsz;\n"
+        "    vec4 Ln=texture2D(u_lit,(floor(px)+0.5)/u_lsz), L=texture2D(u_lit,sb);\n"
         "    if(Ln.a>0.05) under=L.rgb;\n"
         "    if(lt>0.5 && Ln.a>0.05){\n"
         "      col=L.rgb;\n"
+        "      vec2 cp=vec2(128.0+v_uv.x*1024.0,v_uv.y*640.0);\n"
+        "      float dd=cp.x/32.0+(u_view.x-u_view.y), ss=cp.y/16.0+(u_view.x+u_view.y);\n"
+        "      vec2 W=vec2(ss+dd,ss-dd)*0.5;\n"
+        "      vec2 q=W*(6.2831853/128.0);\n"
+        "      float t=u_time;\n"
         "      if(Ln.a<0.875){\n"
-        "        vec2 cp=vec2(128.0+v_uv.x*1024.0,v_uv.y*640.0);\n"
-        "        float dd=cp.x/32.0+(u_view.x-u_view.y), ss=cp.y/16.0+(u_view.x+u_view.y);\n"
-        "        vec2 q=vec2(ss+dd,ss-dd)*(0.5*6.2831853/128.0);\n"
-        "        float t=u_time;\n"
         "        if(Ln.a>0.625){\n"
         "          float pu=0.5+0.5*sin(t*2.0+q.x*53.0+q.y*29.0)*sin(t*1.3-q.x*31.0+q.y*47.0);\n"
         "          col=L.rgb*(1.0+0.20*pu)+vec3(0.10,0.04,0.17)*pu;\n"
         "        } else {\n"
-        "          vec2 k1=vec2(83.0,31.0),k2=vec2(-47.0,71.0),k3=vec2(233.0,-97.0),k4=vec2(61.0,257.0);\n"
-        "          float a1=dot(k1,q)+t*1.9,a2=dot(k2,q)-t*1.6,a3=dot(k3,q)+t*3.1,a4=dot(k4,q)-t*2.7;\n"
-        "          vec2 gr=k1*cos(a1)+k2*cos(a2)*0.8+k3*cos(a3)*0.30+k4*cos(a4)*0.26;\n"
-        "          vec3 N=normalize(vec3(-gr*0.0011,1.0));\n"
+        "          float dep=clamp((Ln.a-0.1)/0.4,0.0,1.0);\n"
+        "          /* two crossed layers of moving waves (integer wave numbers: periodic over the planet) */\n"
+        "          vec2 k1=vec2(83.0,31.0),k2=vec2(-47.0,71.0),k3=vec2(233.0,-97.0),k4=vec2(61.0,257.0),k5=vec2(-311.0,149.0),k6=vec2(173.0,409.0);\n"
+        "          float a1=dot(k1,q)+t*1.9,a2=dot(k2,q)-t*1.6,a3=dot(k3,q)+t*3.1,a4=dot(k4,q)-t*2.7,a5=dot(k5,q)+t*4.3,a6=dot(k6,q)-t*3.9;\n"
+        "          vec2 gr=k1*cos(a1)+k2*cos(a2)*0.8+k3*cos(a3)*0.42+k4*cos(a4)*0.38+k5*cos(a5)*0.20+k6*cos(a6)*0.16;\n"
+        "          vec3 N=normalize(vec3(-gr*0.0019,1.0));\n"
         "          vec3 V=vec3(0.6124,0.6124,0.5);\n"
         "          float F=0.03+0.97*pow(1.0-max(dot(N,V),0.0),5.0);\n"
         "          vec3 R=reflect(-V,N);\n"
-        "          float sp=pow(max(dot(R,u_sun),0.0),160.0)*1.5+pow(max(dot(R,u_sun),0.0),20.0)*0.05;\n"
-        "          float dep=clamp((Ln.a-0.1)/0.4,0.0,1.0);\n"
+        "          float rs=max(dot(R,u_sun),0.0);\n"
+        "          float sp=pow(rs,260.0)*1.3+pow(rs,36.0)*0.08;\n"
         "          float lb=dot(L.rgb,vec3(0.3,0.59,0.11));\n"
-        "          col=mix(L.rgb,u_sky*(0.70+0.30*R.z)*clamp(lb*2.5,0.0,1.0),clamp(F*2.2,0.0,0.45))+u_sunc*sp*clamp(lb*3.0,0.0,1.0);\n"
-        "          float fn=0.5+0.5*sin(q.x*41.0+q.y*17.0+t*0.7)*sin(-q.x*23.0+q.y*37.0-t*0.9);\n"
-        "          float band=0.5+0.5*sin(dep*70.0-t*2.4+3.0*fn);\n"
-        "          float foam=smoothstep(0.10,0.0,dep)*band*(0.45+0.55*fn);\n"
-        "          col=mix(col,vec3(0.86,0.93,0.97),clamp(foam*0.45,0.0,0.45));\n"
+        "          float lum=clamp(lb*3.0,0.0,1.0);\n"
+        "          vec3 w=L.rgb*(1.0+0.07*sin(a1*0.5+a4*0.5));\n"
+        "          /* caustics in the shallows */\n"
+        "          float c1=sin(q.x*301.0+2.2*sin(q.y*173.0+t*1.1)+t*1.2), c2=sin(q.y*287.0+2.2*sin(q.x*191.0-t*0.9)-t*1.0);\n"
+        "          float cs=pow(1.0-abs(c1*c2),6.0);\n"
+        "          w+=vec3(0.10,0.17,0.16)*cs*(1.0-smoothstep(0.0,0.55,dep))*lum;\n"
+        "          col=mix(w,u_sky*(0.55+0.35*R.z)*lum,clamp(F*2.0,0.0,0.4))+u_sunc*sp*lum*(1.0-0.4*dep);\n"
+
+        "          /* foam: hugging the real (texel) coastline, broken by animated noise; nothing triangular */\n"
+        "          float n=vn(W*9.0+vec2(t*0.35,-t*0.27),1152.0)*0.6+vn(W*23.0-vec2(t*0.6,t*0.5),2944.0)*0.4;\n"
+        "          float land=0.0;\n"
+        "          land+=landat(vec2(1.5,0.0))+landat(vec2(-1.5,0.0))+landat(vec2(0.0,1.5))+landat(vec2(0.0,-1.5));\n"
+        "          land+=0.6*(landat(vec2(3.0,2.0))+landat(vec2(-3.0,2.0))+landat(vec2(3.0,-2.0))+landat(vec2(-3.0,-2.0)));\n"
+        "          land/=6.4;\n"
+        "          float foam=smoothstep(0.08,0.55,land+(n-0.5)*0.55)*(0.55+0.45*sin(t*1.7+n*9.0));\n"
+        "          col=mix(col,vec3(0.90,0.95,0.98)*clamp(lb*4.0,0.35,1.0),clamp(foam*0.7,0.0,0.7));\n"
         "        }\n"
         "      }\n"
+        "      /* soft edge into the unexplored / undrawn black: coverage of drawn terrain around the pixel, world noise */\n"
+        "      float en=vn(W*3.0,384.0)*0.6+vn(W*11.0,1408.0)*0.4;\n"
+        "      col*=smoothstep(0.42+0.22*(en-0.5),0.98,a.a);\n"
         "    }\n"
         "  }\n"
         "  if(m>0.0 && (a.b>0.5 || gnd>0.5)) col=under*(1.0-m*0.68);\n"
@@ -10500,7 +10532,7 @@ static int gm_init(void) {
     g_gm.bv_mesh=GMU(p_blurv,"u_mesh"); g_gm.bv_mesh_on=GMU(p_blurv,"u_mesh_on");
     g_gm.mp_pk=GMU(p_map,"u_pk"); g_gm.mp_aux=GMU(p_map,"u_aux"); g_gm.mp_lut=GMU(p_map,"u_lut");
     g_gm.mp_lit=GMU(p_map,"u_lit"); g_gm.mp_view=GMU(p_map,"u_view"); g_gm.mp_lsz=GMU(p_map,"u_lsz"); g_gm.mp_time=GMU(p_map,"u_time");
-    g_gm.mp_sun=GMU(p_map,"u_sun"); g_gm.mp_sunc=GMU(p_map,"u_sunc"); g_gm.mp_sky=GMU(p_map,"u_sky");
+    g_gm.mp_sun=GMU(p_map,"u_sun"); g_gm.mp_sunc=GMU(p_map,"u_sunc"); g_gm.mp_sky=GMU(p_map,"u_sky"); g_gm.mp_kind=GMU(p_map,"u_kind");
     g_gm.hu_idx=GMU(p_hud,"u_idx"); g_gm.hu_lut=GMU(p_hud,"u_lut");
     #undef GMU
     g_gm.t_idx=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_ring=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_hgt=gm_tex(1152,640,GL_RG8,GL_RG);
@@ -11128,6 +11160,7 @@ static int gm_map(const gw_present_geo *geo,double interp_a) {
     g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_gm.mp_lut,1);
     g_bloom.Uniform1i(g_gm.mp_aux,5);
     g_bloom.Uniform1i(g_gm.mp_lit,7);
+    g_bloom.ActiveTexture(GL_TEXTURE3); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_kind); g_bloom.Uniform1i(g_gm.mp_kind,3);
     if(g_t3.ready) {
         g_bloom.Uniform2f(g_gm.mp_lsz,(float)g_t3.w,(float)g_t3.h);
         const uint64_t f=SDL_GetPerformanceFrequency(),t=SDL_GetPerformanceCounter();
@@ -11283,8 +11316,8 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
         g_bloom.Enable(GL_SCISSOR_TEST); g_bloom.Scissor(128,0,g_present_w-128,480);
         g_bloom.UseProgram(g_bloom.prog_ao);
         g_bloom.Uniform1i(g_bloom.u_ao_idx,0);
-        /* the lit 3D terrain already shades slopes and valleys: half the screen-space AO, no double darkening */
-        g_bloom.Uniform1f(g_bloom.u_ao_strength,g_ini_terrain_ao_strength*((g_gm_frame && g_gm.lit_applied)?0.5f:1.0f));
+        /* the lit 3D terrain has its own valley AO from the height grid: the screen-space AO stays at 80 % on top */
+        g_bloom.Uniform1f(g_bloom.u_ao_strength,g_ini_terrain_ao_strength*((g_gm_frame && g_gm.lit_applied)?0.8f:1.0f));
         g_bloom.ActiveTexture(GL_TEXTURE0);
         bloom_draw_map_layers(interp_a,g_bloom.u_ao_texel);
         g_bloom.Disable(GL_SCISSOR_TEST);
