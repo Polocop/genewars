@@ -10332,7 +10332,7 @@ static struct {
     int map_w,map_h,ring_x,ring_y,kind_ok;
     GLuint p_pack,p_cand,p_blurh,p_blurv,p_map,p_hud;
     GLint hu_idx,hu_lut;
-    GLint pk_idx,pk_ring,pk_hgt,pk_kind,pk_off,pk_th,pk_mesh,pk_mesh_on,pk_mask,pk_lit_on;
+    GLint pk_idx,pk_ring,pk_hgt,pk_kind,pk_off,pk_th,pk_mesh,pk_mesh_on,pk_mask,pk_lit_on,pk_plut;
     GLint cd_idx,cd_ring,cd_msk,cd_shade,cd_lut,cd_kind,cd_off;
     GLint bh_src,bv_src,bv_cand,bv_ring,bv_off,bv_on,bv_mesh,bv_mesh_on;
     GLint mp_pk,mp_aux,mp_lut,mp_lit,mp_view,mp_lsz,mp_time,mp_sun,mp_sunc,mp_sky,mp_kind;
@@ -10370,7 +10370,7 @@ static int gm_init(void) {
     /* packing: one texel per canvas pixel at canvas x = 128 + texel x (the layer texture's own layout) */
     static const char *fs_pack= GM_GLSL_COMMON
         "uniform sampler2D u_idx; uniform sampler2D u_ring; uniform sampler2D u_hgt; uniform sampler2D u_kind;\n"
-        "uniform vec2 u_off; uniform float u_th; uniform sampler2D u_mesh, u_mask; uniform float u_mesh_on, u_lit_on;\n"
+        "uniform vec2 u_off; uniform float u_th; uniform sampler2D u_mesh, u_mask, u_plut; uniform float u_mesh_on, u_lit_on;\n"
         "void main(){\n"
         "  vec2 S=vec2(1152.0,640.0); vec2 tp=floor(gl_FragCoord.xy); float cx=tp.x+128.0, y=tp.y;\n"
         "  float c=rd(u_idx,vec2(cx,y),S);\n"
@@ -10385,11 +10385,17 @@ static int gm_init(void) {
         "  float gx0=rd(u_ring,vec2(128.0+mod(rx+2.0,1024.0),ry),S), gx1=rd(u_ring,vec2(128.0+mod(rx+1022.0,1024.0),ry),S);\n"
         "  float gy0=rd(u_ring,vec2(128.0+rx,mod(ry+2.0,640.0)),S), gy1=rd(u_ring,vec2(128.0+rx,mod(ry+638.0,640.0)),S);\n"
         "  float drawn=(g+gx0+gx1+gy0+gy1>0.5)?1.0:0.0;\n"
-        "  if(u_mesh_on>0.5 && gnd>0.5 && drawn>0.5 && rd(u_mask,vec2(cx,y),S)<0.5){\n"
+        "  float dk=0.0;\n"
+        "  if(u_mesh_on>0.5 && gnd>0.5 && drawn>0.5){\n"
         "    vec2 m=texture2D(u_mesh,(vec2(cx,y)+0.5)/S).rg;\n"
         "    if(m.g>0.5) { c=floor(m.r*255.0+0.5); lt=u_lit_on; }\n"
+        "  } else if(u_lit_on>0.5 && gnd<0.5 && drawn>0.5 && g>0.5 && rd(u_mask,vec2(cx,y),S)>0.5){\n"
+        "    vec3 pc=texture2D(u_plut,vec2((c+0.5)/256.0,0.25)).rgb, pg=texture2D(u_plut,vec2((g+0.5)/256.0,0.25)).rgb;\n"
+        "    float lc=dot(pc,vec3(0.3,0.59,0.11)), lg=dot(pg,vec3(0.3,0.59,0.11));\n"
+        "    float k=lc/max(lg,0.004);\n"
+        "    if(lg>0.02 && k<0.97 && length(pc-pg*k)<0.07) dk=1.0;\n"
         "  }\n"
-        "  float G=1.0+2.0*gnd+4.0*lt+16.0*mod(h,16.0), B=floor(h/16.0);\n"
+        "  float G=1.0+2.0*gnd+4.0*lt+8.0*dk+16.0*mod(h,16.0), B=floor(h/16.0);\n"
         "  float A=(u_th>0.5 && gnd>0.5 && tp.x>=48.0 && k256(u_kind,c)<0.5)?255.0:0.0;\n"
         "  gl_FragColor=vec4(c,G,B,A)/255.0;\n"
         "}\n";
@@ -10457,10 +10463,15 @@ static int gm_init(void) {
         "  float m=floor(a.g*255.0+0.5)/255.0, g=floor(a.r*255.0+0.5);\n"
         "  vec3 col=lut(c), under=lut(g);\n"
         "  if(u_view.z>0.5){\n"
-        "    vec2 px=v_uv*u_lsz; vec2 fl=floor(px-0.5); vec2 fr=px-0.5-fl; vec2 fw=max(fwidth(px),vec2(1e-4));\n"
+        "    vec2 uvl=max(v_uv,vec2(0.75/1024.0,0.75/640.0));\n"
+        "    vec2 px=uvl*u_lsz; vec2 fl=floor(px-0.5); vec2 fr=px-0.5-fl; vec2 fw=max(fwidth(px),vec2(1e-4));\n"
         "    vec2 sb=(fl+0.5+clamp((fr-0.5)/fw+0.5,0.0,1.0))/u_lsz;\n"
         "    vec4 Ln=texture2D(u_lit,(floor(px)+0.5)/u_lsz), L=texture2D(u_lit,sb);\n"
         "    if(Ln.a>0.05) under=L.rgb;\n"
+        "    if(mod(floor(G/8.0),2.0)>0.5 && Ln.a>0.05){\n"
+        "      float lc=dot(lut(c),vec3(0.3,0.59,0.11)), lg=dot(lut(g),vec3(0.3,0.59,0.11));\n"
+        "      col=L.rgb*clamp(lc/max(lg,0.004),0.0,1.0);\n"
+        "    }\n"
         "    if(lt>0.5 && Ln.a>0.05){\n"
         "      col=L.rgb;\n"
         "      vec2 cp=vec2(128.0+v_uv.x*1024.0,v_uv.y*640.0);\n"
@@ -10525,6 +10536,7 @@ static int gm_init(void) {
     g_gm.pk_idx=GMU(p_pack,"u_idx"); g_gm.pk_ring=GMU(p_pack,"u_ring"); g_gm.pk_hgt=GMU(p_pack,"u_hgt"); g_gm.pk_kind=GMU(p_pack,"u_kind");
     g_gm.pk_off=GMU(p_pack,"u_off"); g_gm.pk_th=GMU(p_pack,"u_th");
     g_gm.pk_mesh=GMU(p_pack,"u_mesh"); g_gm.pk_mesh_on=GMU(p_pack,"u_mesh_on"); g_gm.pk_mask=GMU(p_pack,"u_mask"); g_gm.pk_lit_on=GMU(p_pack,"u_lit_on");
+    g_gm.pk_plut=GMU(p_pack,"u_plut");
     g_gm.cd_idx=GMU(p_cand,"u_idx"); g_gm.cd_ring=GMU(p_cand,"u_ring"); g_gm.cd_msk=GMU(p_cand,"u_msk"); g_gm.cd_shade=GMU(p_cand,"u_shade");
     g_gm.cd_lut=GMU(p_cand,"u_lut"); g_gm.cd_kind=GMU(p_cand,"u_kind"); g_gm.cd_off=GMU(p_cand,"u_off");
     g_gm.bh_src=GMU(p_blurh,"u_src");
@@ -11118,6 +11130,7 @@ static void gm_passes(int in_mission) {
     gm_bind(4,g_gm.mesh_applied?g_gl_mesh.color:g_gm.t_kind,g_gm.pk_mesh); gm_bind(5,g_gm.t_msk,g_gm.pk_mask);
     g_bloom.Uniform1f(g_gm.pk_mesh_on,g_gm.mesh_applied?1.0f:0.0f);
     g_bloom.Uniform1f(g_gm.pk_lit_on,g_gm.lit_applied?1.0f:0.0f);
+    gm_bind(6,g_bloom.lut_tex,g_gm.pk_plut);
     g_bloom.Uniform2f(g_gm.pk_off,ox,oy); g_bloom.Uniform1f(g_gm.pk_th,g_gm.th?1.0f:0.0f);
     bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
     if(g_gm.shadows) {
