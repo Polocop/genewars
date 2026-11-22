@@ -19697,6 +19697,22 @@ static struct { uint32_t frame; int16_t x,y,wx,wy; uint8_t caller,fn,pad[2]; } g
 static unsigned g_fr_n; static int g_fr_on;
 void gw_draw_caller(int k) { g_draw_caller=k; }
 void gw_frame_drawn(unsigned int fn,unsigned int x,unsigned int y,unsigned int frame) {
+    {   /* QA (GW_FRAME_LOG=<file>, also headless): every frame drawn, with its caller site, the game turn and the frame's
+           first sprite size; up to 200000 lines */
+        static FILE *lf; static int li=-1; static unsigned ln;
+        if(li<0) { const char *e=getenv("GW_FRAME_LOG"); li=e && e[0]; if(li) lf=fopen(e,"w"); }
+        if(lf && guest_memory && ln<200000u) {
+            const uint32_t turn=*(const uint32_t *)(guest_memory+0x002F1472u);
+            unsigned sw=0,sh=0; const uint64_t fa=(uint64_t)g_ds_base+frame;
+            if(fa<=GUEST_LIMIT-12u) { const uint32_t el=*(const uint32_t *)(guest_memory+fa); const uint64_t ea=(uint64_t)g_ds_base+el;
+                if(ea<=GUEST_LIMIT-10u) { const uint32_t sp=*(const uint32_t *)(guest_memory+ea); const uint64_t sa=(uint64_t)g_ds_base+sp;
+                    if(sa<=GUEST_LIMIT-6u) { sw=guest_memory[sa+4]; sh=guest_memory[sa+5]; } } }
+            fprintf(lf,"t%u c%d f%u %08x %d %d w%d,%d s%ux%u
+",turn,g_draw_caller,fn==0x919C0u?0:fn==0x91AE0u?1:2,frame,(int)x,(int)y,
+                *(const int32_t *)(guest_memory+0x00376A80u),*(const int32_t *)(guest_memory+0x00376A84u),sw,sh);
+            ln++; if((ln&1023u)==0u) fflush(lf);
+        }
+    }
     if(!g_fr_on || !guest_memory || g_fr_n>=768u) return;
     g_fr[g_fr_n].frame=frame; g_fr[g_fr_n].x=(int16_t)(int32_t)x; g_fr[g_fr_n].y=(int16_t)(int32_t)y;
     g_fr[g_fr_n].wx=(int16_t)*(const int32_t *)(guest_memory+0x00376A80u); g_fr[g_fr_n].wy=(int16_t)*(const int32_t *)(guest_memory+0x00376A84u);
@@ -19867,7 +19883,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
                 }
                 g_interactive_published_snapshot.frames_n=0;
                 if(g_spr_on && in_ifc_main && g_fr_on) { memcpy(g_interactive_published_snapshot.frames,g_fr,g_fr_n*sizeof g_fr[0]); g_interactive_published_snapshot.frames_n=g_fr_n; }
-                g_fr_n=0; g_fr_on=g_ini_hd2d_particles || getenv("GW_SPR_MASK_DUMP")!=NULL;
+                g_fr_n=0; g_fr_on=getenv("GW_SPR_MASK_DUMP")!=NULL;   /* QA only: no emitter uses the frame list yet */
                 memset(g_ev,0,sizeof g_ev); g_spr_w=sw?sw:1u;
                 memset(g_spr_mask,0,(size_t)sw*sh); g_spr_lo=ws; g_spr_hi=ws+sw*sh;
                 if(!g_spr_on) { g_spr_on=1; recomp_set_guest_write_observer(write_probe_observer,NULL);
