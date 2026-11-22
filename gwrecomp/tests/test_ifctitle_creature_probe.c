@@ -9554,6 +9554,7 @@ static struct { uint32_t *buf,*base; fx_wpx *px; int n,cap,w,h,y0,y1; } g_fxr[2]
 static uint8_t g_fx_rowany[640];
 static int g_wt_ready;   /* 1 once the GPU water pass compiled: the CPU path then does no water */   /* 1 for source rows holding water/GOOP ground at x >= 176 */   /* [0] 640/854 view, [1] zoom-out canvas */
 static int g_gm_frame;   /* this presented frame draws the zoomed-out map from the GPU composition */
+static unsigned g_gm_npass,g_gm_nup;   /* QA counters */
 static uint8_t *g_fx_g;
 static uint64_t g_fxc_gen=UINT64_MAX; static int g_fxc_key=-1,g_fxc_tq=-1; static uint8_t g_fxc_pal[768];
 static SDL_Texture *g_fxc_tex[2];
@@ -10455,7 +10456,7 @@ static void gm_upload(const gw_interactive_visual_snapshot *v) {
         uint8_t k8[256]; for(int k=0;k<256;k++) k8[k]=g_fx_kind[k];
         g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_kind); g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,1,GL_RED,GL_UNSIGNED_BYTE,k8);
         memcpy(g_gm.kind_pal,v->palette,768); g_gm.kind_ok=1; }
-    g_gm.ring_x=v->ring_x; g_gm.ring_y=v->ring_y; g_gm.th=v->th_valid; g_gm.pending=1;
+    g_gm.ring_x=v->ring_x; g_gm.ring_y=v->ring_y; g_gm.th=v->th_valid; g_gm.pending=1; g_gm_nup++;
 }
 
 static int part_active(const gw_interactive_visual_snapshot *v);
@@ -10987,7 +10988,7 @@ static void gm_passes(void) {
     g_bloom.Uniform2f(g_gm.bv_off,ox,oy); g_bloom.Uniform1f(g_gm.bv_on,g_gm.shadows?1.0f:0.0f);
     bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
     g_bloom.ActiveTexture(GL_TEXTURE0);
-    g_gm.pending=0; g_gm.have=g_gm.have<3?g_gm.have+1:3;
+    g_gm.pending=0; g_gm.have=g_gm.have<3?g_gm.have+1:3; g_gm_npass++;
 }
 /* every presented frame: the map colour of both layers into a buffer the size of the scaled frame */
 static int gm_map(const gw_present_geo *geo,double interp_a) {
@@ -11240,7 +11241,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
     /* this frame's zoomed-out map comes from the GPU composition (decided once, before any conversion) */
     g_gm_frame=visual && gm_frame_ok(visual) && g_zoom<0.9999 &&
                (bloom_active(visual) || ao_gpu_active(visual) || part_active(visual) || fx_active(visual) || depth_active(visual));
-    {   static int last=-1;
+    {   static int last=-1; static unsigned nfr;
+        if(visual && visual->in_mission && ++nfr%600u==0u)
+            gw_flag_trace("TRACE gpu_map status frame=%d ready=%d have=%d pending=%d passes=%u uploads=%u zoom=%.3f%c",g_gm_frame,g_gm.ready,g_gm.have,g_gm.pending,g_gm_npass,g_gm_nup,g_zoom,10);
         if(visual && visual->in_mission && g_gm_frame!=last) { last=g_gm_frame;
             gw_flag_trace("TRACE gpu_map frame=%d ready=%d failed=%d have=%d canvas=%d zoom=%.3f ring=%ux%u left=%d bloom_failed=%d%c",g_gm_frame,g_gm.ready,
                 g_gm.failed,g_gm.have,visual->canvas_valid,g_zoom,visual->fx_ring_w,visual->fx_ring_h,visual->ring_left,g_bloom.failed,10); } }
