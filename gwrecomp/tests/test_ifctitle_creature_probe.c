@@ -11027,7 +11027,7 @@ static int gm_map(const gw_present_geo *geo,double interp_a) {
     g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_gm.hu_lut,1);
     g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_idx); g_bloom.Uniform1i(g_gm.hu_idx,0);
     {   const float x1=128.0f/(float)vw*2.0f-1.0f;
-        bloom_draw_quad(-1.0f,1.0f,x1,-1.0f, 0.0f,0.0f,128.0f/1152.0f,480.0f/640.0f, 0.0f,0.0f,1.0f,1.0f); }
+        bloom_draw_quad(-1.0f,-1.0f,x1,1.0f, 0.0f,0.0f,128.0f/1152.0f,480.0f/640.0f, 0.0f,0.0f,1.0f,1.0f);   /* logical y = 0 at NDC -1, as bloom_draw_map_rect */ }
     return 1;
 }
 
