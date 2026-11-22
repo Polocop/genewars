@@ -8,6 +8,7 @@
 #include "gw_camera_interpolation.h"
 #include "gw_cdda_audio.h"
 #include "gw_vsb16.h"
+#include "gw_terrain_mesh_projection.h"
 #include "../tools/terrain_renderer/gw_terrain_renderer.h"
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
@@ -16932,6 +16933,7 @@ static int16_t g_th_ring[1152u*640u];
 static uint8_t g_th_have[1152u*640u];       /* 1 where a terrain triangle wrote a height */
 static uint8_t g_th_rowhave[640];           /* 1 for ring rows a terrain triangle has written */
 static int g_th_force=-1;
+static int g_terrain_mesh_capture_enabled;
 /* the vertex records E19C0 receives copy y (node +0) and the light (node +4) from 12-byte mesh nodes; the height is
    recorded per node address when the node's y is stored, and a vertex takes the height of the node that holds exactly
    its y and light at submission time */
@@ -16952,7 +16954,7 @@ static void th_dump(void) {   /* QA (GW_TH_DUMP=<file>): heights, coverage and t
 }
 static int th_capture_on(void) {
     if(g_th_force<0) { const char *e=getenv("GW_TH_CAPTURE"); g_th_force=e && e[0]=='1'; }
-    return g_th_force || (g_cli_play_mode && g_ini_terrain_ao);
+    return g_th_force || (g_cli_play_mode && (g_ini_terrain_ao || g_terrain_mesh_capture_enabled));
 }
 void gw_terrain_vertex_height(unsigned int y,unsigned int cell,unsigned int node) {
     if(!guest_memory || !th_capture_on()) return;
@@ -16965,26 +16967,38 @@ void gw_terrain_vertex_height(unsigned int y,unsigned int cell,unsigned int node
     g_th_node[g_th_node_n&15u].addr=na; g_th_node[g_th_node_n&15u].h=h; g_th_node_n++;
 }
 /* the three vertex records (flat address) and the height each took from its node at the y copy */
-static struct { uint32_t addr; int32_t h; } g_th_rec[8];
+static struct { uint32_t addr; int32_t h, mesh_h; } g_th_rec[8];
 static unsigned g_th_rec_n;
 void gw_terrain_record_node(unsigned int rec,unsigned int node) {
     if(!guest_memory || !th_capture_on()) return;
     const unsigned n=g_th_node_n<16u?g_th_node_n:16u; int32_t h=0; int ok=0;
     for(unsigned k=0;k<n;k++) if(g_th_node[k].addr==node) { h=g_th_node[k].h; ok=1; break; }
     const unsigned rn=g_th_rec_n<8u?g_th_rec_n:8u;
-    for(unsigned k=0;k<rn;k++) if(g_th_rec[k].addr==rec) { g_th_rec[k].h=ok?h:INT32_MIN; return; }
-    g_th_rec[g_th_rec_n&7u].addr=rec; g_th_rec[g_th_rec_n&7u].h=ok?h:INT32_MIN; g_th_rec_n++;
+    unsigned k=0;
+    while(k<rn && g_th_rec[k].addr!=rec) k++;
+    if(k==rn) k=g_th_rec_n++&7u;
+    g_th_rec[k].addr=rec;
+    g_th_rec[k].h=g_th_rec[k].mesh_h=ok?h:INT32_MIN;
 }
 /* FUN_0007BC40 (one map cell redrawn): a corner projected from world coordinates on the cell grid takes the height of
    that cell (cell = 0x11AF86 + (y >> 8 & 127) * 0x700 + (x >> 8 & 127) * 14, height at +2) */
 void gw_terrain_record_world(unsigned int rec,unsigned int x,unsigned int y) {
     if(!guest_memory || !th_capture_on()) return;
-    const uint32_t cell=0x0011AF86u+(((uint32_t)(int16_t)y>>8)&127u)*0x700u+(((uint32_t)(int16_t)x>>8)&127u)*14u;
-    const uint64_t a=(uint64_t)g_ds_base+cell+2u; if(a>GUEST_LIMIT-2u) return;
+    const uint32_t offset=gw_terrain_mesh_cell_index((int16_t)x,(int16_t)y)*14u+2u;
+    const uint64_t a=(uint64_t)g_ds_base+0x0011AF86u+offset; if(a>GUEST_LIMIT-2u) return;
     const int32_t h=(int32_t)*(int16_t *)(guest_memory+a);
+    /* The generated instructions at 0x65654..0x65674 use the relocated
+       runtime table. Keep its result separate from the existing AO capture. */
+    const uint64_t runtime=(uint64_t)g_ds_base+0x002F4F86u+offset;
+    const int32_t mesh_h=g_terrain_mesh_capture_enabled && runtime<=GUEST_LIMIT-2u ?
+        *(const int16_t *)(guest_memory+runtime):INT32_MIN;
     const unsigned rn=g_th_rec_n<8u?g_th_rec_n:8u;
-    for(unsigned k=0;k<rn;k++) if(g_th_rec[k].addr==rec) { g_th_rec[k].h=h; return; }
-    g_th_rec[g_th_rec_n&7u].addr=rec; g_th_rec[g_th_rec_n&7u].h=h; g_th_rec_n++;
+    unsigned k=0;
+    while(k<rn && g_th_rec[k].addr!=rec) k++;
+    if(k==rn) k=g_th_rec_n++&7u;
+    g_th_rec[k].addr=rec;
+    g_th_rec[k].h=h;
+    g_th_rec[k].mesh_h=mesh_h;
 }
 static int th_record_height(uint32_t rec,int32_t *h) {
     const unsigned rn=g_th_rec_n<8u?g_th_rec_n:8u;
@@ -17128,10 +17142,67 @@ static void terrain_probe_prim(uint32_t callsite,uint32_t va,uint32_t vb,uint32_
     const uint32_t p[3]={va,vb,vc};
     for(int k=0;k<3;k++) if(g_ds_base+p[k]<=GUEST_LIMIT-20u) memcpy(r->v[k],guest_memory+g_ds_base+p[k],20);
 }
+
+/* Export the actual E19C0 inputs for the two terrain producers. The projected
+   coordinates, UVs and light are measured at submission, before clipping;
+   texture and clip state are read from the same live rasterizer globals. */
+static void terrain_mesh_capture(uint32_t site,uint32_t va,uint32_t vb,uint32_t vc) {
+    static FILE *output;
+    static unsigned count;
+    static int opened;
+    if(count>=8192u || !guest_memory) return;
+    if(site!=0x662BEu && site!=0x664CDu && site!=0x6630Au && site!=0x6651Cu &&
+       site!=0x6634Fu && site!=0x66564u && site!=0x7BCE3u && site!=0x7BD3Eu) return;
+    const uint8_t *m=guest_memory;
+    if(*(const uint32_t *)(m+0x002EF7E8u)!=0x0035FE9Au ||
+       *(const uint32_t *)(m+0x002EF7ECu)) return;
+    if(!opened) {
+        opened=1;
+        const char *path=getenv("GW_TERRAIN3D_CAPTURE");
+        if(path && *path) output=fopen(path,"wb");
+        if(output) fputs("turn\tsite\tring_x\tring_y\tcanvas_w\tcanvas_h\tclip_x\tclip_y\tclip_w\tclip_h\ttexture_guest\tmode\theight_scale\t"
+            "x0\ty0\tu0\tv0\tlight0\tz0\tx1\ty1\tu1\tv1\tlight1\tz1\tx2\ty2\tu2\tv2\tlight2\tz2\n",output);
+    }
+    if(!output || g_ds_base>GUEST_LIMIT-0x0035EAB8u) return;
+    const uint32_t w=*(const uint32_t *)(m+0x00376A78u);
+    const uint32_t h=*(const uint32_t *)(m+0x00376A7Cu);
+    const uint32_t ring=*(const uint32_t *)(m+0x002EECA0u);
+    const uint8_t *ds=m+g_ds_base;
+    if(w!=GW_CANVAS_W || h!=GW_CANVAS_H || !ring || ring>GUEST_LIMIT-w*h) return;
+    const uint32_t pitch=*(const uint32_t *)(ds+0x002DA110u);
+    if(pitch!=w) return;
+    const uint32_t dst=*(const uint32_t *)(ds+0x002DA100u);
+    if(dst>=GUEST_LIMIT-g_ds_base) return;
+    gw_terrain_mesh_window window;
+    if(!gw_terrain_mesh_window_init(&window,ring,g_ds_base+dst,pitch,
+           *(const uint32_t *)(ds+0x002DA114u),*(const uint32_t *)(ds+0x002DA118u))) return;
+    const uint32_t ptr[3]={va,vb,vc};
+    for(unsigned i=0;i<3u;i++) if(ptr[i]>GUEST_LIMIT-g_ds_base-20u) return;
+    fprintf(output,"%u\t%05x\t%d\t%d\t%u\t%u\t%d\t%d\t%u\t%u\t%08x\t%u\t%d",
+        *(const uint32_t *)(m+0x002F1472u),site,
+        *(const int16_t *)(m+0x00346D78u),*(const int16_t *)(m+0x00346D7Au),w,h,
+        window.x,window.y,window.width,window.height,
+        *(const uint32_t *)(ds+0x002DA108u),ds[0x002DCE25u],*(const int32_t *)(ds+0x0035EAB4u));
+    for(unsigned i=0;i<3u;i++) {
+        const int32_t *v=(const int32_t *)(ds+ptr[i]);
+        fprintf(output,"\t%d\t%d\t%d\t%d\t%d",v[0],v[1],v[2],v[3],v[4]);
+        fputc('\t',output);
+        for(unsigned k=0;k<8u && k<g_th_rec_n;k++) {
+            if(g_th_rec[k].addr==g_ds_base+ptr[i] && g_th_rec[k].mesh_h!=INT32_MIN) {
+                fprintf(output,"%d",gw_terrain_mesh_height_step((int16_t)g_th_rec[k].mesh_h));
+                break;
+            }
+        }
+    }
+    fputc('\n',output);
+    if(++count==8192u) { fclose(output); output=NULL; }
+    else if(count%128u==0u) fflush(output);
+}
 void gw_hybrid_capture_primitive(uint32_t callsite,uint32_t va,uint32_t vb,
 		uint32_t vc,uint32_t esp) {
 	uint8_t *mem=guest_memory;
 	uint32_t limit=GUEST_LIMIT;
+    if(g_cli_play_mode && g_terrain_mesh_capture_enabled) terrain_mesh_capture(callsite,va,vb,vc);
 	if(g_tprobe_state!=2 && g_tprobe_state!=3 && g_cli_play_mode && mem) terrain_probe_prim(callsite,va,vb,vc);
 	if(mem && th_capture_on()) th_triangle(callsite,va,vb,vc);
 	if(!g_hybrid_primitive_capture_enabled || !mem) return;
@@ -22489,7 +22560,11 @@ int main(int argc,char **argv) {
     /* The startup replay writes its evidence files under ./evidence and aborts (exit 112) when
        that directory is missing; a player launch from any working directory must not depend on it. */
     if(g_cli_play_mode) (void)CreateDirectoryA("evidence",NULL);
-    if(g_cli_play_mode) play_mode_sanitize_environment();
+    if(g_cli_play_mode) {
+        play_mode_sanitize_environment();
+        const char *capture=getenv("GW_TERRAIN3D_CAPTURE");
+        g_terrain_mesh_capture_enabled=capture && *capture;
+    }
     int fast_launch=0;
     for(int ai=4;ai<argc;ai++) {
         if(!strcmp(argv[ai],"--play")) continue;
