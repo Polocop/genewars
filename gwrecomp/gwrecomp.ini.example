@@ -59,3 +59,9 @@ terrain_ao = 1
 terrain_ao_strength = 0.40
 ; 1 = soft shadows: the game's hard shadows (ships, flyers, buildings) redrawn from the terrain with soft edges
 soft_shadows = 1
+; 1 = 4K particles (GPU, window resolution, every presented frame): drifting spores and sea mist on green planets,
+;     dust and sand gusts on arid ones, ash and embers on dark ones, snow on icy ones, plus energy sparks and dust
+;     around the Ethereal ship and its teleport beam. Missions only, never over the HUD.
+;     particle_density = amount, 0.0 .. 2.0 (default 1.0)
+hd2d_particles = 1
+particle_density = 1.0

@@ -120,6 +120,8 @@ bloom_intensity = 0.65
 terrain_ao = 1
 terrain_ao_strength = 0.40
 soft_shadows = 1
+hd2d_particles = 1
+particle_density = 1.0
 launcher = 1
 ; launcher language: es, en or auto (Windows display language); also the ES / EN buttons in the launcher
 language = auto

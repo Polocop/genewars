@@ -74,6 +74,12 @@ GitHub issues are kept in [gwrecomp/docs/issues-archive.md](gwrecomp/docs/issues
   clean terrain with soft edges (exactly the pixels the game's shadow routine wrote and no sprite covered; same
   shape and place, no black dither). Missions only, presented frame only;
   sprites, water, GOOP and the HUD are never darkened. On/off in the GRAPHICS tab.
+- **4K particles:** atmosphere by planet type, drawn by the GPU at the window's own resolution on every presented
+  frame and anchored to the scenery (they follow the interpolated camera and the zoom): luminous spores and a thin
+  sea mist on green planets, mineral dust and sand gusts on arid ones, ash and faint embers on dark ones, snow on
+  icy ones; energy sparks and landing dust around the Ethereal ship and along its teleport beam (positions taken
+  from the pixels the game draws). Missions only, never over the HUD; `particle_density` 0.0–2.0. On/off in the
+  GRAPHICS tab.
 - **Complete audio:**
   - Smacker video sound,
   - the original Miles sound effects through a virtual SB16,
@@ -123,6 +129,7 @@ them.
 | `emissive_bloom`, `bloom_intensity` | glow on energy, explosions and GOOP (`1`/`0`); strength `0.0`–`1.5` (default `0.65`) |
 | `terrain_ao`, `terrain_ao_strength` | terrain ambient occlusion from the real heights, GPU (`1`/`0`); strength `0.0`–`1.0` (default `0.40`) |
 | `soft_shadows` | the game's shadows with soft edges (`1`/`0`) |
+| `hd2d_particles`, `particle_density` | GPU particles by planet type and around the Ethereal ship (`1`/`0`); amount `0.0`–`2.0` (default `1.0`) |
 | `enhanced_audio` | calibrated panning, pitch variation, music ducking (`1`/`0`) |
 | `language` | launcher language: `en`, `es` or `auto` (Windows display language) |
 | `cd_cue` | path to your own Gene Wars CD image `.cue`, for the CD music (launcher: PLAY → **CD IMAGE**) |
@@ -162,7 +169,7 @@ con el SHA-256 que se publica en cada versión.
 compartas.
 
 **Opciones:** todo lo que cambias en el lanzador se guarda en `gwrecomp.ini` (modo de vista, resolución, pantalla
-completa, 60/120 FPS, filtro, `water_effects`, `emissive_bloom` (bloom emisivo; intensidad con `bloom_intensity`), `terrain_ao` (oclusión del terreno en GPU; `terrain_ao_strength`), `soft_shadows` (sombras suaves), `enhanced_audio`, `language` = `es` / `en` / `auto`). Para la música del CD, en la pestaña
+completa, 60/120 FPS, filtro, `water_effects`, `emissive_bloom` (bloom emisivo; intensidad con `bloom_intensity`), `terrain_ao` (oclusión del terreno en GPU; `terrain_ao_strength`), `soft_shadows` (sombras suaves), `hd2d_particles` (partículas 4K; cantidad con `particle_density`), `enhanced_audio`, `language` = `es` / `en` / `auto`). Para la música del CD, en la pestaña
 JUGAR pulsa **IMAGEN DEL CD** y elige el `.cue` de tu propia imagen del CD (se guarda como `cd_cue`). `gwrecomp.ini.example` explica cada clave.
 
 ## Legal

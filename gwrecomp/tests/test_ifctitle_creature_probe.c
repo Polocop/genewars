@@ -7934,6 +7934,9 @@ typedef struct gw_interactive_visual_snapshot {
     /* soft_shadows: 1 where a sprite routine wrote the frame this game frame (instrumented writes) */
     uint8_t spr_mask[1152u*640u];
     uint8_t shade_t[256];            /* the shadow routine's remap row (flat 0x366A54): shadow = shade_t[terrain] */
+    /* hd2d_particles events of this game frame, in frame coordinates: the Ethereal ship's shadow (caller 0x10EF0)
+       and the teleport beam (stores 0x9941E/0x9946E); n = pixels written, then the bounding box */
+    int ev_ship_n,ev_ship_x,ev_ship_y,ev_ship_w,ev_ship_h,ev_beam_n,ev_beam_x,ev_beam_y,ev_beam_w,ev_beam_h;
     int spr_valid;
     int in_mission;
     gw_info_overlay info;
@@ -8475,6 +8478,8 @@ static int g_ini_emissive_bloom=1;  /* emissive_bloom: selective GPU Dual Kawase
 static float g_ini_bloom_intensity=0.65f; /* bloom_intensity: 0.0..1.5 */
 static int g_ini_terrain_ao=1;            /* terrain_ao: relief from the terrain shading (missions, presented frame only) */
 static float g_ini_terrain_ao_strength=0.40f; /* terrain_ao_strength: 0.0..1.0, darkest occlusion (GPU terrain AO) */
+static int g_ini_hd2d_particles=1;        /* hd2d_particles: GPU atmospheric/event particles at the window resolution */
+static float g_ini_particle_density=1.0f; /* particle_density: 0.0 .. 2.0 */
 static int g_ini_soft_shadows=1;          /* soft_shadows: the game's hard shadows redrawn with soft edges */
 static char g_ini_cd_cue[600];
 /* language = es | en | auto: the launcher and the program's own message boxes (the game keeps its own texts);
@@ -8573,6 +8578,8 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"terrain_ao")) g_ini_terrain_ao=atoi(val)!=0;
         else if(!strcmp(key,"terrain_ao_strength")) { float v=(float)atof(val); if(v<0.0f) v=0.0f; if(v>1.0f) v=1.0f; g_ini_terrain_ao_strength=v; }
         else if(!strcmp(key,"soft_shadows")) g_ini_soft_shadows=atoi(val)!=0;
+        else if(!strcmp(key,"hd2d_particles")) g_ini_hd2d_particles=atoi(val)!=0;
+        else if(!strcmp(key,"particle_density")) { double d=atof(val); g_ini_particle_density=(float)(d<0.0?0.0:d>2.0?2.0:d); }
         else if(!strcmp(key,"language")) {
             if(!_stricmp(val,"es")) g_ini_lang=0; else if(!_stricmp(val,"en")) g_ini_lang=1;
             else if(!val[0] || !_stricmp(val,"auto")) g_ini_lang=-1;
@@ -10182,6 +10189,10 @@ static void bu_view_rows(void *cp,int y0,int y1) {
         int ry=0;
         if(c->ring_on_view) { ry=(y+v->ring_y)%480; if(ry<0) ry+=480; }
         else if(c->cv_ring_ok) { ry=(y+GW_CANVAS_VY0+v->ring_y)%(int)GW_CANVAS_H; if(ry<0) ry+=(int)GW_CANVAS_H; }
+        /* heights row: the frame's last row takes the row above (see bu_canvas_rows) */
+        int hdy=0;
+        if(c->ring_on_view && y==479) hdy=ry==0?479:-1;
+        else if(c->cv_ring_ok && y+GW_CANVAS_VY0==(int)GW_CANVAS_H-1) hdy=ry==0?(int)GW_CANVAS_H-1:-1;
         int rv=0,rc=0;   /* ring columns at x=128 (view ring) and x=176 (canvas ring) */
         if(c->ring_on_view) { rv=(v->ring_x-128)%c->ring_w_view; if(rv<0) rv+=c->ring_w_view; }
         if(c->cv_ring_ok) { rc=(176+(GW_CANVAS_VX0-128)-128)+(v->ring_x-128); rc%=c->cv_rw; if(rc<0) rc+=c->cv_rw; }
@@ -10198,7 +10209,7 @@ static void bu_view_rows(void *cp,int y0,int y1) {
                 else if(c->cv_ring_ok && x>=176) { ri=(size_t)ry*GW_CANVAS_W+128u+(unsigned)rc; have_ri=1; is_gnd=(k==v->fx_ring[ri]); }
             }
             dst[x*4+0]=k;
-            {   int hv=(th && have_ri)?v->th_ring[ri]:0; hv=hv<0?0:hv>4095?4095:hv;   /* 12 bits: B = high 8, G bits 4..7 = low 4 */
+            {   int hv=(th && have_ri)?v->th_ring[(size_t)((int64_t)ri+(int64_t)hdy*(c->ring_on_view?(int64_t)v->fx_ring_w:(int64_t)GW_CANVAS_W))]:0; hv=hv<0?0:hv>4095?4095:hv;   /* 12 bits: B = high 8, G bits 4..7 = low 4 */
                 dst[x*4+1]=(uint8_t)((is_panel?0:1)|(is_gnd?2:0)|((hv&15)<<4));
                 dst[x*4+2]=(uint8_t)(hv>>4);
                 dst[x*4+3]=(uint8_t)((th && have_ri && is_gnd && x>=176 && g_fx_kind[k]==FX_NONE)?255:0); }
@@ -10215,7 +10226,10 @@ static void bu_canvas_rows(void *cp,int y0,int y1) {
         uint8_t *dst=g_bloom.up_buf+(size_t)y*GW_CANVAS_TEX_W*4u;
         int ry=(y+v->ring_y)%(int)GW_CANVAS_H; if(ry<0) ry+=(int)GW_CANVAS_H;
         int rx=(v->ring_x-128)%cv_rw; if(rx<0) rx+=cv_rw;
-        const uint8_t *rr=v->fx_ring+(size_t)ry*GW_CANVAS_W+128u; const int16_t *hr=v->th_ring+(size_t)ry*GW_CANVAS_W+128u;
+        /* the last frame row is the ring row the full redraw starts at (ring - 1 row: the row above the view), so its
+           heights do not belong to it: it takes the heights of the row above */
+        int hy=y==(int)GW_CANVAS_H-1?ry-1:ry; if(hy<0) hy+=(int)GW_CANVAS_H;
+        const uint8_t *rr=v->fx_ring+(size_t)ry*GW_CANVAS_W+128u; const int16_t *hr=v->th_ring+(size_t)hy*GW_CANVAS_W+128u;
         for(int x=0;x<GW_CANVAS_TEX_W;x++) {
             uint8_t k=row[x];
             if(y<480 && x<48 && v->panel_bg_valid && v->canvas_panel[y*48+x]) k=v->panel_bg[y*48+x];
@@ -10229,9 +10243,10 @@ static void bu_canvas_rows(void *cp,int y0,int y1) {
         }
     }
 }
+static int part_active(const gw_interactive_visual_snapshot *v);
 static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_video_surface *source,
                                int view_w,int panel_split) {
-    if(!(bloom_active(v) || ao_gpu_active(v)) || !source) return;
+    if(!(bloom_active(v) || ao_gpu_active(v) || part_active(v)) || !source) return;
     if(!bloom_ensure_init(view_w)) return;
     bloom_classify(v->palette);
     fx_classify(v->palette);
@@ -10292,6 +10307,267 @@ static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_
     g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,prev_rl);
     g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex);
     g_bloom.ActiveTexture((GLenum)prev_act);
+}
+
+/* ---- hd2d_particles (gwrecomp.ini, launcher GRÁFICOS): atmospheric and event particles drawn by the GPU at the
+   window's native resolution on every presented frame (120 Hz), on top of the game's 8-bit frame. Presentation only:
+   never reads guest memory during ticks and never writes it (the A/B suite is unchanged); missions only (IFCMain).
+   - The particles live in world coordinates: source frame position + the unwrapped ring scroll (the same anchor the
+     water uses), and are projected with the interpolated camera and the zoom exactly like the map layers, so they stay
+     on the scenery while the camera moves; the near layer has a slight parallax.
+   - Biome (from the terrain colours of the ring, recomputed every 2 s): organic (green) = drifting luminous spores and
+     a thin mist over water; arid (brown/ochre) = mineral dust motes and soft diagonal sand gusts; volcanic/dark = ash
+     and faint rising embers; icy (pale) = light snow.
+   - Events, only where the game itself gives the exact screen position (the stores the write observer sees): the
+     Ethereal ship's shadow (shade remap by caller 0x10EF0) = energy sparks while it lands/takes off and landing dust;
+     the teleport beam (0x9941E/0x9946E) = energy sparks along it.
+   - Clipped to the map: never over the HUD panel (its exact mask, hud_tex) nor over the black space around a planet. */
+enum { PT_SOFT=0, PT_GLOW=1 };
+typedef struct { float x,y,vx,vy,age,life,size,seed,r,g,b,a,par; uint8_t kind,live,flags; } gw_particle;
+enum { PT_MAX=1400 };
+static gw_particle g_pt[PT_MAX];
+static int g_pt_biome=-1,g_pt_mode=-1;            /* biome 0 organic, 1 arid, 2 volcanic, 3 icy; mode = source layout */
+static uint64_t g_pt_gen=UINT64_MAX,g_pt_biome_t;
+static double g_pt_ax,g_pt_ay;                     /* unwrapped ring scroll of the current snapshot (world = src + anchor) */
+static int g_pt_lrx,g_pt_lry,g_pt_have;
+static uint64_t g_pt_t;                            /* last update (performance counter) */
+static uint32_t g_pt_rng=0x9E3779B9u;
+static GLuint g_pt_prog,g_pt_vbo; static GLint g_pt_u_hud,g_pt_u_kind;
+static float *g_pt_verts;
+static double g_pt_cpu_ms; static uint32_t g_pt_cpu_n,g_pt_drawn;
+static float pt_rand(void) { g_pt_rng^=g_pt_rng<<13; g_pt_rng^=g_pt_rng>>17; g_pt_rng^=g_pt_rng<<5; return (float)(g_pt_rng&0xFFFFFFu)/16777216.0f; }
+static int part_active(const gw_interactive_visual_snapshot *v) {
+    return g_cli_play_mode && g_ini_hd2d_particles && g_ini_particle_density>0.001f && !g_bloom.failed &&
+           v && v->valid && v->in_mission && v->fx_ring_valid && !g_terrain_modern_backend && g_tex_scale==1 && v->ring_left==128;
+}
+/* the source frame the map layers show: the zoom-out canvas or the frame at its pitch, and its map rectangle */
+static void pt_source(const gw_interactive_visual_snapshot *v,const uint8_t **src,int *pitch,int *rows,int *x0,int *x1) {
+    if(v->canvas_valid && g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999) { *src=v->canvas; *pitch=(int)GW_CANVAS_W; *rows=(int)GW_CANVAS_H; }
+    else { *src=v->wscreen; *pitch=(int)v->wscreen_pitch; *rows=480; }
+    *x0=176; *x1=*pitch;
+}
+/* source position (current snapshot) -> logical view position, as bloom_draw_map_layers draws the current layer */
+static void pt_project(double sx,double sy,double a,double *lx,double *ly) {
+    if(g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999) {
+        const double ux=GW_CANVAS_VX0+g_zoom_x,uy=GW_CANVAS_VY0+g_zoom_y,z=g_zoom;
+        const int on=(g_bloom.canvas_ready>=2 && (g_interp_dx||g_interp_dy) && a<1.0);
+        const double idx=on?g_interp_dx:0,idy=on?g_interp_dy:0;
+        *lx=128.0+(GW_CANVAS_MAPX0-(1.0-a)*idx-ux+(sx-128.0))*z; *ly=(sy-(1.0-a)*idy-uy)*z;
+    } else {
+        const int on=g_interp_prev_texture && interp_enabled() && (g_interp_dx||g_interp_dy) && g_interp_t_cur>g_interp_t_prev &&
+                     g_interactive_perf_frequency && (double)(g_interp_t_cur-g_interp_t_prev)<0.2*(double)g_interactive_perf_frequency;
+        const double zz=g_zoom>1.0001?g_zoom:1.0,zx=g_zoom>1.0001?g_zoom_x:0.0,zy=g_zoom>1.0001?g_zoom_y:0.0;
+        const double dx=on?g_interp_dx:0,dy=on?g_interp_dy:0;
+        *lx=128.0+((sx-128.0)-(1.0-a)*dx-zx)*zz; *ly=(sy-(1.0-a)*dy-zy)*zz;
+    }
+}
+static double pt_zoom(void) { return (g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999)?g_zoom:(g_zoom>1.0001?g_zoom:1.0); }
+static void pt_biome(const gw_interactive_visual_snapshot *v) {
+    long r=0,g=0,b=0,n=0; const uint32_t total=v->fx_ring_w*v->fx_ring_h;
+    for(uint32_t i=0;i<total;i+=7u) {
+        const uint8_t k=v->fx_ring[i]; if(!k || g_fx_kind[k]==FX_WATER) continue;
+        r+=v->palette[k*3]; g+=v->palette[k*3+1]; b+=v->palette[k*3+2]; n++;
+    }
+    int bi=2;
+    if(n>200) {
+        const int R=(int)(r/n),G=(int)(g/n),B=(int)(b/n),L=(R*3+G*6+B)/10;
+        if(L>40 && B+4>=R) bi=3;                       /* pale, cold: icy */
+        else if(G>R+2 && G>=B) bi=0;                    /* green: organic */
+        else if(R>=G-1 && R>B+5 && L>14) bi=1;          /* brown/ochre: arid */
+        else bi=2;                                      /* dark/red: volcanic */
+    }
+    if(bi!=g_pt_biome) { gw_flag_trace("TRACE hd2d_particles biome=%s%c",bi==0?"organic":bi==1?"arid":bi==2?"volcanic":"icy",10); g_pt_biome=bi; }
+}
+static gw_particle *pt_new(void) {
+    for(int i=0;i<PT_MAX;i++) if(!g_pt[i].live) { memset(&g_pt[i],0,sizeof g_pt[i]); g_pt[i].live=1; return &g_pt[i]; }
+    return NULL;
+}
+/* atmosphere: one particle of the biome somewhere in the visible map (world coordinates, layer parallax par) */
+static void pt_spawn_atmo(int sx0,int sx1,int sy0,int sy1,int water_only) {
+    gw_particle *p=pt_new(); if(!p) return;
+    const int near=pt_rand()<0.35f; p->par=near?1.12f:1.0f; p->flags=1|(water_only?2:0);
+    p->x=(float)(sx0+pt_rand()*(sx1-sx0)+g_pt_ax*p->par); p->y=(float)(sy0+pt_rand()*(sy1-sy0)+g_pt_ay*p->par);
+    p->seed=pt_rand()*6.2831853f; p->age=0.0f;
+    switch(water_only?4:g_pt_biome) {
+    case 0: p->kind=PT_GLOW; p->life=6.0f+pt_rand()*6.0f; p->size=(near?2.2f:1.5f)+pt_rand()*0.8f;
+            p->vx=(pt_rand()-0.5f)*4.0f; p->vy=-1.0f-pt_rand()*2.5f; p->r=0.62f; p->g=1.0f; p->b=0.55f; p->a=near?0.42f:0.30f; break;
+    case 1: if(pt_rand()<0.25f) { p->kind=PT_SOFT; p->life=2.5f+pt_rand()*2.0f; p->size=10.0f+pt_rand()*10.0f; p->vx=26.0f+pt_rand()*14.0f; p->vy=9.0f+pt_rand()*5.0f;
+                                  p->r=0.86f; p->g=0.72f; p->b=0.50f; p->a=0.07f; }
+            else { p->kind=PT_SOFT; p->life=5.0f+pt_rand()*5.0f; p->size=(near?1.8f:1.2f)+pt_rand()*0.6f; p->vx=8.0f+pt_rand()*6.0f; p->vy=2.0f+pt_rand()*2.0f;
+                   p->r=0.92f; p->g=0.80f; p->b=0.60f; p->a=near?0.50f:0.38f; } break;
+    case 3: p->kind=PT_SOFT; p->life=7.0f+pt_rand()*5.0f; p->size=(near?2.0f:1.4f)+pt_rand()*0.6f; p->vx=3.0f+(pt_rand()-0.5f)*3.0f; p->vy=9.0f+pt_rand()*5.0f;
+            p->r=0.95f; p->g=0.97f; p->b=1.0f; p->a=near?0.55f:0.40f; break;
+    case 4: p->kind=PT_SOFT; p->life=8.0f+pt_rand()*6.0f; p->size=26.0f+pt_rand()*22.0f; p->vx=4.0f+pt_rand()*3.0f; p->vy=(pt_rand()-0.5f)*1.5f;
+            p->r=0.78f; p->g=0.90f; p->b=0.95f; p->a=0.05f; p->par=1.0f; break;
+    default: if(pt_rand()<0.2f) { p->kind=PT_GLOW; p->life=2.5f+pt_rand()*2.5f; p->size=1.4f+pt_rand()*0.8f; p->vx=(pt_rand()-0.5f)*5.0f; p->vy=-7.0f-pt_rand()*6.0f;
+                                  p->r=1.0f; p->g=0.55f; p->b=0.22f; p->a=0.45f; }
+             else { p->kind=PT_SOFT; p->life=6.0f+pt_rand()*5.0f; p->size=(near?1.9f:1.3f)+pt_rand()*0.6f; p->vx=2.0f+(pt_rand()-0.5f)*3.0f; p->vy=-2.0f+pt_rand()*5.0f;
+                    p->r=0.55f; p->g=0.52f; p->b=0.50f; p->a=near?0.45f:0.32f; } break;
+    }
+}
+/* events: sparks (glow, gravity) and dust (soft) at a source position, in world coordinates */
+static void pt_spark(double sx,double sy,float r,float g,float b,float speed,float up) {
+    gw_particle *p=pt_new(); if(!p) return;
+    const float an=pt_rand()*6.2831853f,sp=speed*(0.4f+pt_rand()*0.6f);
+    p->x=(float)(sx+g_pt_ax); p->y=(float)(sy+g_pt_ay); p->par=1.0f; p->flags=4;
+    p->vx=cosf(an)*sp; p->vy=sinf(an)*sp*0.6f-up; p->kind=PT_GLOW; p->life=0.4f+pt_rand()*0.4f; p->size=1.2f+pt_rand()*0.9f;
+    p->r=r; p->g=g; p->b=b; p->a=0.9f; p->seed=pt_rand()*6.2831853f;
+}
+static void pt_dust(double sx,double sy,float spread) {
+    gw_particle *p=pt_new(); if(!p) return;
+    const float an=pt_rand()*6.2831853f;
+    p->x=(float)(sx+cosf(an)*spread+g_pt_ax); p->y=(float)(sy+sinf(an)*spread*0.45f+g_pt_ay); p->par=1.0f; p->flags=8;
+    p->vx=cosf(an)*14.0f; p->vy=sinf(an)*6.0f-3.0f; p->kind=PT_SOFT; p->life=1.2f+pt_rand()*1.0f; p->size=7.0f+pt_rand()*7.0f;
+    p->r=0.80f; p->g=0.74f; p->b=0.62f; p->a=0.16f; p->seed=pt_rand()*6.2831853f;
+}
+/* once per presented frame, before the composite: anchor, biome, events, spawning and motion at the real dt */
+static void pt_update(const gw_interactive_visual_snapshot *v) {
+    const uint64_t t0=SDL_GetPerformanceCounter(),freq=SDL_GetPerformanceFrequency();
+    float dt=g_pt_t?(float)((double)(t0-g_pt_t)/(double)freq):0.0f; g_pt_t=t0;
+    if(dt>0.05f) dt=0.05f;
+    const uint8_t *src; int pitch,rows,sx0,sx1; pt_source(v,&src,&pitch,&rows,&sx0,&sx1);
+    const int mode=pitch*4+(v->canvas_valid?1:0);
+    if(mode!=g_pt_mode) { memset(g_pt,0,sizeof g_pt); g_pt_mode=mode; g_pt_have=0; g_pt_biome_t=0; }
+    fx_classify(v->palette);
+    if(v->generation!=g_pt_gen) {   /* anchor: unwrapped ring scroll, as the water */
+        const int rw=pitch-128;
+        if(g_pt_have) {
+            int d=v->ring_x-g_pt_lrx; d%=rw; if(d>rw/2) d-=rw; if(d<-rw/2) d+=rw;
+            int e=v->ring_y-g_pt_lry; e%=rows; if(e>rows/2) e-=rows; if(e<-rows/2) e+=rows;
+            g_pt_ax+=d; g_pt_ay+=e;
+        } else { g_pt_ax=v->ring_x; g_pt_ay=v->ring_y; g_pt_have=1; }
+        g_pt_lrx=v->ring_x; g_pt_lry=v->ring_y; g_pt_gen=v->generation;
+        if(!g_pt_biome_t || t0-g_pt_biome_t>2u*freq) { pt_biome(v); g_pt_biome_t=t0; }
+        /* events of this game frame (exact screen positions from the write observer) */
+        if(v->ev_ship_n>150) {
+            const double cx=v->ev_ship_x+v->ev_ship_w*0.5,cy=v->ev_ship_y+v->ev_ship_h*0.5;
+            const int n=(int)(3.0f*g_ini_particle_density+0.5f);
+            for(int i=0;i<n;i++) pt_spark(cx+(pt_rand()-0.5)*v->ev_ship_w*0.8,cy+(pt_rand()-0.5)*v->ev_ship_h*0.6,0.55f,0.95f,1.0f,38.0f,6.0f);
+            for(int i=0;i<n;i++) pt_dust(cx,cy,(float)v->ev_ship_w*0.5f);
+        }
+        if(v->ev_beam_n>40) {
+            const int n=(int)(4.0f*g_ini_particle_density+0.5f);
+            for(int i=0;i<n;i++) pt_spark(v->ev_beam_x+pt_rand()*v->ev_beam_w,v->ev_beam_y+pt_rand()*v->ev_beam_h,0.55f,1.0f,0.95f,22.0f,10.0f);
+        }
+    }
+    /* atmosphere: keep the biome's count in the visible map (per 100k map pixels at zoom 1) */
+    const double area=(double)(sx1-sx0)*rows;
+    int want=(int)(area/100000.0*(g_pt_biome==1?55.0:g_pt_biome==0?60.0:50.0)*g_ini_particle_density);
+    int mist_want=g_pt_biome==0?(int)(area/100000.0*6.0*g_ini_particle_density):0;
+    int atmo=0,mist=0;
+    for(int i=0;i<PT_MAX;i++) if(g_pt[i].live && (g_pt[i].flags&1)) { if(g_pt[i].flags&2) mist++; else atmo++; }
+    for(int k=0;k<8 && atmo<want;k++,atmo++) pt_spawn_atmo(sx0,sx1,0,rows,0);
+    for(int k=0;k<2 && mist<mist_want;k++) {   /* mist only starts over water */
+        const int sx=sx0+(int)(pt_rand()*(sx1-sx0)),sy=(int)(pt_rand()*rows);
+        const uint8_t c=src[(size_t)sy*pitch+sx];
+        if(g_fx_kind[c]==FX_WATER) { pt_spawn_atmo(sx,sx+1,sy,sy+1,1); mist++; }
+    }
+    for(int i=0;i<PT_MAX;i++) {
+        gw_particle *p=&g_pt[i]; if(!p->live) continue;
+        p->age+=dt; if(p->age>=p->life) { p->live=0; continue; }
+        const float wob=sinf(p->seed+p->age*(0.7f+0.25f*sinf(p->seed*3.0f)));
+        p->x+=(p->vx+(p->kind==PT_GLOW && (p->flags&1)?wob*3.0f:0.0f))*dt;
+        p->y+=(p->vy+((p->flags&1)?cosf(p->seed+p->age*0.6f)*1.5f:0.0f))*dt;
+        if(p->flags&4) { p->vy+=40.0f*dt; p->vx*=1.0f-1.5f*dt; }          /* sparks: light gravity, drag */
+        if(p->flags&8) { p->vx*=1.0f-1.2f*dt; p->vy-=4.0f*dt; p->size+=6.0f*dt; }
+        if(p->flags&1) {   /* atmosphere wraps around the visible map so the count stays even while the camera moves */
+            const double w=sx1-sx0,sx=p->x-g_pt_ax*p->par,sy=p->y-g_pt_ay*p->par;
+            if(sx<sx0-24) p->x+=(float)(w+48); else if(sx>sx1+24) p->x-=(float)(w+48);
+            if(sy<-24) p->y+=(float)(rows+48); else if(sy>rows+24) p->y-=(float)(rows+48);
+        }
+    }
+    g_pt_cpu_ms+=(double)(SDL_GetPerformanceCounter()-t0)*1000.0/(double)freq; g_pt_cpu_n++;
+}
+static int pt_init_gl(void) {
+    if(g_pt_prog) return 1;
+    if(g_pt_prog==0 && g_bloom.failed) return 0;
+    static const char *vs=
+        "#version 120\n"
+        "attribute vec2 a_pos;\n attribute vec2 a_uv;\n attribute vec2 a_suv;\n attribute vec4 a_col;\n"
+        "varying vec2 v_uv;\n varying vec2 v_suv;\n varying vec4 v_col;\n"
+        "void main(){ v_uv=a_uv; v_suv=a_suv; v_col=a_col; gl_Position=vec4(a_pos,0.0,1.0); }\n";
+    static const char *fs=
+        "#version 120\n"
+        "uniform sampler2D u_hud_mask;\n uniform float u_kind;\n"
+        "varying vec2 v_uv;\n varying vec2 v_suv;\n varying vec4 v_col;\n"
+        "void main(){\n"
+        "  if(texture2D(u_hud_mask,v_suv).r>0.5) discard;\n"
+        "  float d2=dot(v_uv,v_uv); if(d2>=1.0) discard;\n"
+        "  float a;\n"
+        "  if(u_kind>0.5){ a=exp(-d2*14.0)+0.35*exp(-d2*3.5); a*=1.0-smoothstep(0.7,1.0,d2); }\n"
+        "  else { float d=sqrt(d2); a=pow(1.0-d,1.6)*(0.85+0.15*sin(v_uv.x*5.0+v_uv.y*4.0+v_col.r*9.0)); }\n"
+        "  gl_FragColor=vec4(v_col.rgb,v_col.a*a);\n"
+        "}\n";
+    GLuint vsh=bloom_compile_shader(GL_VERTEX_SHADER,vs),fsh=bloom_compile_shader(GL_FRAGMENT_SHADER,fs);
+    if(!vsh || !fsh) { g_ini_hd2d_particles=0; return 0; }
+    GLuint p=g_bloom.CreateProgram(); g_bloom.AttachShader(p,vsh); g_bloom.AttachShader(p,fsh);
+    typedef void (APIENTRYP PFN_BAL)(GLuint,GLuint,const GLchar *);
+    PFN_BAL bal=(PFN_BAL)SDL_GL_GetProcAddress("glBindAttribLocation");
+    if(bal) { bal(p,0,"a_pos"); bal(p,1,"a_uv"); bal(p,2,"a_suv"); bal(p,3,"a_col"); }
+    g_bloom.LinkProgram(p); g_bloom.DeleteShader(vsh); g_bloom.DeleteShader(fsh);
+    GLint ok=0; g_bloom.GetProgramiv(p,GL_LINK_STATUS,&ok);
+    if(!ok) { g_bloom.DeleteProgram(p); g_ini_hd2d_particles=0; gw_flag_trace("TRACE hd2d_particles link failed%c",10); return 0; }
+    g_pt_prog=p; g_pt_u_hud=g_bloom.GetUniformLocation(p,"u_hud_mask"); g_pt_u_kind=g_bloom.GetUniformLocation(p,"u_kind");
+    g_bloom.GenBuffers(1,&g_pt_vbo);
+    g_pt_verts=(float *)malloc((size_t)PT_MAX*6u*10u*sizeof(float));
+    if(!g_pt_verts) { g_ini_hd2d_particles=0; return 0; }
+    gw_flag_trace("TRACE hd2d_particles on density=%.2f%c",(double)g_ini_particle_density,10);
+    return 1;
+}
+/* draws the particles into the bound framebuffer (FBO 0, viewport = the presented map frame), after the composite:
+   additive glow pass, then the soft (alpha) pass; the HUD mask texture is on unit 2 */
+static void pt_draw(const gw_interactive_visual_snapshot *v,double interp_a) {
+    if(!pt_init_gl()) return;
+    const uint8_t *src; int pitch,rows,sx0,sx1; pt_source(v,&src,&pitch,&rows,&sx0,&sx1);
+    const int vw=g_present_w; const double z=pt_zoom();
+    const float k=1.0f;   /* sizes are in logical pixels (scaled with the zoom); the window resolution makes them sharp */
+    int nv[2]={0,0}; float *out[2]; out[0]=g_pt_verts; out[1]=g_pt_verts+(size_t)PT_MAX*6u*10u/2u;
+    for(int i=0;i<PT_MAX;i++) {
+        const gw_particle *p=&g_pt[i]; if(!p->live) continue;
+        const int pass=p->kind==PT_GLOW?0:1; if(nv[pass]+6>PT_MAX*6/2) continue;
+        const double sx=p->x-g_pt_ax*p->par,sy=p->y-g_pt_ay*p->par;
+        if(sx<sx0-8 || sx>=sx1+8 || sy<-8 || sy>=rows+8) continue;
+        {   /* not over the black space around a planet (source pixel 0 under the particle centre) */
+            const int ix=(int)sx,iy=(int)sy;
+            if(ix>=128 && ix<pitch && iy>=0 && iy<rows && src[(size_t)iy*pitch+ix]==0) continue;
+            if((p->flags&2) && ix>=128 && ix<pitch && iy>=0 && iy<rows && g_fx_kind[src[(size_t)iy*pitch+ix]]!=FX_WATER) continue;
+        }
+        double lx,ly; pt_project(sx,sy,interp_a,&lx,&ly);
+        const float t=p->age/p->life,fade=t<0.15f?t/0.15f:(t>0.7f?(1.0f-t)/0.3f:1.0f);
+        const float a=p->a*fade,rs=(float)(p->size*k*z);
+        if(a<0.003f) continue;
+        const float cx=(float)lx,cy=(float)ly;
+        const float qx[4]={cx-rs,cx+rs,cx-rs,cx+rs},qy[4]={cy-rs,cy-rs,cy+rs,cy+rs},qu[4]={-1,1,-1,1},qv[4]={-1,-1,1,1};
+        static const int tri[6]={0,1,2,2,1,3};
+        float *o=out[pass]+(size_t)nv[pass]*10u;
+        for(int j=0;j<6;j++) { const int c=tri[j];
+            o[0]=qx[c]/(float)vw*2.0f-1.0f; o[1]=1.0f-qy[c]/480.0f*2.0f; o[2]=qu[c]; o[3]=qv[c];
+            o[4]=qx[c]/(float)vw; o[5]=qy[c]/480.0f; o[6]=p->r; o[7]=p->g; o[8]=p->b; o[9]=a; o+=10; }
+        nv[pass]+=6;
+    }
+    g_pt_drawn=(uint32_t)((nv[0]+nv[1])/6);
+    if(!nv[0] && !nv[1]) return;
+    g_bloom.UseProgram(g_pt_prog);
+    g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.hud_tex); g_bloom.Uniform1i(g_pt_u_hud,2);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
+    g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_pt_vbo);
+    g_bloom.EnableVertexAttribArray(3);
+    g_bloom.Enable(GL_BLEND);
+    for(int pass=0;pass<2;pass++) {
+        if(!nv[pass]) continue;
+        g_bloom.BufferData(GL_ARRAY_BUFFER,(GLsizeiptr)((size_t)nv[pass]*10u*sizeof(float)),out[pass],GL_STREAM_DRAW);
+        g_bloom.VertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,10*(GLsizei)sizeof(float),(const void *)0);
+        g_bloom.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,10*(GLsizei)sizeof(float),(const void *)(2*sizeof(float)));
+        g_bloom.VertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,10*(GLsizei)sizeof(float),(const void *)(4*sizeof(float)));
+        g_bloom.VertexAttribPointer(3,4,GL_FLOAT,GL_FALSE,10*(GLsizei)sizeof(float),(const void *)(6*sizeof(float)));
+        if(pass==0) g_bloom.BlendFuncSeparate(GL_SRC_ALPHA,GL_ONE,GL_ZERO,GL_ONE);
+        else g_bloom.BlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ZERO,GL_ONE);
+        g_bloom.Uniform1f(g_pt_u_kind,pass==0?1.0f:0.0f);
+        g_bloom.DrawArrays(GL_TRIANGLES,0,nv[pass]);
+    }
+    g_bloom.DisableVertexAttribArray(3);
+    g_bloom.Disable(GL_BLEND);
+    g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_bloom.vbo);
 }
 
 static void bloom_draw_quad(float x0,float y0,float x1,float y1,
@@ -10363,8 +10639,8 @@ static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
 
 static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SDL_Texture *scale_target,
                                       const gw_present_geo *geo,double interp_a) {
-    const int bloom_on=bloom_active(v),ao_on0=ao_gpu_active(v);
-    const int active=(bloom_on || ao_on0) && bloom_ensure_init(g_present_w) && g_bloom.view_tex[1];
+    const int bloom_on=bloom_active(v),ao_on0=ao_gpu_active(v),part_on=part_active(v);
+    const int active=(bloom_on || ao_on0 || part_on) && bloom_ensure_init(g_present_w) && g_bloom.view_tex[1];
     const int ao_on=active && ao_on0 && g_bloom.fbo_ao;
     {   static int last_ao=-1; if(ao_on!=last_ao) { last_ao=ao_on; gw_flag_trace("TRACE terrain_ao gpu=%d strength=%.2f%c",ao_on,(double)g_ini_terrain_ao_strength,10); } }
     if(active!=g_bloom.last_active) {
@@ -10516,6 +10792,8 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.BufferData(GL_ARRAY_BUFFER,sizeof verts,verts,GL_STREAM_DRAW);
     g_bloom.DrawArrays(GL_TRIANGLE_STRIP,0,4);
     (void)SDL_GL_UnbindTexture(scale_target);
+    /* hd2d_particles: native-resolution particles over the composed map, same viewport (logical view = this frame) */
+    if(part_on) { pt_update(v); pt_draw(v,interp_a); }
 
     /* Restore all GL state for SDL2 */
     g_bloom.DisableVertexAttribArray(2);
@@ -19151,6 +19429,12 @@ static uint32_t g_wp_va[4096],g_wp_n[2][4096],g_wp_used,g_wp_lo,g_wp_hi; static 
 static uint8_t g_spr_mask[1152u*640u];
 static uint32_t g_spr_lo,g_spr_hi,g_spr_writes;
 static int g_spr_on;
+static uint32_t g_spr_w=1;   /* frame width of the mask (pixels per row) */
+static struct { int n,x0,y0,x1,y1; } g_ev[2];   /* [0] ship shadow, [1] teleport beam */
+static void ev_add(int e,uint32_t off) { const int x=(int)(off%g_spr_w),y=(int)(off/g_spr_w);
+    if(!g_ev[e].n) { g_ev[e].x0=g_ev[e].x1=x; g_ev[e].y0=g_ev[e].y1=y; }
+    else { if(x<g_ev[e].x0) g_ev[e].x0=x; if(x>g_ev[e].x1) g_ev[e].x1=x; if(y<g_ev[e].y0) g_ev[e].y0=y; if(y>g_ev[e].y1) g_ev[e].y1=y; }
+    g_ev[e].n++; }
 /* the caller of the frame drawer 0x91C10 that is running (1..9, set by the lifted code before each of its 9 calls):
    only the callers that draw cast shadows count as shadow; the others (translucent sprites drawn through the same
    shade remap, e.g. a plant under the pointer) are sprites. g_shadow_callers: bit k = caller k is a shadow. */
@@ -19165,11 +19449,12 @@ static void write_probe_observer(uint32_t va,recomp_segment_id seg,uint16_t sel,
         uint8_t *m=g_spr_mask+(lin-g_spr_lo);
         if(va==0x0008E4A1u) {                                                     /* shade remap of the pixel below */
             const int k=g_shade_caller>=0 && g_shade_caller<=9?g_shade_caller:0; g_shade_caller_n[k]+=n;
+            if(k==1) ev_add(0,lin-g_spr_lo);
             const uint8_t mv=(uint8_t)(2+k);                                      /* 2 + caller: QA can tell them apart */
             if(g_shadow_callers>>k&1u) { for(uint32_t i=0;i<n;i++) if(m[i]!=1u) m[i]=mv; }
             else memset(m,1,n);                                                   /* translucent sprite: a sprite pixel */
         }
-        else memset(m,1,n);                                                       /* a sprite pixel, on top */
+        else { memset(m,1,n); if(va==0x0009941Eu || va==0x0009946Eu) ev_add(1,lin-g_spr_lo); }   /* a sprite pixel, on top */
         g_spr_writes++;
     }
     if(g_wp_phase<0 || lin<g_wp_lo || lin>=g_wp_hi) return;
@@ -19295,7 +19580,8 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         g_interactive_published_snapshot.in_mission=in_ifc_main;
         if(g_cli_play_mode) write_probe_frame(memory,in_ifc_main);
         g_interactive_published_snapshot.spr_valid=0;
-        if(g_cli_play_mode && g_ini_soft_shadows) {
+        g_interactive_published_snapshot.ev_ship_n=g_interactive_published_snapshot.ev_beam_n=0;
+        if(g_cli_play_mode && (g_ini_soft_shadows || g_ini_hd2d_particles)) {
             const uint32_t ws=*(const uint32_t *)(memory+0x00376A5Cu),sw=*(const uint32_t *)(memory+0x00376A78u),sh=*(const uint32_t *)(memory+0x00376A7Cu);
             if(g_spr_on && in_ifc_main && (size_t)sw*sh<=sizeof g_spr_mask && g_spr_lo==ws && g_spr_hi==ws+sw*sh) {
                 memcpy(g_interactive_published_snapshot.spr_mask,g_spr_mask,(size_t)sw*sh);
@@ -19303,6 +19589,12 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
                 memcpy(g_interactive_published_snapshot.shade_t,memory+0x00366A54u,256u);
             }
             if((size_t)sw*sh<=sizeof g_spr_mask) {
+                if(g_spr_on && in_ifc_main) {
+                    gw_interactive_visual_snapshot *ps=&g_interactive_published_snapshot;
+                    ps->ev_ship_n=g_ev[0].n; ps->ev_ship_x=g_ev[0].x0; ps->ev_ship_y=g_ev[0].y0; ps->ev_ship_w=g_ev[0].x1-g_ev[0].x0+1; ps->ev_ship_h=g_ev[0].y1-g_ev[0].y0+1;
+                    ps->ev_beam_n=g_ev[1].n; ps->ev_beam_x=g_ev[1].x0; ps->ev_beam_y=g_ev[1].y0; ps->ev_beam_w=g_ev[1].x1-g_ev[1].x0+1; ps->ev_beam_h=g_ev[1].y1-g_ev[1].y0+1;
+                }
+                memset(g_ev,0,sizeof g_ev); g_spr_w=sw?sw:1u;
                 memset(g_spr_mask,0,(size_t)sw*sh); g_spr_lo=ws; g_spr_hi=ws+sw*sh;
                 if(!g_spr_on) { g_spr_on=1; recomp_set_guest_write_observer(write_probe_observer,NULL);
                     {   const char *e=getenv("GW_SHADOW_CALLERS"); if(e && e[0]) g_shadow_callers=(unsigned)strtoul(e,NULL,0); }
@@ -20510,11 +20802,12 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
             const double hsecs=(double)(frame_end-g_hostprof_window_start)/(double)g_interactive_perf_frequency;
             if(hsecs>=10.0) {
                 const double n=g_hostprof_frames?(double)g_hostprof_frames:1.0,u=g_hostprof_uploads?(double)g_hostprof_uploads:1.0;
-                fprintf(g_tick_profile_file,"TRACE host_window seconds=%.1f render_fps=%.1f texture_uploads_per_s=%.1f mean_frame_ms=%.3f convert_upload_ms_per_upload=%.3f render_copy_ms=%.3f sdl_present_ms=%.3f input_ms=%.3f pacing_wait_ms=%.3f gpu_compose_scale_ms=%.3f epx_ms=%.3f fx_ms=%.3f bloom_ao_ms=%.3f bloom_upload_ms_per_upload=%.3f\n",
+                fprintf(g_tick_profile_file,"TRACE host_window seconds=%.1f render_fps=%.1f texture_uploads_per_s=%.1f mean_frame_ms=%.3f convert_upload_ms_per_upload=%.3f render_copy_ms=%.3f sdl_present_ms=%.3f input_ms=%.3f pacing_wait_ms=%.3f gpu_compose_scale_ms=%.3f epx_ms=%.3f fx_ms=%.3f bloom_ao_ms=%.3f bloom_upload_ms_per_upload=%.3f particles_cpu_ms=%.3f particles_drawn=%u\n",
                     hsecs,g_hostprof_frames/hsecs,g_hostprof_uploads/hsecs,g_hostprof_frame_ms/n,g_hostprof_convert_ms/u,
                     g_hostprof_copy_ms/n,g_hostprof_present_ms/n,input_ms,g_hostprof_wait_ms/n,
                     g_hostprof_gpu_frames?g_hostprof_gpu_ms/g_hostprof_gpu_frames:-1.0,
-                    g_hostprof_epx_n?g_hostprof_epx_ms/g_hostprof_epx_n:-1.0,g_hostprof_fx_ms/n,g_hostprof_bloom_ms/n,g_hostprof_bu_ms/u);
+                    g_hostprof_epx_n?g_hostprof_epx_ms/g_hostprof_epx_n:-1.0,g_hostprof_fx_ms/n,g_hostprof_bloom_ms/n,g_hostprof_bu_ms/u,g_pt_cpu_n?g_pt_cpu_ms/g_pt_cpu_n:0.0,g_pt_drawn);
+                g_pt_cpu_ms=0.0; g_pt_cpu_n=0u;
                 g_hostprof_fx_ms=g_hostprof_bloom_ms=g_hostprof_bu_ms=0.0;
                 g_hostprof_gpu_ms=0.0; g_hostprof_gpu_frames=0u; g_hostprof_epx_ms=0.0; g_hostprof_epx_n=0u;
                 fflush(g_tick_profile_file);
@@ -21165,46 +21458,49 @@ static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
 }
 static void gl_draw_display(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
-    /* rows every 29 units: 56, 85, 114, 143, 172, 201, 230, 259, 288, 317 (panel 52..352) */
+    /* rows every 27 units: 55, 82, ..., 325 (11 rows, panel 52..352) */
     const wchar_t *const modes[3]={GWT(L"CLÁSICO 4:3",L"CLASSIC 4:3"),GWT(L"PANORÁMICO 854×480",L"WIDESCREEN 854×480"),L"ZOOM OUT 1152×640"};
-    gl_row_label(56,GWT(L"MODO DE VISTA",L"VIEW MODE"),GWT(L"Zoom: rueda; Inicio = 1x",L"Zoom: wheel; Home = 1x"));
+    gl_row_label(55,GWT(L"MODO DE VISTA",L"VIEW MODE"),GWT(L"Zoom: rueda; Inicio = 1x",L"Zoom: wheel; Home = 1x"));
     int cur=g_ws_canvas?2:g_ws_requested?1:0;
-    int c=gl_choice(228,56,390,22,modes,3,cur,0u);
+    int c=gl_choice(228,55,390,22,modes,3,cur,0u);
     if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
     static const wchar_t *const res[5]={L"AUTO",L"900p",L"1080p",L"1440p",L"2160p"};
     unsigned dis=0u; for(int i=1;i<5;i++) if(GL.desk_w && (gl_res_w[i]>GL.desk_w || gl_res_h[i]>GL.desk_h)) dis|=1u<<i;
-    gl_row_label(85,GWT(L"RESOLUCIÓN",L"RESOLUTION"),GWT(L"Tamaño de la ventana",L"Window size"));
-    cur=gl_res_index(); c=gl_choice(228,85,390,22,res,5,cur,dis);
+    gl_row_label(82,GWT(L"RESOLUCIÓN",L"RESOLUTION"),GWT(L"Tamaño de la ventana",L"Window size"));
+    cur=gl_res_index(); c=gl_choice(228,82,390,22,res,5,cur,dis);
     if(c>=0 && c!=cur) { g_cli_res_w=gl_res_w[c]; g_cli_res_h=gl_res_h[c]; (void)gwrecomp_ini_set("resolution",gl_res_ini[c]); }
     const wchar_t *const fs[2]={GWT(L"VENTANA",L"WINDOW"),GWT(L"COMPLETA SIN BORDES",L"BORDERLESS FULLSCREEN")};
-    gl_row_label(114,GWT(L"PANTALLA",L"SCREEN"),GWT(L"Sin bordes = escritorio",L"Borderless = desktop size"));
-    c=gl_choice(228,114,390,22,fs,2,g_cli_fullscreen,0u);
+    gl_row_label(109,GWT(L"PANTALLA",L"SCREEN"),GWT(L"Sin bordes = escritorio",L"Borderless = desktop size"));
+    c=gl_choice(228,109,390,22,fs,2,g_cli_fullscreen,0u);
     if(c>=0 && c!=g_cli_fullscreen) { g_cli_fullscreen=c; gwrecomp_ini_set_int("fullscreen",c); }
     const wchar_t *const fps[2]={GWT(L"60 FPS CLÁSICO",L"60 FPS CLASSIC"),GWT(L"120 FPS INTERPOLADO",L"120 FPS INTERPOLATED")};
-    gl_row_label(143,GWT(L"FOTOGRAMAS",L"FRAME RATE"),GWT(L"El ritmo del juego no cambia",L"The game speed stays the same"));
-    cur=g_ini_fps==60u?0:1; c=gl_choice(228,143,390,22,fps,2,cur,0u);
+    gl_row_label(136,GWT(L"FOTOGRAMAS",L"FRAME RATE"),GWT(L"El ritmo del juego no cambia",L"The game speed stays the same"));
+    cur=g_ini_fps==60u?0:1; c=gl_choice(228,136,390,22,fps,2,cur,0u);
     if(c>=0 && c!=cur) { g_ini_fps=c?120u:60u; gwrecomp_ini_set_int("fps",(int)g_ini_fps); }
     const wchar_t *const flt[3]={GWT(L"NÍTIDO",L"SHARP"),GWT(L"EPX SUAVE",L"EPX SMOOTH"),L"CRT"};
-    gl_row_label(172,GWT(L"FILTRO (F7)",L"FILTER (F7)"),GWT(L"También con F7 al jugar",L"Also with F7 while playing"));
-    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,172,390,22,flt,3,cur,0u);
+    gl_row_label(163,GWT(L"FILTRO (F7)",L"FILTER (F7)"),GWT(L"También con F7 al jugar",L"Also with F7 while playing"));
+    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,163,390,22,flt,3,cur,0u);
     if(c>=0 && c!=cur) { g_filter_mode=c; (void)gwrecomp_ini_set("filter",g_filter_names[c]); }
     const wchar_t *const hz[2]={L"ORIGINAL",GWT(L"LIMPIO",L"CLEAN")};
-    gl_row_label(201,GWT(L"HORIZONTE",L"HORIZON"),GWT(L"Quita píxeles sueltos",L"Removes stray pixels"));
-    c=gl_choice(228,201,390,22,hz,2,g_ini_clean_horizon,0u);
+    gl_row_label(190,GWT(L"HORIZONTE",L"HORIZON"),GWT(L"Quita píxeles sueltos",L"Removes stray pixels"));
+    c=gl_choice(228,190,390,22,hz,2,g_ini_clean_horizon,0u);
     if(c>=0 && c!=g_ini_clean_horizon) { g_ini_clean_horizon=c; gwrecomp_ini_set_int("clean_horizon",c); }
     const wchar_t *const fx[2]={L"NO",GWT(L"SÍ",L"YES")};
-    gl_row_label(230,GWT(L"EFECTOS AGUA / GOOP",L"WATER / GOOP EFFECTS"),GWT(L"Olas y brillos animados",L"Animated waves and glints"));
-    c=gl_choice(228,230,390,22,fx,2,g_ini_water_effects,0u);
+    gl_row_label(217,GWT(L"EFECTOS AGUA / GOOP",L"WATER / GOOP EFFECTS"),GWT(L"Olas y brillos animados",L"Animated waves and glints"));
+    c=gl_choice(228,217,390,22,fx,2,g_ini_water_effects,0u);
     if(c>=0 && c!=g_ini_water_effects) { g_ini_water_effects=c; gwrecomp_ini_set_int("water_effects",c); }
-    gl_row_label(259,GWT(L"BLOOM EMISIVO",L"EMISSIVE BLOOM"),GWT(L"Halo en energía, explosiones y GOOP",L"Soft glow on energy, blasts and GOOP"));
-    c=gl_choice(228,259,390,22,fx,2,g_ini_emissive_bloom,0u);
+    gl_row_label(244,GWT(L"BLOOM EMISIVO",L"EMISSIVE BLOOM"),GWT(L"Halo en energía, explosiones y GOOP",L"Soft glow on energy, blasts and GOOP"));
+    c=gl_choice(228,244,390,22,fx,2,g_ini_emissive_bloom,0u);
     if(c>=0 && c!=g_ini_emissive_bloom) { g_ini_emissive_bloom=c; gwrecomp_ini_set_int("emissive_bloom",c); }
-    gl_row_label(288,GWT(L"OCLUSIÓN TERRENO",L"TERRAIN AO"),GWT(L"Sombra en cráteres, valles y pie de colinas",L"Shade in craters, valleys, hill bases"));
-    c=gl_choice(228,288,390,22,fx,2,g_ini_terrain_ao,0u);
+    gl_row_label(271,GWT(L"OCLUSIÓN TERRENO",L"TERRAIN AO"),GWT(L"Sombra en cráteres, valles y pie de colinas",L"Shade in craters, valleys, hill bases"));
+    c=gl_choice(228,271,390,22,fx,2,g_ini_terrain_ao,0u);
     if(c>=0 && c!=g_ini_terrain_ao) { g_ini_terrain_ao=c; gwrecomp_ini_set_int("terrain_ao",c); }
-    gl_row_label(317,GWT(L"SOMBRAS SUAVES",L"SOFT SHADOWS"),GWT(L"Bordes suaves en las sombras",L"Soft edges on shadows"));
-    c=gl_choice(228,317,390,22,fx,2,g_ini_soft_shadows,0u);
+    gl_row_label(298,GWT(L"SOMBRAS SUAVES",L"SOFT SHADOWS"),GWT(L"Bordes suaves en las sombras",L"Soft edges on shadows"));
+    c=gl_choice(228,298,390,22,fx,2,g_ini_soft_shadows,0u);
     if(c>=0 && c!=g_ini_soft_shadows) { g_ini_soft_shadows=c; gwrecomp_ini_set_int("soft_shadows",c); }
+    gl_row_label(325,GWT(L"PARTÍCULAS 4K",L"4K PARTICLES"),GWT(L"Esporas, polvo y chispas en el mapa",L"Spores, dust and sparks on the map"));
+    c=gl_choice(228,325,390,22,fx,2,g_ini_hd2d_particles,0u);
+    if(c>=0 && c!=g_ini_hd2d_particles) { g_ini_hd2d_particles=c; gwrecomp_ini_set_int("hd2d_particles",c); }
 }
 static void gl_draw_controls(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
