@@ -8245,6 +8245,7 @@ static int g_present_w=640,g_present_pitch=640;
 /* Host presentation breakdown (main thread, GW_TICK_PROFILE), reported every 10 s: palette conversion + texture
    upload, render copies (frame + pointer), SDL_RenderPresent, pacing wait. */
 static double g_hostprof_fx_ms,g_hostprof_bloom_ms,g_hostprof_bu_ms;
+static double g_ph[5];   /* this frame: convert (incl. bloom upload), bloom upload, fx, bloom/AO pass, SDL present (ms) */
 static double g_hostprof_convert_ms,g_hostprof_copy_ms,g_hostprof_present_ms,g_hostprof_wait_ms,g_hostprof_frame_ms;
 /* GW_GPU_TIMING=1 (diagnostics): GPU-synchronised time of composition + scaled copy (1-pixel readbacks bracket it,
    so it is an upper bound that includes one readback); reported per frame in the host_window line */
@@ -9649,7 +9650,9 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
        pixels are built once; on the presented frames in between only those pixels are recomputed, only when the
        64 Hz wave phase moves, and only the band of rows holding them is uploaded. The loops run on the presentation
        pool (hp_par). */
-    const int use_view=view_tex && view_w>176,use_canvas=canvas_tex && canvas_ready && v->canvas_valid;
+    const int use_canvas=canvas_tex && canvas_ready && v->canvas_valid;
+    /* the 640/854 view's map area is hidden under the canvas while zoomed out: not rebuilt nor uploaded then */
+    const int use_view=view_tex && view_w>176 && !(use_canvas && g_zoom<0.9999);
     const int key=dp|(water<<1)|(use_view<<2)|(use_canvas<<3)|(view_w<<4);
     const int rebuild=v->generation!=g_fxc_gen || key!=g_fxc_key || memcmp(g_fxc_pal,v->palette,768)!=0 ||
                       (use_view && g_fxc_tex[0]!=view_tex) || (use_canvas && g_fxc_tex[1]!=canvas_tex);
@@ -10182,7 +10185,7 @@ static void bloom_alloc_rg_tex(GLuint *tex,int w,int h) {
 /* bloom/AO texture packing, by rows (run on the presentation pool): R = index, G = flags + low height bits,
    B = high height bits, A = AO mask; the ring column steps by one per pixel instead of a modulo per pixel */
 typedef struct { const gw_interactive_visual_snapshot *v; const gw_video_surface *source;
-                 int view_w,panel_split,th,ring_on_view,ring_w_view,cv_ring_ok,cv_rw; } bu_ctx;
+                 int view_w,panel_split,th,ring_on_view,ring_w_view,cv_ring_ok,cv_rw,hud_only; } bu_ctx;
 static void bu_view_rows(void *cp,int y0,int y1) {
     const bu_ctx *c=(const bu_ctx *)cp; const gw_interactive_visual_snapshot *v=c->v; const int view_w=c->view_w,th=c->th;
     for(int y=y0;y<y1;y++) {
@@ -10199,6 +10202,12 @@ static void bu_view_rows(void *cp,int y0,int y1) {
         int rv=0,rc=0;   /* ring columns at x=128 (view ring) and x=176 (canvas ring) */
         if(c->ring_on_view) { rv=(v->ring_x-128)%c->ring_w_view; if(rv<0) rv+=c->ring_w_view; }
         if(c->cv_ring_ok) { rc=(176+(GW_CANVAS_VX0-128)-128)+(v->ring_x-128); rc%=c->cv_rw; if(rc<0) rc+=c->cv_rw; }
+        if(c->hud_only) {   /* zoomed out: the view texture is not drawn, only the HUD mask is needed */
+            for(int x=0;x<view_w;x++) { int is_panel=x<128;
+                if(!is_panel && x<176 && c->panel_split) is_panel=(g_interp_panel_rgba[y*48+(x-128)]>>24)!=0u;
+                hd[x]=(uint8_t)(is_panel?255:0); }
+            continue;
+        }
         for(int x=0;x<view_w;x++) {
             uint8_t k=row[x];
             int is_panel=x<128;
@@ -10286,10 +10295,13 @@ static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_
     const int ring_w_view=(int)v->wscreen_pitch-128;
     const int cv_ring_ok=v->canvas_valid && (int)v->fx_ring_w==(int)GW_CANVAS_W && v->fx_ring_h==GW_CANVAS_H;
     const int cv_rw=(int)GW_CANVAS_W-128;
-    bu_ctx buc={v,source,view_w,panel_split,th,ring_on_view,ring_w_view,cv_ring_ok,cv_rw};
+    const int hud_only=cv_ring_ok && g_canvas_live && g_zoom<0.9999 && g_bloom.canvas_ready>=1;
+    bu_ctx buc={v,source,view_w,panel_split,th,ring_on_view,ring_w_view,cv_ring_ok,cv_rw,hud_only};
     hp_par(480,bu_view_rows,&buc);
-    g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.view_tex[1]);
-    g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,view_w,480,GL_RGBA,GL_UNSIGNED_BYTE,g_bloom.up_buf);
+    if(!hud_only) {
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.view_tex[1]);
+        g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,view_w,480,GL_RGBA,GL_UNSIGNED_BYTE,g_bloom.up_buf);
+    }
     g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.hud_tex);
     g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,view_w,480,GL_RED,GL_UNSIGNED_BYTE,g_bloom.hud_buf);
 
@@ -11156,6 +11168,12 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                        window copy filters (sharp bilinear). A linear canvas texture blurred the whole zoomed-out frame. */
                     if(g_canvas_tex[i]) SDL_SetTextureScaleMode(g_canvas_tex[i],SDL_ScaleModeNearest);
                 }
+                /* when fx_refresh rewrites the canvas map area in this same frame (water or soft shadows active, canvas
+                   texture already in use), only the panel strip (texture x < 48) is converted here */
+                int cv_conv_w=GW_CANVAS_TEX_W;
+                {   const uint8_t *fs; int fp,fr;
+                    if(visual && !g_terrain_modern_backend && (fx_active(visual) || depth_active(visual)) && g_canvas_tex_ready>=1 &&
+                       fx_source(visual,&fs,&fp,&fr)) cv_conv_w=48; }
                 if(g_canvas_tex[0] && g_canvas_tex[1]) {
                     SDL_Texture *t=g_canvas_tex[0]; g_canvas_tex[0]=g_canvas_tex[1]; g_canvas_tex[1]=t;   /* [0] previous, [1] current */
                     void *tp=NULL; int tpitch=0;
@@ -11163,7 +11181,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                         for(int y=0;y<(int)GW_CANVAS_H;y++) {
                             const uint8_t *row=visual->canvas+(size_t)y*GW_CANVAS_W+128u;
                             uint32_t *o=(uint32_t *)((uint8_t *)tp+(size_t)y*(size_t)tpitch);
-                            for(int x=0;x<GW_CANVAS_TEX_W;x++) o[x]=lut[row[x]];
+                            for(int x=0;x<cv_conv_w;x++) o[x]=lut[row[x]];
                             /* panel art on x=128..175: the map under it (ring terrain) in the zoomed-out window */
                             if(y<480 && visual->panel_bg_valid)
                                 for(int x=0;x<48;x++) if(visual->canvas_panel[y*48+x]) o[x]=lut[visual->panel_bg[y*48+x]];
@@ -11174,9 +11192,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 }
             } else g_canvas_tex_ready=0;
             if(visual) { const uint64_t hp_bu0=SDL_GetPerformanceCounter(); bloom_upload_frame(visual,source,texture_w,panel_split);
-                if(g_interactive_perf_frequency) g_hostprof_bu_ms+=(double)(SDL_GetPerformanceCounter()-hp_bu0)*1000.0/(double)g_interactive_perf_frequency; }
+                if(g_interactive_perf_frequency) { const double _phm=(double)(SDL_GetPerformanceCounter()-hp_bu0)*1000.0/(double)g_interactive_perf_frequency; g_hostprof_bu_ms+=_phm; g_ph[1]+=_phm; } }
             if(g_interactive_perf_frequency) {
-                g_hostprof_convert_ms+=(double)(SDL_GetPerformanceCounter()-hp_convert0)*1000.0/(double)g_interactive_perf_frequency;
+                { const double _phm=(double)(SDL_GetPerformanceCounter()-hp_convert0)*1000.0/(double)g_interactive_perf_frequency; g_hostprof_convert_ms+=_phm; g_ph[0]+=_phm; }
                 g_hostprof_uploads++;
             }
         }
@@ -11185,7 +11203,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
     if(visual && !g_terrain_modern_backend) {
         const uint64_t hp_fx0=SDL_GetPerformanceCounter();
         fx_refresh(visual,g_ifclevel_demo_texture,g_present_w,g_canvas_tex[1],g_canvas_live && g_canvas_tex_ready);
-        if(g_interactive_perf_frequency) g_hostprof_fx_ms+=(double)(SDL_GetPerformanceCounter()-hp_fx0)*1000.0/(double)g_interactive_perf_frequency;
+        if(g_interactive_perf_frequency) { const double _phm=(double)(SDL_GetPerformanceCounter()-hp_fx0)*1000.0/(double)g_interactive_perf_frequency; g_hostprof_fx_ms+=_phm; g_ph[2]+=_phm; }
     }
     {   /* QA aid (opt-in, read-only): GW_ORDER_TRACE=<file>. Once per presented frame, samples a few guest fields that decide
            whether a map click becomes an order (selected specialist, MapDisplay candidate/flags, the 11-byte action packet) and
@@ -11472,7 +11490,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         SDL_RenderFlush(g_ifclevel_demo_renderer);
         const uint64_t hp_bl0=SDL_GetPerformanceCounter();
         const int bloom_done=bloom_render_and_composite(visual,scale_target,&geo,bloom_a);
-        if(g_interactive_perf_frequency) g_hostprof_bloom_ms+=(double)(SDL_GetPerformanceCounter()-hp_bl0)*1000.0/(double)g_interactive_perf_frequency;
+        if(g_interactive_perf_frequency) { const double _phm=(double)(SDL_GetPerformanceCounter()-hp_bl0)*1000.0/(double)g_interactive_perf_frequency; g_hostprof_bloom_ms+=_phm; g_ph[3]+=_phm; }
         if(!bloom_done) {
             if(SDL_SetTextureScaleMode(scale_target,geo.nearest?SDL_ScaleModeNearest:SDL_ScaleModeLinear)!=0 ||
                SDL_RenderCopy(g_ifclevel_demo_renderer,scale_target,&geo.src,&geo.dst)!=0) {
@@ -11641,7 +11659,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
     if(g_interactive_demo_mode) { enhanced_audio_tick(); gw_cdda_pump(); }
     if(g_interactive_demo_mode) {
         const uint64_t render_present_end=SDL_GetPerformanceCounter();
-        g_hostprof_present_ms+=(double)(render_present_end-render_present_start)*1000.0/(double)(g_interactive_perf_frequency?g_interactive_perf_frequency:1u);
+        { const double _phm=(double)(render_present_end-render_present_start)*1000.0/(double)(g_interactive_perf_frequency?g_interactive_perf_frequency:1u); g_hostprof_present_ms+=_phm; g_ph[4]+=_phm; }
         g_interactive_sdl_render_present_ms+=(double)(render_present_end-render_present_start)*
             1000.0/(double)(g_interactive_perf_frequency?g_interactive_perf_frequency:1u);
     }
@@ -11858,6 +11876,7 @@ static void host_eip_dump(void) {
 enum { PACE_N=8192 };
 static float g_pace_iv[PACE_N],g_pace_wk[PACE_N]; static uint8_t g_pace_tk[PACE_N]; static unsigned g_pace_n; static int g_pace_on=-1;
 static uint64_t g_pace_last,g_pace_t0;
+static float g_pace_ph[5][PACE_N];
 static double g_pace_snap_sum,g_pace_snap_max; static unsigned g_pace_snap_n;   /* snapshot lock + copy in the present loop */
 static int pace_cmp(const void *a,const void *b) { const float x=*(const float *)a,y=*(const float *)b; return x<y?-1:x>y; }
 static void pace_pct(const char *name,float *v,unsigned n,double budget) {
@@ -11875,9 +11894,10 @@ static void pace_stats_frame(uint64_t present_end,uint64_t work,int tick) {
     const double f=(double)g_interactive_perf_frequency;
     if(g_pace_last && g_pace_n<PACE_N) {
         g_pace_iv[g_pace_n]=(float)((double)(present_end-g_pace_last)*1000.0/f);
+        for(int k=0;k<5;k++) g_pace_ph[k][g_pace_n]=(float)g_ph[k];
         g_pace_wk[g_pace_n]=(float)((double)work*1000.0/f); g_pace_tk[g_pace_n]=(uint8_t)tick; g_pace_n++;
     }
-    g_pace_last=present_end;
+    g_pace_last=present_end; memset(g_ph,0,sizeof g_ph);
     if(!g_pace_t0) g_pace_t0=present_end;
     if((double)(present_end-g_pace_t0)/f>=30.0 || g_pace_n==PACE_N) {
         static float a[PACE_N],b[PACE_N];
@@ -11892,6 +11912,9 @@ static void pace_stats_frame(uint64_t present_end,uint64_t work,int tick) {
         na=nb=0;
         for(unsigned i=0;i<g_pace_n;i++) { if(g_pace_tk[i]) a[na++]=g_pace_iv[i]; else b[nb++]=g_pace_iv[i]; }
         pace_pct("interval_tick",a,na,8.334); pace_pct("interval_sub",b,nb,8.334);
+        {   static const char *const nm[5]={"tick_convert","tick_bloom_upload","tick_fx","tick_bloom_ao","tick_present"};
+            for(int k=0;k<5;k++) { na=0; for(unsigned i=0;i<g_pace_n;i++) if(g_pace_tk[i]) a[na++]=g_pace_ph[k][i]; pace_pct(nm[k],a,na,8.334); }
+            for(int k=2;k<5;k++) { nb=0; for(unsigned i=0;i<g_pace_n;i++) if(!g_pace_tk[i]) b[nb++]=g_pace_ph[k][i]; pace_pct(k==2?"sub_fx":k==3?"sub_bloom_ao":"sub_present",b,nb,8.334); } }
         g_pace_n=0; g_pace_t0=present_end;
     }
 }
