@@ -11120,6 +11120,8 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.VertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,6*(GLsizei)sizeof(float),(const void *)(4*sizeof(float)));
     g_bloom.Disable(GL_BLEND);
     g_bloom.Disable(GL_SCISSOR_TEST);
+    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,1);
+    g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
     gm_passes(v && v->valid && v->in_mission && v->canvas_valid);   /* GPU map composition: packing and soft shadows of a new game frame */
 
     if(bloom_on) {
