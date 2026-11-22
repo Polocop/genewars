@@ -19568,8 +19568,8 @@ static uint32_t g_spr_lo,g_spr_hi,g_spr_writes;
 static int g_spr_on;
 static uint32_t g_spr_w=1;   /* frame width of the mask (pixels per row) */
 static struct { int n,x0,y0,x1,y1; } g_ev[2];   /* [0] ship shadow, [1] teleport beam */
-/* hd2d_particles: the frame drawers 0x919C0 / 0x91AE0 (eax = x, edx = y, ebx = frame: element list at [frame],
-   count at [frame+0xB]) are called by 17 sites; the lifted code marks the site and reports each call here. Host
+/* hd2d_particles: the frame drawers 0x919C0 / 0x91AE0 / 0x965F0 (eax = x, edx = y, ebx = frame: element list at
+   [frame], count at [frame+0xB]) are called by 42 sites; the lifted code marks the site and reports each call here. Host
    memory only. Position = the drawer's x, y plus the clip window origin (lbDisplay 0x376A80/84) at that moment. */
 static volatile int g_draw_caller;
 static struct { uint32_t frame; int16_t x,y,wx,wy; uint8_t caller,fn,pad[2]; } g_fr[768];
@@ -19579,7 +19579,7 @@ void gw_frame_drawn(unsigned int fn,unsigned int x,unsigned int y,unsigned int f
     if(!g_fr_on || !guest_memory || g_fr_n>=768u) return;
     g_fr[g_fr_n].frame=frame; g_fr[g_fr_n].x=(int16_t)(int32_t)x; g_fr[g_fr_n].y=(int16_t)(int32_t)y;
     g_fr[g_fr_n].wx=(int16_t)*(const int32_t *)(guest_memory+0x00376A80u); g_fr[g_fr_n].wy=(int16_t)*(const int32_t *)(guest_memory+0x00376A84u);
-    g_fr[g_fr_n].caller=(uint8_t)g_draw_caller; g_fr[g_fr_n].fn=(uint8_t)(fn==0x919C0u?0:1); g_fr_n++;
+    g_fr[g_fr_n].caller=(uint8_t)g_draw_caller; g_fr[g_fr_n].fn=(uint8_t)(fn==0x919C0u?0:fn==0x91AE0u?1:2); g_fr_n++;
 }
 static void ev_add(int e,uint32_t off) { const int x=(int)(off%g_spr_w),y=(int)(off/g_spr_w);
     if(!g_ev[e].n) { g_ev[e].x0=g_ev[e].x1=x; g_ev[e].y0=g_ev[e].y1=y; }

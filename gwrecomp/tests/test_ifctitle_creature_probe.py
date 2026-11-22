@@ -4702,7 +4702,10 @@ def main()->None:
         lifted_text=before_call_line(lifted_text,f"/* 0x{site:08X}: call 0x919c0 */",f"gw_draw_caller({k+1});")
     for k,site in enumerate((0x1F489,0x38B91,0x38C2D,0x43D58,0x43E06,0x67B39,0x85347,0x85E65)):
         lifted_text=before_call_line(lifted_text,f"/* 0x{site:08X}: call 0x91ae0 */",f"gw_draw_caller({k+11});")
-    for fn in (0x919C0,0x91AE0):
+    for k,site in enumerate((0x10F8B,0x11250,0x15FB6,0x1F28F,0x206D3,0x20701,0x38DBE,0x467E1,0x46890,0x569D5,0x56AD7,0x56B44,
+                             0x7BFA4,0x7BFD6,0x7C1C0,0x7C1FB,0x854AA,0x855B8,0x85612,0x86049,0x86090,0x95AE4,0x95B30,0x95BE5,0x95C31)):
+        lifted_text=before_call_line(lifted_text,f"/* 0x{site:08X}: call 0x965f0 */",f"gw_draw_caller({k+21});")
+    for fn in (0x919C0,0x91AE0,0x965F0):
         mk=f"RECOMP_ENTER(0x{fn:08X}u);"
         if lifted_text.count(mk)!=1: raise SystemExit(f"frame drawer entry {mk} missing or ambiguous")
         lifted_text=lifted_text.replace(mk,mk+f"\n    gw_frame_drawn(0x{fn:08X}u,eax,edx,ebx);",1)
