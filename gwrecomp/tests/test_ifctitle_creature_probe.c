@@ -10335,6 +10335,8 @@ static GLuint gm_tex(int w,int h,GLenum ifmt,GLenum fmt) {
 static int gm_init(void) {
     if(g_gm.ready) return 1;
     if(g_gm.failed || g_bloom.failed) return 0;
+    {   const char *e=getenv("GW_GPU_MAP");   /* QA: GW_GPU_MAP=0 keeps the CPU map path (A/B timing) */
+        if(e && e[0]=='0') { g_gm.failed=1; gw_flag_trace("TRACE gpu_map off (GW_GPU_MAP=0)%c",10); return 0; } }
     static const char *vs=
         "#version 120\n attribute vec2 a_pos;\n attribute vec2 a_uv;\n attribute vec2 a_suv;\n varying vec2 v_uv;\n"
         "void main(){ v_uv=a_uv; gl_Position=vec4(a_pos,0.0,1.0); }\n";
