@@ -9747,7 +9747,7 @@ static struct {
     GLuint fbo_ao,tex_ao,prog_ao;
     GLint u_ao_idx,u_ao_texel,u_ao_strength,u_comp_ao,u_comp_ao_on;
     GLuint fbo_wt,tex_wt,prog_wt,kind_tex; int wt_w,wt_h,wt_failed; uint8_t kind_pal[768]; int kind_ok;
-    GLint u_wt_idx,u_wt_lut,u_wt_kind,u_wt_texel,u_wt_off,u_wt_tq,u_comp_wt,u_comp_wt_on,u_comp_map,u_comp_map_on;
+    GLint u_wt_idx,u_wt_lut,u_wt_kind,u_wt_texel,u_wt_off,u_wt_tq,u_comp_wt,u_comp_wt_on,u_comp_map,u_comp_map_on,u_comp_hud_x;
     uint8_t *up_buf;
     uint8_t *hud_buf;
     /* GL entry points resolved via SDL_GL_GetProcAddress (no -lopengl32 link needed) */
@@ -9991,11 +9991,12 @@ static int bloom_ensure_init(int logical_w) {
             "uniform float u_wt_on;\n"
             "uniform sampler2D u_map;\n"
             "uniform float u_map_on;\n"
+            "uniform float u_hud_x;\n"
             "varying vec2 v_uv;\n"
             "varying vec2 v_suv;\n"
             "void main(){\n"
             "  vec3 base=texture2D(u_base,v_uv).rgb;\n"
-            "  if(texture2D(u_hud_mask,v_suv).r>0.5){ gl_FragColor=vec4(base,1.0); return; }\n"
+            "  if(texture2D(u_hud_mask,v_suv).r>0.5){ if(u_map_on>0.5 && v_suv.x<u_hud_x) base=texture2D(u_map,v_suv).rgb; gl_FragColor=vec4(base,1.0); return; }\n"
             "  if(u_map_on>0.5) base=texture2D(u_map,v_suv).rgb;\n"
             "  if(u_wt_on>0.5){ vec4 w=texture2D(u_wt,v_suv); base=mix(base,w.rgb,w.a); }\n"
             "  if(u_ao_on>0.5) base*=texture2D(u_ao,v_suv).r;\n"
@@ -10061,6 +10062,7 @@ static int bloom_ensure_init(int logical_w) {
         g_bloom.u_comp_wt_on=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_wt_on");
         g_bloom.u_comp_map=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_map");
         g_bloom.u_comp_map_on=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_map_on");
+        g_bloom.u_comp_hud_x=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_hud_x");
         g_bloom.u_ao_idx=g_bloom.GetUniformLocation(g_bloom.prog_ao,"u_idx_tex");
         g_bloom.u_ao_texel=g_bloom.GetUniformLocation(g_bloom.prog_ao,"u_texel");
         g_bloom.u_ao_strength=g_bloom.GetUniformLocation(g_bloom.prog_ao,"u_strength");
@@ -10303,7 +10305,8 @@ static struct {
     GLuint t_idx,t_ring,t_hgt,t_msk,t_shade,t_kind,tmp1,tmp2,fbo,map_fbo,map_tex;
     GLuint aux[3];
     int map_w,map_h,ring_x,ring_y,kind_ok;
-    GLuint p_pack,p_cand,p_blurh,p_blurv,p_map;
+    GLuint p_pack,p_cand,p_blurh,p_blurv,p_map,p_hud;
+    GLint hu_idx,hu_lut;
     GLint pk_idx,pk_ring,pk_hgt,pk_kind,pk_off,pk_th;
     GLint cd_idx,cd_ring,cd_msk,cd_shade,cd_lut,cd_kind,cd_off;
     GLint bh_src,bv_src,bv_cand,bv_ring,bv_off,bv_on;
@@ -10395,9 +10398,15 @@ static int gm_init(void) {
         "  if(m>0.0 && (a.b>0.5 || gnd>0.5)) col=lut(g)*(1.0-m*0.68);\n"
         "  gl_FragColor=vec4(col,1.0);\n"
         "}\n";
+    /* HUD (canvas x < 128, rows < 480) from the same raw canvas: palette only */
+    static const char *fs_hud=
+        "#version 120\n uniform sampler2D u_idx; uniform sampler2D u_lut;\n varying vec2 v_uv;\n"
+        "void main(){ float c=floor(texture2D(u_idx,v_uv).r*255.0+0.5);\n"
+        "  gl_FragColor=vec4(texture2D(u_lut,vec2((c+0.5)/256.0,0.25)).rgb,1.0); }\n";
+    g_gm.p_hud=bloom_link_program(vs,fs_hud);
     g_gm.p_pack=bloom_link_program(vs,fs_pack); g_gm.p_cand=bloom_link_program(vs,fs_cand);
     g_gm.p_blurh=bloom_link_program(vs,fs_blurh); g_gm.p_blurv=bloom_link_program(vs,fs_blurv); g_gm.p_map=bloom_link_program(vs,fs_map);
-    if(!g_gm.p_pack || !g_gm.p_cand || !g_gm.p_blurh || !g_gm.p_blurv || !g_gm.p_map) {
+    if(!g_gm.p_pack || !g_gm.p_cand || !g_gm.p_blurh || !g_gm.p_blurv || !g_gm.p_map || !g_gm.p_hud) {
         g_gm.failed=1; gw_flag_trace("TRACE gpu_map unavailable (CPU map kept)%c",10); return 0; }
     #define GMU(prog,name) g_bloom.GetUniformLocation(g_gm.prog,name)
     g_gm.pk_idx=GMU(p_pack,"u_idx"); g_gm.pk_ring=GMU(p_pack,"u_ring"); g_gm.pk_hgt=GMU(p_pack,"u_hgt"); g_gm.pk_kind=GMU(p_pack,"u_kind");
@@ -10407,6 +10416,7 @@ static int gm_init(void) {
     g_gm.bh_src=GMU(p_blurh,"u_src");
     g_gm.bv_src=GMU(p_blurv,"u_src"); g_gm.bv_cand=GMU(p_blurv,"u_cand"); g_gm.bv_ring=GMU(p_blurv,"u_ring"); g_gm.bv_off=GMU(p_blurv,"u_off"); g_gm.bv_on=GMU(p_blurv,"u_on");
     g_gm.mp_pk=GMU(p_map,"u_pk"); g_gm.mp_aux=GMU(p_map,"u_aux"); g_gm.mp_lut=GMU(p_map,"u_lut");
+    g_gm.hu_idx=GMU(p_hud,"u_idx"); g_gm.hu_lut=GMU(p_hud,"u_lut");
     #undef GMU
     g_gm.t_idx=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_ring=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_hgt=gm_tex(1152,640,GL_RG8,GL_RG);
     g_gm.t_msk=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_shade=gm_tex(256,1,GL_R8,GL_RED); g_gm.t_kind=gm_tex(256,1,GL_R8,GL_RED);
@@ -11012,6 +11022,12 @@ static int gm_map(const gw_present_geo *geo,double interp_a) {
     GLint dummy=-1;
     g_layers_aux=1; bloom_draw_map_layers(interp_a,dummy); g_layers_aux=0;
     g_bloom.Disable(GL_SCISSOR_TEST);
+    /* the HUD: the canvas' own x < 128 at 1x on the left of the logical view (the composite takes it there) */
+    g_bloom.UseProgram(g_gm.p_hud);
+    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_gm.hu_lut,1);
+    g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_idx); g_bloom.Uniform1i(g_gm.hu_idx,0);
+    {   const float x1=128.0f/(float)vw*2.0f-1.0f;
+        bloom_draw_quad(-1.0f,1.0f,x1,-1.0f, 0.0f,0.0f,128.0f/1152.0f,480.0f/640.0f, 0.0f,0.0f,1.0f,1.0f); }
     return 1;
 }
 
@@ -11187,6 +11203,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.ActiveTexture(GL_TEXTURE6); g_bloom.BindTexture(GL_TEXTURE_2D,map_on?g_gm.map_tex:0u);
     g_bloom.Uniform1i(g_bloom.u_comp_map,6);
     g_bloom.Uniform1f(g_bloom.u_comp_map_on,map_on?1.0f:0.0f);
+    g_bloom.Uniform1f(g_bloom.u_comp_hud_x,128.0f/(float)g_present_w);
     g_bloom.ActiveTexture(GL_TEXTURE4); g_bloom.BindTexture(GL_TEXTURE_2D,wt_on?g_bloom.tex_wt:0u);
     g_bloom.Uniform1i(g_bloom.u_comp_wt,4);
     g_bloom.Uniform1f(g_bloom.u_comp_wt_on,wt_on?1.0f:0.0f);
@@ -11562,7 +11579,8 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             /* zoomed out the view texture is not drawn: its HUD part (x < 128) goes to three small textures in rotation,
                so the upload never waits for the GPU still drawing the previous frame */
             int vup=0;
-            if(vconv_w==176) {
+            if(g_gm_frame) { /* GPU map frame: HUD and map come from the GPU composition (the strip above only feeds the panel art) */ }
+            else if(vconv_w==176) {
                 for(int i=0;i<3;i++) if(!g_hud_tex[i]) {
                     g_hud_tex[i]=SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,128,480);
                     if(g_hud_tex[i]) SDL_SetTextureScaleMode(g_hud_tex[i],SDL_ScaleModeNearest);
