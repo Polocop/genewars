@@ -8245,7 +8245,9 @@ static int g_present_w=640,g_present_pitch=640;
 /* Host presentation breakdown (main thread, GW_TICK_PROFILE), reported every 10 s: palette conversion + texture
    upload, render copies (frame + pointer), SDL_RenderPresent, pacing wait. */
 static double g_hostprof_fx_ms,g_hostprof_bloom_ms,g_hostprof_bu_ms;
-static double g_ph[5];   /* this frame: convert (incl. bloom upload), bloom upload, fx, bloom/AO pass, SDL present (ms) */
+static double g_ph[9];   /* this frame: convert (incl. bloom upload), bloom upload, fx, bloom/AO pass, SDL present,
+                            canvas texture write+upload, bloom canvas TexSubImage, fx texture uploads, view texture upload (ms) */
+static double ph_ms(uint64_t t0) { const uint64_t f=SDL_GetPerformanceFrequency(); return (double)(SDL_GetPerformanceCounter()-t0)*1000.0/(double)(f?f:1u); }
 static double g_hostprof_convert_ms,g_hostprof_copy_ms,g_hostprof_present_ms,g_hostprof_wait_ms,g_hostprof_frame_ms;
 /* GW_GPU_TIMING=1 (diagnostics): GPU-synchronised time of composition + scaled copy (1-pixel readbacks bracket it,
    so it is an upper bound that includes one readback); reported per frame in the host_window line */
@@ -9695,7 +9697,9 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
         int y0=0,y1=g_fxr[r].h-1;
         if(!rebuild) { if(g_fxr[r].y1<0) continue; y0=g_fxr[r].y0; y1=g_fxr[r].y1; }   /* only the water band */
         const SDL_Rect rc={x0,y0,w,y1-y0+1};
-        (void)SDL_UpdateTexture(t,&rc,g_fxr[r].buf+(size_t)y0*(size_t)w,w*(int)sizeof(uint32_t));
+        {   const uint64_t tu0=SDL_GetPerformanceCounter();
+            (void)SDL_UpdateTexture(t,&rc,g_fxr[r].buf+(size_t)y0*(size_t)w,w*(int)sizeof(uint32_t));
+            g_ph[7]+=ph_ms(tu0); }
     }
 }
 #undef FX_S
@@ -10312,7 +10316,9 @@ static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_
         GLuint sw=g_bloom.canvas_tex[0]; g_bloom.canvas_tex[0]=g_bloom.canvas_tex[1]; g_bloom.canvas_tex[1]=sw;
         hp_par((int)GW_CANVAS_H,bu_canvas_rows,&buc);
         g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[1]);
-        g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,GW_CANVAS_TEX_W,(int)GW_CANVAS_H,GL_RGBA,GL_UNSIGNED_BYTE,g_bloom.up_buf);
+        {   const uint64_t ts0=SDL_GetPerformanceCounter();
+            g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,GW_CANVAS_TEX_W,(int)GW_CANVAS_H,GL_RGBA,GL_UNSIGNED_BYTE,g_bloom.up_buf);
+            g_ph[6]+=ph_ms(ts0); }
         g_bloom.canvas_ready=g_bloom.canvas_ready<2?g_bloom.canvas_ready+1:2;
     } else g_bloom.canvas_ready=0;
 
@@ -11155,8 +11161,11 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 }
                 if(g_interactive_perf_frequency) { g_hostprof_epx_ms+=(double)(SDL_GetPerformanceCounter()-epx0)*1000.0/(double)g_interactive_perf_frequency; g_hostprof_epx_n++; }
             } else
-            if(SDL_UpdateTexture(g_ifclevel_demo_texture,vconv_w<g_present_w?&(SDL_Rect){0,0,vconv_w,480}:NULL,g_ifclevel_demo_rgba,
-                                 texture_w*(int)sizeof(uint32_t))!=0) {
+            const uint64_t vu0=SDL_GetPerformanceCounter();
+            const int vup=SDL_UpdateTexture(g_ifclevel_demo_texture,vconv_w<g_present_w?&(SDL_Rect){0,0,vconv_w,480}:NULL,g_ifclevel_demo_rgba,
+                                 texture_w*(int)sizeof(uint32_t));
+            g_ph[8]+=ph_ms(vu0);
+            if(vup!=0) {
                 fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
             }
             if(panel_split) for(int y=0;y<480;y++) for(int x=0;x<48;x++)
@@ -11178,6 +11187,20 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                        fx_source(visual,&fs,&fp,&fr)) cv_conv_w=48; }
                 if(g_canvas_tex[0] && g_canvas_tex[1]) {
                     SDL_Texture *t=g_canvas_tex[0]; g_canvas_tex[0]=g_canvas_tex[1]; g_canvas_tex[1]=t;   /* [0] previous, [1] current */
+                    const uint64_t cvt0=SDL_GetPerformanceCounter();
+                    if(cv_conv_w<GW_CANVAS_TEX_W) {
+                        /* only the panel strip: an update of that rectangle (a lock re-uploads the whole texture) */
+                        static uint32_t strip[48u*GW_CANVAS_H];
+                        for(int y=0;y<(int)GW_CANVAS_H;y++) {
+                            const uint8_t *row=visual->canvas+(size_t)y*GW_CANVAS_W+128u; uint32_t *o=strip+(size_t)y*48u;
+                            for(int x=0;x<48;x++) o[x]=lut[row[x]];
+                            if(y<480 && visual->panel_bg_valid)
+                                for(int x=0;x<48;x++) if(visual->canvas_panel[y*48+x]) o[x]=lut[visual->panel_bg[y*48+x]];
+                        }
+                        const SDL_Rect sr={0,0,48,(int)GW_CANVAS_H};
+                        if(SDL_UpdateTexture(g_canvas_tex[1],&sr,strip,48*(int)sizeof(uint32_t))==0)
+                            g_canvas_tex_ready=g_canvas_tex_ready<2?g_canvas_tex_ready+1:2;
+                    } else {
                     void *tp=NULL; int tpitch=0;
                     if(SDL_LockTexture(g_canvas_tex[1],NULL,&tp,&tpitch)==0 && tp) {
                         for(int y=0;y<(int)GW_CANVAS_H;y++) {
@@ -11191,6 +11214,8 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                         SDL_UnlockTexture(g_canvas_tex[1]);
                         g_canvas_tex_ready=g_canvas_tex_ready<2?g_canvas_tex_ready+1:2;
                     }
+                    }
+                    g_ph[5]+=ph_ms(cvt0);
                 }
             } else g_canvas_tex_ready=0;
             if(visual) { const uint64_t hp_bu0=SDL_GetPerformanceCounter(); bloom_upload_frame(visual,source,texture_w,panel_split);
@@ -11878,7 +11903,7 @@ static void host_eip_dump(void) {
 enum { PACE_N=8192 };
 static float g_pace_iv[PACE_N],g_pace_wk[PACE_N]; static uint8_t g_pace_tk[PACE_N]; static unsigned g_pace_n; static int g_pace_on=-1;
 static uint64_t g_pace_last,g_pace_t0;
-static float g_pace_ph[5][PACE_N];
+static float g_pace_ph[9][PACE_N];
 static double g_pace_snap_sum,g_pace_snap_max; static unsigned g_pace_snap_n;   /* snapshot lock + copy in the present loop */
 static int pace_cmp(const void *a,const void *b) { const float x=*(const float *)a,y=*(const float *)b; return x<y?-1:x>y; }
 static void pace_pct(const char *name,float *v,unsigned n,double budget) {
@@ -11896,7 +11921,7 @@ static void pace_stats_frame(uint64_t present_end,uint64_t work,int tick) {
     const double f=(double)g_interactive_perf_frequency;
     if(g_pace_last && g_pace_n<PACE_N) {
         g_pace_iv[g_pace_n]=(float)((double)(present_end-g_pace_last)*1000.0/f);
-        for(int k=0;k<5;k++) g_pace_ph[k][g_pace_n]=(float)g_ph[k];
+        for(int k=0;k<9;k++) g_pace_ph[k][g_pace_n]=(float)g_ph[k];
         g_pace_wk[g_pace_n]=(float)((double)work*1000.0/f); g_pace_tk[g_pace_n]=(uint8_t)tick; g_pace_n++;
     }
     g_pace_last=present_end; memset(g_ph,0,sizeof g_ph);
@@ -11914,9 +11939,11 @@ static void pace_stats_frame(uint64_t present_end,uint64_t work,int tick) {
         na=nb=0;
         for(unsigned i=0;i<g_pace_n;i++) { if(g_pace_tk[i]) a[na++]=g_pace_iv[i]; else b[nb++]=g_pace_iv[i]; }
         pace_pct("interval_tick",a,na,8.334); pace_pct("interval_sub",b,nb,8.334);
-        {   static const char *const nm[5]={"tick_convert","tick_bloom_upload","tick_fx","tick_bloom_ao","tick_present"};
-            for(int k=0;k<5;k++) { na=0; for(unsigned i=0;i<g_pace_n;i++) if(g_pace_tk[i]) a[na++]=g_pace_ph[k][i]; pace_pct(nm[k],a,na,8.334); }
-            for(int k=2;k<5;k++) { nb=0; for(unsigned i=0;i<g_pace_n;i++) if(!g_pace_tk[i]) b[nb++]=g_pace_ph[k][i]; pace_pct(k==2?"sub_fx":k==3?"sub_bloom_ao":"sub_present",b,nb,8.334); } }
+        {   static const char *const nm[9]={"tick_convert","tick_bloom_upload","tick_fx","tick_bloom_ao","tick_present",
+                                            "tick_canvas_tex","tick_bloom_texsub","tick_fx_upload","tick_view_upload"};
+            for(int k=0;k<9;k++) { na=0; for(unsigned i=0;i<g_pace_n;i++) if(g_pace_tk[i]) a[na++]=g_pace_ph[k][i]; pace_pct(nm[k],a,na,8.334); }
+            for(int k=2;k<8;k++) { if(k==5 || k==6) continue; nb=0; for(unsigned i=0;i<g_pace_n;i++) if(!g_pace_tk[i]) b[nb++]=g_pace_ph[k][i];
+                pace_pct(k==2?"sub_fx":k==3?"sub_bloom_ao":k==4?"sub_present":"sub_fx_upload",b,nb,8.334); } }
         g_pace_n=0; g_pace_t0=present_end;
     }
 }
