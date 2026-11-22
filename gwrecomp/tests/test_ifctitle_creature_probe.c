@@ -10363,19 +10363,20 @@ static void pt_project(double sx,double sy,double a,double *lx,double *ly) {
 }
 static double pt_zoom(void) { return (g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999)?g_zoom:(g_zoom>1.0001?g_zoom:1.0); }
 static void pt_biome(const gw_interactive_visual_snapshot *v) {
-    long r=0,g=0,b=0,n=0; const uint32_t total=v->fx_ring_w*v->fx_ring_h;
-    for(uint32_t i=0;i<total;i+=7u) {
+    /* per-pixel vote of the ring's terrain colours (6-bit palette): the surface that covers most of the map wins, so a
+       sea of an unusual colour or patches of another ground do not tip an average */
+    long vote[4]={0,0,0,0},n=0; const uint32_t total=v->fx_ring_w*v->fx_ring_h;
+    for(uint32_t i=0;i<total;i+=5u) {
         const uint8_t k=v->fx_ring[i]; if(!k || g_fx_kind[k]==FX_WATER) continue;
-        r+=v->palette[k*3]; g+=v->palette[k*3+1]; b+=v->palette[k*3+2]; n++;
+        const int R=v->palette[k*3],G=v->palette[k*3+1],B=v->palette[k*3+2],L=(R*3+G*6+B)/10;
+        n++;
+        if(L>42 && B+4>=R && G+4>=R) vote[3]++;                 /* pale, cold: ice/snow */
+        else if(G>R+2 && G>=B) vote[0]++;                        /* green: organic */
+        else if(R>=G && R>B+4 && L>=10) vote[1]++;               /* brown/ochre/red-brown: arid */
+        else vote[2]++;                                          /* dark: volcanic */
     }
     int bi=2;
-    if(n>200) {
-        const int R=(int)(r/n),G=(int)(g/n),B=(int)(b/n),L=(R*3+G*6+B)/10;
-        if(L>40 && B+4>=R) bi=3;                       /* pale, cold: icy */
-        else if(G>R+2 && G>=B) bi=0;                    /* green: organic */
-        else if(R>=G-1 && R>B+5 && L>14) bi=1;          /* brown/ochre: arid */
-        else bi=2;                                      /* dark/red: volcanic */
-    }
+    if(n>200) { bi=0; for(int c=1;c<4;c++) if(vote[c]>vote[bi]) bi=c; }
     if(bi!=g_pt_biome) { gw_flag_trace("TRACE hd2d_particles biome=%s%c",bi==0?"organic":bi==1?"arid":bi==2?"volcanic":"icy",10); g_pt_biome=bi; }
 }
 static gw_particle *pt_new(void) {
