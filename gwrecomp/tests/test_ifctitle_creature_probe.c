@@ -8273,7 +8273,8 @@ static double g_zoom=1.0,g_zoom_target=1.0,g_zoom_x,g_zoom_y,g_zoom_ax,g_zoom_ay
 static int g_zoom_anim; static uint64_t g_zoom_t;
 /* zoom-out canvas: map texture of canvas x=176..1151, y=0..639 (current and previous guest frame, for the
    scroll interpolation); g_canvas_live while the presented frame came from the canvas */
-static SDL_Texture *g_canvas_tex[3]; static int g_canvas_live,g_canvas_tex_ready;
+static SDL_Texture *g_canvas_tex[3];
+static SDL_Texture *g_hud_tex[3]; static int g_hud_cur=-1;   /* zoomed-out HUD (x < 128), three in rotation */ static int g_canvas_live,g_canvas_tex_ready;
 #define GW_CANVAS_TEX_W (1152-128)
 /* F7 display filter: 0 sharp pixels, 1 EPX (Scale2x on palette indices), 2 CRT mask; saved in gw_display.cfg */
 static int g_filter_mode=-1,g_tex_scale=1;
@@ -11292,17 +11293,22 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 if(g_interactive_perf_frequency) { g_hostprof_epx_ms+=(double)(SDL_GetPerformanceCounter()-epx0)*1000.0/(double)g_interactive_perf_frequency; g_hostprof_epx_n++; }
             } else {
             const uint64_t vu0=SDL_GetPerformanceCounter();
-            /* zoomed out the strip (HUD) rarely changes: an unchanged strip is not uploaded again (the upload goes into a
-               texture the previous frame drew, which can stall) */
-            static uint32_t strip_last[176u*480u]; static int strip_valid;
-            int same=0;
+            /* zoomed out the view texture is not drawn: its HUD part (x < 128) goes to three small textures in rotation,
+               so the upload never waits for the GPU still drawing the previous frame */
+            int vup=0;
             if(vconv_w==176) {
-                same=strip_valid;
-                for(int y=0;y<480 && same;y++) same=!memcmp(strip_last+(size_t)y*176u,g_ifclevel_demo_rgba+(size_t)y*(size_t)texture_w,176u*sizeof(uint32_t));
-                if(!same) { for(int y=0;y<480;y++) memcpy(strip_last+(size_t)y*176u,g_ifclevel_demo_rgba+(size_t)y*(size_t)texture_w,176u*sizeof(uint32_t)); strip_valid=1; }
-            } else strip_valid=0;
-            const int vup=same?0:SDL_UpdateTexture(g_ifclevel_demo_texture,vconv_w<g_present_w?&(SDL_Rect){0,0,vconv_w,480}:NULL,g_ifclevel_demo_rgba,
+                for(int i=0;i<3;i++) if(!g_hud_tex[i]) {
+                    g_hud_tex[i]=SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,128,480);
+                    if(g_hud_tex[i]) SDL_SetTextureScaleMode(g_hud_tex[i],SDL_ScaleModeNearest);
+                }
+                const int nx=(g_hud_cur+1)%3;
+                if(g_hud_tex[nx] && SDL_UpdateTexture(g_hud_tex[nx],NULL,g_ifclevel_demo_rgba,texture_w*(int)sizeof(uint32_t))==0) g_hud_cur=nx;
+                else { g_hud_cur=-1; vup=SDL_UpdateTexture(g_ifclevel_demo_texture,&(SDL_Rect){0,0,vconv_w,480},g_ifclevel_demo_rgba,texture_w*(int)sizeof(uint32_t)); }
+            } else {
+                g_hud_cur=-1;
+                vup=SDL_UpdateTexture(g_ifclevel_demo_texture,vconv_w<g_present_w?&(SDL_Rect){0,0,vconv_w,480}:NULL,g_ifclevel_demo_rgba,
                                  texture_w*(int)sizeof(uint32_t));
+            }
             g_ph[8]+=ph_ms(vu0);
             if(vup!=0) {
                 fprintf(stderr,"SDL demo texture upload: %s\n",SDL_GetError()); return 0;
@@ -11553,7 +11559,8 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         if(a<1.0) ok=SDL_RenderCopyF(g_ifclevel_demo_renderer,g_canvas_tex[0],NULL,&prev_dst)==0;
         ok=ok && SDL_RenderCopyF(g_ifclevel_demo_renderer,g_canvas_tex[1],NULL,&cur_dst)==0;
         SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
-        ok=ok && SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&hud_src,&hud_dst)==0;
+        if(g_hud_cur>=0 && g_hud_tex[g_hud_cur]) ok=ok && SDL_RenderCopy(g_ifclevel_demo_renderer,g_hud_tex[g_hud_cur],NULL,&hud_dst)==0;
+        else ok=ok && SDL_RenderCopy(g_ifclevel_demo_renderer,g_ifclevel_demo_texture,&hud_src,&hud_dst)==0;
         if(ok && g_interp_panel_texture && g_interp_panel_active) {
             const SDL_Rect panel_dst={dst.x+(int)(left*s+0.5),dst.y,(int)(176.0*s+0.5)-(int)(left*s+0.5),dst.h};
             ok=SDL_RenderCopy(g_ifclevel_demo_renderer,g_interp_panel_texture,NULL,&panel_dst)==0;
