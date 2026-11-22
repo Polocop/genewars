@@ -10385,24 +10385,24 @@ static gw_particle *pt_new(void) {
 /* atmosphere: one particle of the biome somewhere in the visible map (world coordinates, layer parallax par) */
 static void pt_spawn_atmo(int sx0,int sx1,int sy0,int sy1,int water_only) {
     gw_particle *p=pt_new(); if(!p) return;
-    const int near=pt_rand()<0.35f; p->par=near?1.12f:1.0f; p->flags=1|(water_only?2:0);
+    const int is_near=pt_rand()<0.35f; p->par=is_near?1.12f:1.0f; p->flags=1|(water_only?2:0);
     p->x=(float)(sx0+pt_rand()*(sx1-sx0)+g_pt_ax*p->par); p->y=(float)(sy0+pt_rand()*(sy1-sy0)+g_pt_ay*p->par);
     p->seed=pt_rand()*6.2831853f; p->age=0.0f;
     switch(water_only?4:g_pt_biome) {
-    case 0: p->kind=PT_GLOW; p->life=6.0f+pt_rand()*6.0f; p->size=(near?2.2f:1.5f)+pt_rand()*0.8f;
-            p->vx=(pt_rand()-0.5f)*4.0f; p->vy=-1.0f-pt_rand()*2.5f; p->r=0.62f; p->g=1.0f; p->b=0.55f; p->a=near?0.42f:0.30f; break;
+    case 0: p->kind=PT_GLOW; p->life=6.0f+pt_rand()*6.0f; p->size=(is_near?2.2f:1.5f)+pt_rand()*0.8f;
+            p->vx=(pt_rand()-0.5f)*4.0f; p->vy=-1.0f-pt_rand()*2.5f; p->r=0.62f; p->g=1.0f; p->b=0.55f; p->a=is_near?0.42f:0.30f; break;
     case 1: if(pt_rand()<0.25f) { p->kind=PT_SOFT; p->life=2.5f+pt_rand()*2.0f; p->size=10.0f+pt_rand()*10.0f; p->vx=26.0f+pt_rand()*14.0f; p->vy=9.0f+pt_rand()*5.0f;
                                   p->r=0.86f; p->g=0.72f; p->b=0.50f; p->a=0.07f; }
-            else { p->kind=PT_SOFT; p->life=5.0f+pt_rand()*5.0f; p->size=(near?1.8f:1.2f)+pt_rand()*0.6f; p->vx=8.0f+pt_rand()*6.0f; p->vy=2.0f+pt_rand()*2.0f;
-                   p->r=0.92f; p->g=0.80f; p->b=0.60f; p->a=near?0.50f:0.38f; } break;
-    case 3: p->kind=PT_SOFT; p->life=7.0f+pt_rand()*5.0f; p->size=(near?2.0f:1.4f)+pt_rand()*0.6f; p->vx=3.0f+(pt_rand()-0.5f)*3.0f; p->vy=9.0f+pt_rand()*5.0f;
-            p->r=0.95f; p->g=0.97f; p->b=1.0f; p->a=near?0.55f:0.40f; break;
+            else { p->kind=PT_SOFT; p->life=5.0f+pt_rand()*5.0f; p->size=(is_near?1.8f:1.2f)+pt_rand()*0.6f; p->vx=8.0f+pt_rand()*6.0f; p->vy=2.0f+pt_rand()*2.0f;
+                   p->r=0.92f; p->g=0.80f; p->b=0.60f; p->a=is_near?0.50f:0.38f; } break;
+    case 3: p->kind=PT_SOFT; p->life=7.0f+pt_rand()*5.0f; p->size=(is_near?2.0f:1.4f)+pt_rand()*0.6f; p->vx=3.0f+(pt_rand()-0.5f)*3.0f; p->vy=9.0f+pt_rand()*5.0f;
+            p->r=0.95f; p->g=0.97f; p->b=1.0f; p->a=is_near?0.55f:0.40f; break;
     case 4: p->kind=PT_SOFT; p->life=8.0f+pt_rand()*6.0f; p->size=26.0f+pt_rand()*22.0f; p->vx=4.0f+pt_rand()*3.0f; p->vy=(pt_rand()-0.5f)*1.5f;
             p->r=0.78f; p->g=0.90f; p->b=0.95f; p->a=0.05f; p->par=1.0f; break;
     default: if(pt_rand()<0.2f) { p->kind=PT_GLOW; p->life=2.5f+pt_rand()*2.5f; p->size=1.4f+pt_rand()*0.8f; p->vx=(pt_rand()-0.5f)*5.0f; p->vy=-7.0f-pt_rand()*6.0f;
                                   p->r=1.0f; p->g=0.55f; p->b=0.22f; p->a=0.45f; }
-             else { p->kind=PT_SOFT; p->life=6.0f+pt_rand()*5.0f; p->size=(near?1.9f:1.3f)+pt_rand()*0.6f; p->vx=2.0f+(pt_rand()-0.5f)*3.0f; p->vy=-2.0f+pt_rand()*5.0f;
-                    p->r=0.55f; p->g=0.52f; p->b=0.50f; p->a=near?0.45f:0.32f; } break;
+             else { p->kind=PT_SOFT; p->life=6.0f+pt_rand()*5.0f; p->size=(is_near?1.9f:1.3f)+pt_rand()*0.6f; p->vx=2.0f+(pt_rand()-0.5f)*3.0f; p->vy=-2.0f+pt_rand()*5.0f;
+                    p->r=0.55f; p->g=0.52f; p->b=0.50f; p->a=is_near?0.45f:0.32f; } break;
     }
 }
 /* events: sparks (glow, gravity) and dust (soft) at a source position, in world coordinates */
