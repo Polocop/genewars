@@ -10389,8 +10389,8 @@ static void pt_spawn_atmo(int sx0,int sx1,int sy0,int sy1,int water_only) {
     p->x=(float)(sx0+pt_rand()*(sx1-sx0)+g_pt_ax*p->par); p->y=(float)(sy0+pt_rand()*(sy1-sy0)+g_pt_ay*p->par);
     p->seed=pt_rand()*6.2831853f; p->age=0.0f;
     switch(water_only?4:g_pt_biome) {
-    case 0: p->kind=PT_GLOW; p->life=6.0f+pt_rand()*6.0f; p->size=(is_near?2.2f:1.5f)+pt_rand()*0.8f;
-            p->vx=(pt_rand()-0.5f)*4.0f; p->vy=-1.0f-pt_rand()*2.5f; p->r=0.62f; p->g=1.0f; p->b=0.55f; p->a=is_near?0.42f:0.30f; break;
+    case 0: p->kind=PT_GLOW; p->life=6.0f+pt_rand()*6.0f; p->size=(is_near?2.9f:2.0f)+pt_rand()*1.0f;
+            p->vx=(pt_rand()-0.5f)*4.0f; p->vy=-1.0f-pt_rand()*2.5f; p->r=0.62f; p->g=1.0f; p->b=0.55f; p->a=is_near?0.50f:0.36f; break;
     case 1: if(pt_rand()<0.25f) { p->kind=PT_SOFT; p->life=2.5f+pt_rand()*2.0f; p->size=10.0f+pt_rand()*10.0f; p->vx=26.0f+pt_rand()*14.0f; p->vy=9.0f+pt_rand()*5.0f;
                                   p->r=0.86f; p->g=0.72f; p->b=0.50f; p->a=0.07f; }
             else { p->kind=PT_SOFT; p->life=5.0f+pt_rand()*5.0f; p->size=(is_near?1.8f:1.2f)+pt_rand()*0.6f; p->vx=8.0f+pt_rand()*6.0f; p->vy=2.0f+pt_rand()*2.0f;
@@ -10398,7 +10398,7 @@ static void pt_spawn_atmo(int sx0,int sx1,int sy0,int sy1,int water_only) {
     case 3: p->kind=PT_SOFT; p->life=7.0f+pt_rand()*5.0f; p->size=(is_near?2.0f:1.4f)+pt_rand()*0.6f; p->vx=3.0f+(pt_rand()-0.5f)*3.0f; p->vy=9.0f+pt_rand()*5.0f;
             p->r=0.95f; p->g=0.97f; p->b=1.0f; p->a=is_near?0.55f:0.40f; break;
     case 4: p->kind=PT_SOFT; p->life=8.0f+pt_rand()*6.0f; p->size=26.0f+pt_rand()*22.0f; p->vx=4.0f+pt_rand()*3.0f; p->vy=(pt_rand()-0.5f)*1.5f;
-            p->r=0.78f; p->g=0.90f; p->b=0.95f; p->a=0.05f; p->par=1.0f; break;
+            p->r=0.78f; p->g=0.90f; p->b=0.95f; p->a=0.08f; p->par=1.0f; break;
     default: if(pt_rand()<0.2f) { p->kind=PT_GLOW; p->life=2.5f+pt_rand()*2.5f; p->size=1.4f+pt_rand()*0.8f; p->vx=(pt_rand()-0.5f)*5.0f; p->vy=-7.0f-pt_rand()*6.0f;
                                   p->r=1.0f; p->g=0.55f; p->b=0.22f; p->a=0.45f; }
              else { p->kind=PT_SOFT; p->life=6.0f+pt_rand()*5.0f; p->size=(is_near?1.9f:1.3f)+pt_rand()*0.6f; p->vx=2.0f+(pt_rand()-0.5f)*3.0f; p->vy=-2.0f+pt_rand()*5.0f;
@@ -10416,9 +10416,10 @@ static void pt_spark(double sx,double sy,float r,float g,float b,float speed,flo
 static void pt_dust(double sx,double sy,float spread) {
     gw_particle *p=pt_new(); if(!p) return;
     const float an=pt_rand()*6.2831853f;
-    p->x=(float)(sx+cosf(an)*spread+g_pt_ax); p->y=(float)(sy+sinf(an)*spread*0.45f+g_pt_ay); p->par=1.0f; p->flags=8;
-    p->vx=cosf(an)*14.0f; p->vy=sinf(an)*6.0f-3.0f; p->kind=PT_SOFT; p->life=1.2f+pt_rand()*1.0f; p->size=7.0f+pt_rand()*7.0f;
-    p->r=0.80f; p->g=0.74f; p->b=0.62f; p->a=0.16f; p->seed=pt_rand()*6.2831853f;
+    const float rr=spread*sqrtf(pt_rand());
+    p->x=(float)(sx+cosf(an)*rr+g_pt_ax); p->y=(float)(sy+sinf(an)*rr*0.45f+g_pt_ay); p->par=1.0f; p->flags=8;
+    p->vx=cosf(an)*10.0f; p->vy=sinf(an)*4.0f-3.0f; p->kind=PT_SOFT; p->life=1.0f+pt_rand()*0.8f; p->size=6.0f+pt_rand()*6.0f;
+    p->r=0.80f; p->g=0.76f; p->b=0.66f; p->a=0.06f; p->seed=pt_rand()*6.2831853f;
 }
 /* once per presented frame, before the composite: anchor, biome, events, spawning and motion at the real dt */
 static void pt_update(const gw_interactive_visual_snapshot *v) {
@@ -10441,9 +10442,9 @@ static void pt_update(const gw_interactive_visual_snapshot *v) {
         /* events of this game frame (exact screen positions from the write observer) */
         if(v->ev_ship_n>150) {
             const double cx=v->ev_ship_x+v->ev_ship_w*0.5,cy=v->ev_ship_y+v->ev_ship_h*0.5;
-            const int n=(int)(3.0f*g_ini_particle_density+0.5f);
-            for(int i=0;i<n;i++) pt_spark(cx+(pt_rand()-0.5)*v->ev_ship_w*0.8,cy+(pt_rand()-0.5)*v->ev_ship_h*0.6,0.55f,0.95f,1.0f,38.0f,6.0f);
-            for(int i=0;i<n;i++) pt_dust(cx,cy,(float)v->ev_ship_w*0.5f);
+            const float ns=1.5f*g_ini_particle_density; const int n=(int)ns+(pt_rand()<ns-(int)ns?1:0);
+            for(int i=0;i<n;i++) pt_spark(cx+(pt_rand()-0.5)*v->ev_ship_w*0.7,cy+(pt_rand()-0.5)*v->ev_ship_h*0.5,0.55f,0.95f,1.0f,34.0f,6.0f);
+            if(pt_rand()<0.5f*g_ini_particle_density) pt_dust(cx,cy,(float)v->ev_ship_w*0.42f);
         }
         if(v->ev_beam_n>40) {
             const int n=(int)(4.0f*g_ini_particle_density+0.5f);
