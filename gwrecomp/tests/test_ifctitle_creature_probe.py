@@ -4692,6 +4692,11 @@ def main()->None:
     for site in (0x7BCE3,0x7BD3E):
         lifted_text=before_call_line(lifted_text,f"/* 0x{site:08X}: call 0xe19c0 */",
                                      f"gw_hybrid_capture_primitive(0x{site:08X}u,eax,ebx,edx,esp);")
+    # soft_shadows: which caller of the frame drawer 0x91C10 (-> 0x8E0D0 -> the shade-remap store 0x8E4A1) is running,
+    # so the shadow mask takes only the callers that draw cast shadows (host variable only, never guest memory)
+    for k,site in enumerate((0x10EF0,0x43C61,0x56974,0x56A7F,0x852C8,0x8551F,0x85EE1,0x95A66,0x95B92)):
+        lifted_text=before_call_line(lifted_text,f"/* 0x{site:08X}: call 0x91c10 */",f"gw_shade_caller({k+1});")
+    lifted_text=("void gw_shade_caller(int);\n"+lifted_text)
     lifted_text=("void gw_terrain_vertex_height(unsigned int,unsigned int,unsigned int);\n"
                  "void gw_terrain_record_node(unsigned int,unsigned int);\n"
                  "void gw_terrain_record_world(unsigned int,unsigned int,unsigned int);\n"+lifted_text)

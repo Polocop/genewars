@@ -8237,7 +8237,7 @@ static void hud_sentinel_collect(uint8_t *memory);
 static int g_present_w=640,g_present_pitch=640;
 /* Host presentation breakdown (main thread, GW_TICK_PROFILE), reported every 10 s: palette conversion + texture
    upload, render copies (frame + pointer), SDL_RenderPresent, pacing wait. */
-static double g_hostprof_fx_ms,g_hostprof_bloom_ms;
+static double g_hostprof_fx_ms,g_hostprof_bloom_ms,g_hostprof_bu_ms;
 static double g_hostprof_convert_ms,g_hostprof_copy_ms,g_hostprof_present_ms,g_hostprof_wait_ms,g_hostprof_frame_ms;
 /* GW_GPU_TIMING=1 (diagnostics): GPU-synchronised time of composition + scaled copy (1-pixel readbacks bracket it,
    so it is an upper bound that includes one readback); reported per frame in the host_window line */
@@ -9211,7 +9211,7 @@ static int16_t g_fx_sin[1024];      /* sin * 4096, 1024 steps per turn */
 static int64_t g_fx_wx,g_fx_wy;     /* unwrapped ring scroll: world x = x + g_fx_wx */
 static int g_fx_last_rx,g_fx_last_ry,g_fx_have_anchor;
 static uint64_t g_fx_last_generation;
-static uint32_t *g_fx_row;
+static __attribute__((unused)) uint32_t *g_fx_row;
 static void fx_classify(const uint8_t *pal) {
     if(g_fx_palette_ok && !memcmp(g_fx_palette,pal,768)) return;
     memcpy(g_fx_palette,pal,768); g_fx_palette_ok=1;
@@ -9243,7 +9243,7 @@ static inline int fx_ground(const gw_interactive_visual_snapshot *v,const uint8_
 }
 #define FX_S(p) ((int)g_fx_sin[(unsigned)(p)&1023u])
 /* writes the effect into out[0..x1-x0) for source row y, columns x0..x1-1 (out already holds lut[] of the row) */
-static void fx_row(uint32_t *out,int x0,int x1,int y,const gw_interactive_visual_snapshot *v,const uint8_t *src,
+static __attribute__((unused)) void fx_row(uint32_t *out,int x0,int x1,int y,const gw_interactive_visual_snapshot *v,const uint8_t *src,
                    int pitch,int rows,const uint32_t *lut,int tq) {
     const int wy=(int)(y+g_fx_wy);
     const uint8_t *row=src+y*pitch;
@@ -9377,7 +9377,7 @@ static void dp_rows(int y0,int y1,int *cand,int *count) {
                 }
                 continue;
             }
-            if(shadows && v->spr_valid && v->spr_mask[(size_t)y*pitch+x]==2u && lum[c]<lum[g] && g_fx_kind[g]!=FX_WATER &&
+            if(shadows && v->spr_valid && v->spr_mask[(size_t)y*pitch+x]>=2u && lum[c]<lum[g] && g_fx_kind[g]!=FX_WATER &&
                y>0 && y<rows-1 && x>176 && x<pitch-1) { const int i=y*pitch+x; g_dp_mask[i]=1; cand[nc++]=i; }
         }
     }
@@ -9490,6 +9490,48 @@ static inline uint32_t dp_apply(uint32_t p,int f) {
 }
 /* Re-converts the map area (source x >= 176) of the current frame textures with the effect at the present time.
    x < 176 (HUD, panel art and its overlay split) is never written. */
+/* water_effects per pixel (x, y of the source; the pixel is water or GOOP ground, see g_fx_g): the effect colour, or
+   base when GOOP has no highlight there. Same formulas as before; the displacement only pulls from water ground. */
+typedef struct { int32_t o; int16_t x,y; uint32_t base; } fx_wpx;
+static struct { uint32_t *buf; fx_wpx *px; int n,cap,w,h,y0,y1; } g_fxr[2];   /* [0] 640/854 view, [1] zoom-out canvas */
+static uint8_t *g_fx_g;
+static uint64_t g_fxc_gen=UINT64_MAX; static int g_fxc_key=-1,g_fxc_tq=-1; static uint8_t g_fxc_pal[768];
+static SDL_Texture *g_fxc_tex[2];
+static inline uint32_t fx_px(int x,int y,const uint8_t *src,int pitch,int rows,const uint32_t *lut,int tq,uint32_t base) {
+    const uint8_t k=src[y*pitch+x];
+    const int wy=(int)(y+g_fx_wy),wx=(int)(x+g_fx_wx);
+    if(g_fx_kind[k]==FX_WATER) {
+        const int dxq=(FX_S(wy*24+tq*5)*13+FX_S((wx+wy)*13-tq*7/2)*7)/20;
+        const int dyq=FX_S(wx*19+tq*9/2);
+        const int dx=(dxq*12/10+(dxq>=0?2048:-2048))/4096,dy=(dyq*6/10+(dyq>=0?2048:-2048))/4096;
+        uint8_t ks=k;
+        if(dx || dy) {
+            const int sx=x+dx,sy=y+dy;
+            if(sx>=128 && sx<pitch && sy>=0 && sy<rows && g_fx_g[sy*pitch+sx]==FX_WATER) ks=src[sy*pitch+sx];
+        }
+        const int warp=FX_S(wy*9+tq*2)/56+FX_S(wx*7-tq*3)/72;
+        int cq=4096-abs(FX_S(wx*11+wy*5+warp+tq*2));
+        cq=cq*cq/4096; cq=cq*cq/4096;
+        const uint32_t p=lut[ks];
+        const int boost=4096+cq*7/100;
+        int r=(int)((p>>16)&255u)*boost/4096,g=(int)((p>>8)&255u)*boost/4096,b=(int)(p&255u)*boost/4096;
+        if(r>255) r=255;
+        if(g>255) g=255;
+        if(b>255) b=255;
+        return 0xFF000000u|((uint32_t)r<<16)|((uint32_t)g<<8)|(uint32_t)b;
+    }
+    int s=FX_S(wx*9+wy*6+tq);
+    if(s<=0) return base;
+    s=s*s/4096; s=s*s/4096; s=s*s/4096;
+    const int hue=tq*2+wx*5-wy*3;
+    const int ir=2048+FX_S(hue)/2,ig=2048+FX_S(hue+341)/2,ib=2048+FX_S(hue+683)/2;
+    const uint32_t p=lut[k];
+    int r=(int)((p>>16)&255u)+s*ir/4096*70/4096,g=(int)((p>>8)&255u)+s*ig/4096*70/4096,b=(int)(p&255u)+s*ib/4096*80/4096;
+    if(r>255) r=255;
+    if(g>255) g=255;
+    if(b>255) b=255;
+    return 0xFF000000u|((uint32_t)r<<16)|((uint32_t)g<<8)|(uint32_t)b;
+}
 static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view_tex,int view_w,
                        SDL_Texture *canvas_tex,int canvas_ready) {
     const int water=fx_active(v),depth=depth_active(v);
@@ -9525,31 +9567,70 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
         lut[k]=0xFF000000u|((uint32_t)v->palette[k*3u+0u]*255u/63u<<16)|((uint32_t)v->palette[k*3u+1u]*255u/63u<<8)|((uint32_t)v->palette[k*3u+2u]*255u/63u);
     const uint64_t freq=SDL_GetPerformanceFrequency();
     const int tq=(int)((SDL_GetPerformanceCounter()%(freq*4096u))*64u/freq);   /* 64 steps per second, wraps */
-    if(!g_fx_row) g_fx_row=(uint32_t *)malloc(1152u*640u*sizeof(uint32_t));
-    if(!g_fx_row) return;
-    /* the 640/854-wide view: view (x,y) is source (x,y) for x >= 176 in every mode */
-    if(view_tex && view_w>176) {
-        const int w=view_w-176;
-        for(int y=0;y<480;y++) {
-            uint32_t *o=g_fx_row+(size_t)y*(size_t)w; const uint8_t *row=(v->canvas_valid?v->wscreen+(size_t)y*v->wscreen_pitch:src+(size_t)y*pitch);
-            if(dp) { const uint8_t *di=g_dp_idx+(size_t)y*pitch+176,*df=g_dp_fac+(size_t)y*pitch+176; for(int x=0;x<w;x++) o[x]=dp_apply(lut[di[x]],df[x]); }
-            else for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
-            if(water) fx_row(o,176,view_w,y,v,src,pitch,rows,lut,tq);
+    /* cache per game frame (generation): the converted map area of both textures and the list of water/GOOP ground
+       pixels are built once; on the presented frames in between only those pixels are recomputed, only when the
+       64 Hz wave phase moves, and only the band of rows holding them is uploaded */
+    const int use_view=view_tex && view_w>176,use_canvas=canvas_tex && canvas_ready && v->canvas_valid;
+    const int key=dp|(water<<1)|(use_view<<2)|(use_canvas<<3)|(view_w<<4);
+    const int rebuild=v->generation!=g_fxc_gen || key!=g_fxc_key || memcmp(g_fxc_pal,v->palette,768)!=0 ||
+                      (use_view && g_fxc_tex[0]!=view_tex) || (use_canvas && g_fxc_tex[1]!=canvas_tex);
+    if(!rebuild && (!water || tq==g_fxc_tq)) return;
+    if(rebuild) {
+        if(!g_fx_g) g_fx_g=(uint8_t *)malloc(1152u*640u);
+        for(int r=0;r<2;r++) if(!g_fxr[r].buf) g_fxr[r].buf=(uint32_t *)malloc(1152u*640u*sizeof(uint32_t));
+        if(!g_fx_g || !g_fxr[0].buf || !g_fxr[1].buf) return;
+        /* water/GOOP ground map of the source: its kind where the pixel equals the ring terrain at its ring position */
+        if(water) {
+            const int left=128,rw=pitch-left; int rx0=(v->ring_x-left)%rw; if(rx0<0) rx0+=rw;
+            for(int y=0;y<rows;y++) {
+                int ry=(y+v->ring_y)%rows; if(ry<0) ry+=rows;
+                const uint8_t *s=src+(size_t)y*pitch,*rr=v->fx_ring+(size_t)ry*pitch+left; uint8_t *g=g_fx_g+(size_t)y*pitch;
+                memset(g,0,(size_t)left); int rx=rx0;
+                for(int x=left;x<pitch;x++) { const uint8_t k=s[x]; g[x]=(g_fx_kind[k] && k==rr[rx])?g_fx_kind[k]:0u; if(++rx==rw) rx=0; }
+            }
         }
-        const SDL_Rect r={176,0,w,480};
-        (void)SDL_UpdateTexture(view_tex,&r,g_fx_row,w*(int)sizeof(uint32_t));
+        for(int r=0;r<2;r++) {
+            g_fxr[r].n=0; g_fxr[r].y0=0x7FFFFFFF; g_fxr[r].y1=-1;
+            if(r==0?!use_view:!use_canvas) continue;
+            const int w=r==0?view_w-176:(int)GW_CANVAS_W-176,h=r==0?480:(int)GW_CANVAS_H;
+            g_fxr[r].w=w; g_fxr[r].h=h;
+            for(int y=0;y<h;y++) {
+                uint32_t *o=g_fxr[r].buf+(size_t)y*(size_t)w;
+                const uint8_t *row=r==1?v->canvas+(size_t)y*GW_CANVAS_W:
+                                   (v->canvas_valid?v->wscreen+(size_t)y*v->wscreen_pitch:src+(size_t)y*pitch);
+                if(dp) { const uint8_t *di=g_dp_idx+(size_t)y*pitch+176,*df=g_dp_fac+(size_t)y*pitch+176; for(int x=0;x<w;x++) o[x]=dp_apply(lut[di[x]],df[x]); }
+                else for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
+                if(water && y<rows) {
+                    const uint8_t *g=g_fx_g+(size_t)y*pitch+176;
+                    for(int x=0;x<w && 176+x<pitch;x++) if(g[x]) {
+                        if(g_fxr[r].n==g_fxr[r].cap) {
+                            const int nc=g_fxr[r].cap?g_fxr[r].cap*2:65536; fx_wpx *np=(fx_wpx *)realloc(g_fxr[r].px,(size_t)nc*sizeof *np);
+                            if(!np) break;
+                            g_fxr[r].px=np; g_fxr[r].cap=nc; }
+                        fx_wpx *e=&g_fxr[r].px[g_fxr[r].n++]; e->o=y*w+x; e->x=(int16_t)(176+x); e->y=(int16_t)y; e->base=o[x];
+                        if(y<g_fxr[r].y0) g_fxr[r].y0=y;
+                        if(y>g_fxr[r].y1) g_fxr[r].y1=y;
+                    }
+                }
+            }
+        }
+        g_fxc_gen=v->generation; g_fxc_key=key; memcpy(g_fxc_pal,v->palette,768);
+        g_fxc_tex[0]=use_view?view_tex:NULL; g_fxc_tex[1]=use_canvas?canvas_tex:NULL;
     }
-    /* the zoom-out canvas texture (canvas x 128.. at texture x 0..): map area from canvas x 176 */
-    if(canvas_tex && canvas_ready && v->canvas_valid) {
-        const int w=(int)GW_CANVAS_W-176;
-        for(int y=0;y<(int)GW_CANVAS_H;y++) {
-            uint32_t *o=g_fx_row+(size_t)y*(size_t)w; const uint8_t *row=v->canvas+(size_t)y*GW_CANVAS_W;
-            if(dp) { const uint8_t *di=g_dp_idx+(size_t)y*pitch+176,*df=g_dp_fac+(size_t)y*pitch+176; for(int x=0;x<w;x++) o[x]=dp_apply(lut[di[x]],df[x]); }
-            else for(int x=0;x<w;x++) o[x]=lut[row[176+x]];
-            if(water) fx_row(o,176,(int)GW_CANVAS_W,y,v,src,pitch,rows,lut,tq);
-        }
-        const SDL_Rect r={176-128,0,w,(int)GW_CANVAS_H};
-        (void)SDL_UpdateTexture(canvas_tex,&r,g_fx_row,w*(int)sizeof(uint32_t));
+    /* water and GOOP: only their pixels, from the cached base */
+    if(water) for(int r=0;r<2;r++) {
+        const fx_wpx *e=g_fxr[r].px; uint32_t *b=g_fxr[r].buf;
+        for(int i=0;i<g_fxr[r].n;i++) b[e[i].o]=fx_px(e[i].x,e[i].y,src,pitch,rows,lut,tq,e[i].base);
+    }
+    g_fxc_tq=tq;
+    for(int r=0;r<2;r++) {
+        SDL_Texture *t=r==0?(use_view?view_tex:NULL):(use_canvas?canvas_tex:NULL);
+        if(!t) continue;
+        const int w=g_fxr[r].w,x0=r==0?176:176-128;
+        int y0=0,y1=g_fxr[r].h-1;
+        if(!rebuild) { if(g_fxr[r].y1<0) continue; y0=g_fxr[r].y0; y1=g_fxr[r].y1; }   /* only the water band */
+        const SDL_Rect rc={x0,y0,w,y1-y0+1};
+        (void)SDL_UpdateTexture(t,&rc,g_fxr[r].buf+(size_t)y0*(size_t)w,w*(int)sizeof(uint32_t));
     }
 }
 #undef FX_S
@@ -10736,7 +10817,8 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                     }
                 }
             } else g_canvas_tex_ready=0;
-            if(visual) bloom_upload_frame(visual,source,texture_w,panel_split);
+            if(visual) { const uint64_t hp_bu0=SDL_GetPerformanceCounter(); bloom_upload_frame(visual,source,texture_w,panel_split);
+                if(g_interactive_perf_frequency) g_hostprof_bu_ms+=(double)(SDL_GetPerformanceCounter()-hp_bu0)*1000.0/(double)g_interactive_perf_frequency; }
             if(g_interactive_perf_frequency) {
                 g_hostprof_convert_ms+=(double)(SDL_GetPerformanceCounter()-hp_convert0)*1000.0/(double)g_interactive_perf_frequency;
                 g_hostprof_uploads++;
@@ -10787,7 +10869,11 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 /* stem burst_<N>: the next N composed window frames go to <dir>/burst_000.bmp.. (QA, scroll artefacts) */
                 if(!strncmp(stem,"burst_",6)) { const int nb=atoi(stem+6); snprintf(g_present_burst_dir,sizeof g_present_burst_dir,"%s",dump_dir);
                     g_present_burst_left=(unsigned)(nb>0&&nb<=400?nb:60); g_present_burst_index=0u; } else
-                if(!strncmp(stem,"pres_",5)) snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s",out); else {
+                if(!strncmp(stem,"pres_",5)) { snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s",out);
+                    if(getenv("GW_SPR_MASK_DUMP") && visual && visual->spr_valid) {   /* QA: the soft_shadows mask (1 sprite, 2+caller shade) */
+                        char mp[900]; snprintf(mp,sizeof mp,"%s/%s.sprmask",dump_dir,stem);
+                        FILE *mf=fopen(mp,"wb"); if(mf) { fwrite(visual->spr_mask,1,sizeof visual->spr_mask,mf); fclose(mf); } }
+                } else {
                 SDL_Surface *ds=SDL_CreateRGBSurfaceWithFormatFrom((void *)g_ifclevel_demo_rgba,g_present_w,480,32,texture_w*(int)sizeof(uint32_t),SDL_PIXELFORMAT_ARGB8888);
                 if(ds) { SDL_SaveBMP(ds,out); SDL_FreeSurface(ds); }
                 if(getenv("GW_MEM_DUMP") && guest_memory) { /* read-only copy of the first 4 MiB of guest memory, for offline diffing */
@@ -16048,12 +16134,19 @@ static void th_triangle(uint32_t callsite,uint32_t va,uint32_t vb,uint32_t vc) {
         C[k]=(int64_t)4*((int64_t)ex[k]*fy[k]-(int64_t)fx[k]*ey[k])*sgn;
     }
     for(int py=miny;py<=maxy;py++) {
-        const int64_t rowi=off0+(int64_t)py*pitch; if(rowi<0 || rowi+maxx>=(int64_t)w*hgt) continue;
-        const int64_t cy=2*py+1,cx0=2*minx+1;
+        /* the row's pixels that fall inside the ring: a row that only partly fits (the destination's x offset carries
+           the last pixels of the last ring row past the end) keeps the pixels that fit instead of being dropped whole,
+           which left that ring row without heights (a 1-pixel AO line moving with the terrain) */
+        const int64_t rowi=off0+(int64_t)py*pitch,total=(int64_t)w*hgt;
+        int lo=minx,hi=maxx;
+        if(rowi+lo<0) lo=(int)(-rowi);
+        if(rowi+hi>=total) hi=(int)(total-1-rowi);
+        if(lo>hi) continue;
+        const int64_t cy=2*py+1,cx0=2*lo+1;
         int64_t e0=A[0]*cx0+B[0]*cy+C[0],e1=A[1]*cx0+B[1]*cy+C[1],e2=A[2]*cx0+B[2]*cy+C[2];
-        float hv=hz0+dhx*((float)minx+0.5f-(float)x[0])+dhy*((float)py+0.5f-(float)y[0]);
+        float hv=hz0+dhx*((float)lo+0.5f-(float)x[0])+dhy*((float)py+0.5f-(float)y[0]);
         int16_t *hr=g_th_ring+rowi; uint8_t *cr=g_th_have+rowi;
-        for(int px=minx;px<=maxx;px++) {
+        for(int px=lo;px<=hi;px++) {
             if(e0>=0 && e1>=0 && e2>=0) { hr[px]=(int16_t)(hv+(hv>=0.0f?0.5f:-0.5f)); cr[px]=1; }
             e0+=2*A[0]; e1+=2*A[1]; e2+=2*A[2]; hv+=dhx;
         }
@@ -18981,12 +19074,24 @@ static uint32_t g_wp_va[4096],g_wp_n[2][4096],g_wp_used,g_wp_lo,g_wp_hi; static 
 static uint8_t g_spr_mask[1152u*640u];
 static uint32_t g_spr_lo,g_spr_hi,g_spr_writes;
 static int g_spr_on;
+/* the caller of the frame drawer 0x91C10 that is running (1..9, set by the lifted code before each of its 9 calls):
+   only the callers that draw cast shadows count as shadow; the others (translucent sprites drawn through the same
+   shade remap, e.g. a plant under the pointer) are sprites. g_shadow_callers: bit k = caller k is a shadow. */
+static volatile int g_shade_caller;
+static unsigned g_shadow_callers=0x3FEu;
+static uint32_t g_shade_caller_n[10];
+void gw_shade_caller(int k) { g_shade_caller=k; }
 static void write_probe_observer(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
     (void)seg; (void)sel; (void)base; (void)user;
     if(g_spr_on && lin>=g_spr_lo && lin<g_spr_hi) {
         uint32_t n=width?width:1u; if(lin+n>g_spr_hi) n=g_spr_hi-lin;
         uint8_t *m=g_spr_mask+(lin-g_spr_lo);
-        if(va==0x0008E4A1u) { for(uint32_t i=0;i<n;i++) if(m[i]!=1u) m[i]=2u; }   /* shadow remap of the pixel below */
+        if(va==0x0008E4A1u) {                                                     /* shade remap of the pixel below */
+            const int k=g_shade_caller>=0 && g_shade_caller<=9?g_shade_caller:0; g_shade_caller_n[k]+=n;
+            const uint8_t mv=(uint8_t)(2+k);                                      /* 2 + caller: QA can tell them apart */
+            if(g_shadow_callers>>k&1u) { for(uint32_t i=0;i<n;i++) if(m[i]!=1u) m[i]=mv; }
+            else memset(m,1,n);                                                   /* translucent sprite: a sprite pixel */
+        }
         else memset(m,1,n);                                                       /* a sprite pixel, on top */
         g_spr_writes++;
     }
@@ -19122,10 +19227,16 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
             if((size_t)sw*sh<=sizeof g_spr_mask) {
                 memset(g_spr_mask,0,(size_t)sw*sh); g_spr_lo=ws; g_spr_hi=ws+sw*sh;
                 if(!g_spr_on) { g_spr_on=1; recomp_set_guest_write_observer(write_probe_observer,NULL);
-                    gw_flag_trace("TRACE soft_shadows sprite mask on (write observer)%c",10); }
+                    {   const char *e=getenv("GW_SHADOW_CALLERS"); if(e && e[0]) g_shadow_callers=(unsigned)strtoul(e,NULL,0); }
+                    gw_flag_trace("TRACE soft_shadows sprite mask on (write observer) shadow callers=0x%03x%c",g_shadow_callers,10); }
             }
             {   static uint32_t f,acc; acc+=g_spr_writes; g_spr_writes=0;
-                if(++f==600u) gw_flag_trace("TRACE soft_shadows sprite writes per game frame avg=%u%c",acc/600u,10); }
+                if(++f==600u) gw_flag_trace("TRACE soft_shadows sprite writes per game frame avg=%u%c",acc/600u,10);
+                if(getenv("GW_SHADE_CALLER_LOG") && f%60u==0u) {   /* QA: shade-remap pixels per caller over 60 game frames */
+                    gw_flag_trace("TRACE shade_callers f=%u c1=%u c2=%u c3=%u c4=%u c5=%u c6=%u c7=%u c8=%u c9=%u none=%u%c",f,
+                        g_shade_caller_n[1],g_shade_caller_n[2],g_shade_caller_n[3],g_shade_caller_n[4],g_shade_caller_n[5],
+                        g_shade_caller_n[6],g_shade_caller_n[7],g_shade_caller_n[8],g_shade_caller_n[9],g_shade_caller_n[0],10);
+                    memset(g_shade_caller_n,0,sizeof g_shade_caller_n); } }
         }
         {   static uint32_t pubs; if(g_th_force && ++pubs%300u==0u) th_dump(); }
         g_interactive_published_snapshot.fx_ring_valid=0; g_interactive_published_snapshot.th_valid=0;
@@ -20314,12 +20425,12 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
             const double hsecs=(double)(frame_end-g_hostprof_window_start)/(double)g_interactive_perf_frequency;
             if(hsecs>=10.0) {
                 const double n=g_hostprof_frames?(double)g_hostprof_frames:1.0,u=g_hostprof_uploads?(double)g_hostprof_uploads:1.0;
-                fprintf(g_tick_profile_file,"TRACE host_window seconds=%.1f render_fps=%.1f texture_uploads_per_s=%.1f mean_frame_ms=%.3f convert_upload_ms_per_upload=%.3f render_copy_ms=%.3f sdl_present_ms=%.3f input_ms=%.3f pacing_wait_ms=%.3f gpu_compose_scale_ms=%.3f epx_ms=%.3f fx_ms=%.3f bloom_ao_ms=%.3f\n",
+                fprintf(g_tick_profile_file,"TRACE host_window seconds=%.1f render_fps=%.1f texture_uploads_per_s=%.1f mean_frame_ms=%.3f convert_upload_ms_per_upload=%.3f render_copy_ms=%.3f sdl_present_ms=%.3f input_ms=%.3f pacing_wait_ms=%.3f gpu_compose_scale_ms=%.3f epx_ms=%.3f fx_ms=%.3f bloom_ao_ms=%.3f bloom_upload_ms_per_upload=%.3f\n",
                     hsecs,g_hostprof_frames/hsecs,g_hostprof_uploads/hsecs,g_hostprof_frame_ms/n,g_hostprof_convert_ms/u,
                     g_hostprof_copy_ms/n,g_hostprof_present_ms/n,input_ms,g_hostprof_wait_ms/n,
                     g_hostprof_gpu_frames?g_hostprof_gpu_ms/g_hostprof_gpu_frames:-1.0,
-                    g_hostprof_epx_n?g_hostprof_epx_ms/g_hostprof_epx_n:-1.0,g_hostprof_fx_ms/n,g_hostprof_bloom_ms/n);
-                g_hostprof_fx_ms=g_hostprof_bloom_ms=0.0;
+                    g_hostprof_epx_n?g_hostprof_epx_ms/g_hostprof_epx_n:-1.0,g_hostprof_fx_ms/n,g_hostprof_bloom_ms/n,g_hostprof_bu_ms/u);
+                g_hostprof_fx_ms=g_hostprof_bloom_ms=g_hostprof_bu_ms=0.0;
                 g_hostprof_gpu_ms=0.0; g_hostprof_gpu_frames=0u; g_hostprof_epx_ms=0.0; g_hostprof_epx_n=0u;
                 fflush(g_tick_profile_file);
                 g_hostprof_window_start=frame_end; g_hostprof_frames=g_hostprof_uploads=0u;
