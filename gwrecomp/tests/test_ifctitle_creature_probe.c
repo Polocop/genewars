@@ -8273,7 +8273,7 @@ static double g_zoom=1.0,g_zoom_target=1.0,g_zoom_x,g_zoom_y,g_zoom_ax,g_zoom_ay
 static int g_zoom_anim; static uint64_t g_zoom_t;
 /* zoom-out canvas: map texture of canvas x=176..1151, y=0..639 (current and previous guest frame, for the
    scroll interpolation); g_canvas_live while the presented frame came from the canvas */
-static SDL_Texture *g_canvas_tex[2]; static int g_canvas_live,g_canvas_tex_ready;
+static SDL_Texture *g_canvas_tex[3]; static int g_canvas_live,g_canvas_tex_ready;
 #define GW_CANVAS_TEX_W (1152-128)
 /* F7 display filter: 0 sharp pixels, 1 EPX (Scale2x on palette indices), 2 CRT mask; saved in gw_display.cfg */
 static int g_filter_mode=-1,g_tex_scale=1;
@@ -11292,7 +11292,16 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 if(g_interactive_perf_frequency) { g_hostprof_epx_ms+=(double)(SDL_GetPerformanceCounter()-epx0)*1000.0/(double)g_interactive_perf_frequency; g_hostprof_epx_n++; }
             } else {
             const uint64_t vu0=SDL_GetPerformanceCounter();
-            const int vup=SDL_UpdateTexture(g_ifclevel_demo_texture,vconv_w<g_present_w?&(SDL_Rect){0,0,vconv_w,480}:NULL,g_ifclevel_demo_rgba,
+            /* zoomed out the strip (HUD) rarely changes: an unchanged strip is not uploaded again (the upload goes into a
+               texture the previous frame drew, which can stall) */
+            static uint32_t strip_last[176u*480u]; static int strip_valid;
+            int same=0;
+            if(vconv_w==176) {
+                same=strip_valid;
+                for(int y=0;y<480 && same;y++) same=!memcmp(strip_last+(size_t)y*176u,g_ifclevel_demo_rgba+(size_t)y*(size_t)texture_w,176u*sizeof(uint32_t));
+                if(!same) { for(int y=0;y<480;y++) memcpy(strip_last+(size_t)y*176u,g_ifclevel_demo_rgba+(size_t)y*(size_t)texture_w,176u*sizeof(uint32_t)); strip_valid=1; }
+            } else strip_valid=0;
+            const int vup=same?0:SDL_UpdateTexture(g_ifclevel_demo_texture,vconv_w<g_present_w?&(SDL_Rect){0,0,vconv_w,480}:NULL,g_ifclevel_demo_rgba,
                                  texture_w*(int)sizeof(uint32_t));
             g_ph[8]+=ph_ms(vu0);
             if(vup!=0) {
@@ -11303,7 +11312,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 g_ifclevel_demo_rgba[(size_t)y*(size_t)texture_w+128u+(unsigned)x]=g_interp_panel_saved[y*48+x];
             g_canvas_live=visual && visual->canvas_valid;
             if(g_canvas_live) {
-                for(int i=0;i<2;i++) if(!g_canvas_tex[i]) {
+                for(int i=0;i<3;i++) if(!g_canvas_tex[i]) {
                     g_canvas_tex[i]=SDL_CreateTexture(g_ifclevel_demo_renderer,SDL_PIXELFORMAT_ARGB8888,
                         SDL_TEXTUREACCESS_STREAMING,GW_CANVAS_TEX_W,(int)GW_CANVAS_H);
                     /* nearest: the canvas is drawn at zoom x k into the supersampled target; only the final target ->
@@ -11317,7 +11326,10 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                     if(visual && !g_terrain_modern_backend && ((fx_active(visual) && !g_wt_ready) || depth_active(visual)) && g_canvas_tex_ready>=1 &&
                        fx_source(visual,&fs,&fp,&fr)) cv_conv_w=48; }
                 if(g_canvas_tex[0] && g_canvas_tex[1]) {
-                    SDL_Texture *t=g_canvas_tex[0]; g_canvas_tex[0]=g_canvas_tex[1]; g_canvas_tex[1]=t;   /* [0] previous, [1] current */
+                    /* [0] previous, [1] current, [2] spare: the new current one is the one drawn two game frames ago,
+                       so its upload never waits for the GPU still drawing the last frame */
+                    SDL_Texture *t=g_canvas_tex[0]; g_canvas_tex[0]=g_canvas_tex[1];
+                    if(g_canvas_tex[2]) { g_canvas_tex[1]=g_canvas_tex[2]; g_canvas_tex[2]=t; } else g_canvas_tex[1]=t;
                     const uint64_t cvt0=SDL_GetPerformanceCounter();
                     if(cv_conv_w<GW_CANVAS_TEX_W) {
                         /* only the panel strip: an update of that rectangle (a lock re-uploads the whole texture) */
