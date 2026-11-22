@@ -9550,7 +9550,8 @@ static void hp_par(int n,hp_fn fn,void *ctx) {
    base when GOOP has no highlight there. Same formulas as before; the displacement only pulls from water ground. */
 typedef struct { int32_t o; int16_t x,y; uint32_t base; } fx_wpx;
 static struct { uint32_t *buf,*base; fx_wpx *px; int n,cap,w,h,y0,y1; } g_fxr[2];
-static uint8_t g_fx_rowany[640];   /* 1 for source rows holding water/GOOP ground at x >= 176 */   /* [0] 640/854 view, [1] zoom-out canvas */
+static uint8_t g_fx_rowany[640];
+static int g_wt_ready;   /* 1 once the GPU water pass compiled: the CPU path then does no water */   /* 1 for source rows holding water/GOOP ground at x >= 176 */   /* [0] 640/854 view, [1] zoom-out canvas */
 static uint8_t *g_fx_g;
 static uint64_t g_fxc_gen=UINT64_MAX; static int g_fxc_key=-1,g_fxc_tq=-1; static uint8_t g_fxc_pal[768];
 static SDL_Texture *g_fxc_tex[2];
@@ -9632,12 +9633,23 @@ static void fx_water_rows(void *cp,int i0,int i1) {    /* region r: the water/GO
 }
 static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view_tex,int view_w,
                        SDL_Texture *canvas_tex,int canvas_ready) {
-    const int water=fx_active(v),depth=depth_active(v);
-    if(!water) g_fx_have_anchor=0;
-    if(!water && !depth) { g_dp_valid=0; return; }
+    const int water_any=fx_active(v),depth=depth_active(v);
+    const int water=water_any && !g_wt_ready;     /* CPU water only until the GPU water pass is ready */
+    if(!water_any) g_fx_have_anchor=0;
+    if(!water_any && !depth) { g_dp_valid=0; return; }
     const uint8_t *src; int pitch,rows;
     if(!fx_source(v,&src,&pitch,&rows)) return;
     fx_classify(v->palette);
+    if(v->generation!=g_fx_last_generation) {   /* world anchor of the water phase (also used by the GPU water pass) */
+        if(g_fx_have_anchor) {
+            const int rw=pitch-128;
+            int d=v->ring_x-g_fx_last_rx; d%=rw; if(d>rw/2) d-=rw; if(d<-rw/2) d+=rw;
+            int e=v->ring_y-g_fx_last_ry; e%=rows; if(e>rows/2) e-=rows; if(e<-rows/2) e+=rows;
+            g_fx_wx+=d; g_fx_wy+=e;
+        } else { g_fx_wx=v->ring_x; g_fx_wy=v->ring_y; }
+        g_fx_last_rx=v->ring_x; g_fx_last_ry=v->ring_y; g_fx_last_generation=v->generation; g_fx_have_anchor=1;
+    }
+    if(!water && !depth) return;
     if(depth && (!g_dp_valid || v->generation!=g_dp_generation)) {
         uint8_t lum[256];
         for(int k=0;k<256;k++) lum[k]=(uint8_t)(((int)v->palette[k*3]*77+(int)v->palette[k*3+1]*150+(int)v->palette[k*3+2]*29)*255/(63*256));
@@ -9651,15 +9663,6 @@ static void fx_refresh(const gw_interactive_visual_snapshot *v,SDL_Texture *view
         }
     }
     const int dp=depth && g_dp_valid && g_dp_pitch==pitch && g_dp_rows==rows;
-    if(v->generation!=g_fx_last_generation) {
-        if(g_fx_have_anchor) {
-            const int rw=pitch-128;
-            int d=v->ring_x-g_fx_last_rx; d%=rw; if(d>rw/2) d-=rw; if(d<-rw/2) d+=rw;
-            int e=v->ring_y-g_fx_last_ry; e%=rows; if(e>rows/2) e-=rows; if(e<-rows/2) e+=rows;
-            g_fx_wx+=d; g_fx_wy+=e;
-        } else { g_fx_wx=v->ring_x; g_fx_wy=v->ring_y; }
-        g_fx_last_rx=v->ring_x; g_fx_last_ry=v->ring_y; g_fx_last_generation=v->generation; g_fx_have_anchor=1;
-    }
     uint32_t lut[256];
     for(unsigned k=0;k<256u;k++)
         lut[k]=0xFF000000u|((uint32_t)v->palette[k*3u+0u]*255u/63u<<16)|((uint32_t)v->palette[k*3u+1u]*255u/63u<<8)|((uint32_t)v->palette[k*3u+2u]*255u/63u);
@@ -9739,6 +9742,8 @@ static struct {
     /* terrain_ao: full-resolution AO factor in presentation coordinates, drawn like the bloom extraction */
     GLuint fbo_ao,tex_ao,prog_ao;
     GLint u_ao_idx,u_ao_texel,u_ao_strength,u_comp_ao,u_comp_ao_on;
+    GLuint fbo_wt,tex_wt,prog_wt,kind_tex; int wt_w,wt_h,wt_failed; uint8_t kind_pal[768]; int kind_ok;
+    GLint u_wt_idx,u_wt_lut,u_wt_kind,u_wt_texel,u_wt_off,u_wt_tq,u_comp_wt,u_comp_wt_on;
     uint8_t *up_buf;
     uint8_t *hud_buf;
     /* GL entry points resolved via SDL_GL_GetProcAddress (no -lopengl32 link needed) */
@@ -9978,11 +9983,14 @@ static int bloom_ensure_init(int logical_w) {
             "uniform float u_intensity;\n"
             "uniform sampler2D u_ao;\n"
             "uniform float u_ao_on;\n"
+            "uniform sampler2D u_wt;\n"
+            "uniform float u_wt_on;\n"
             "varying vec2 v_uv;\n"
             "varying vec2 v_suv;\n"
             "void main(){\n"
             "  vec3 base=texture2D(u_base,v_uv).rgb;\n"
             "  if(texture2D(u_hud_mask,v_suv).r>0.5){ gl_FragColor=vec4(base,1.0); return; }\n"
+            "  if(u_wt_on>0.5){ vec4 w=texture2D(u_wt,v_suv); base=mix(base,w.rgb,w.a); }\n"
             "  if(u_ao_on>0.5) base*=texture2D(u_ao,v_suv).r;\n"
             "  vec3 b=texture2D(u_bloom,v_suv).rgb*u_intensity;\n"
             "  if(dot(b,vec3(1.0))<1e-5){ gl_FragColor=vec4(base,1.0); return; }\n"
@@ -10042,6 +10050,8 @@ static int bloom_ensure_init(int logical_w) {
         g_bloom.u_comp_int=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_intensity");
         g_bloom.u_comp_ao=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_ao");
         g_bloom.u_comp_ao_on=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_ao_on");
+        g_bloom.u_comp_wt=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_wt");
+        g_bloom.u_comp_wt_on=g_bloom.GetUniformLocation(g_bloom.prog_comp,"u_wt_on");
         g_bloom.u_ao_idx=g_bloom.GetUniformLocation(g_bloom.prog_ao,"u_idx_tex");
         g_bloom.u_ao_texel=g_bloom.GetUniformLocation(g_bloom.prog_ao,"u_texel");
         g_bloom.u_ao_strength=g_bloom.GetUniformLocation(g_bloom.prog_ao,"u_strength");
@@ -10267,12 +10277,15 @@ static void bu_canvas_rows(void *cp,int y0,int y1) {
     }
 }
 static int part_active(const gw_interactive_visual_snapshot *v);
+static int wt_init(void);
+static void wt_upload_kind(const uint8_t *pal);
 static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_video_surface *source,
                                int view_w,int panel_split) {
-    if(!(bloom_active(v) || ao_gpu_active(v) || part_active(v)) || !source) return;
+    if(!(bloom_active(v) || ao_gpu_active(v) || part_active(v) || fx_active(v)) || !source) return;
     if(!bloom_ensure_init(view_w)) return;
     bloom_classify(v->palette);
     fx_classify(v->palette);
+    if(fx_active(v) && wt_init()) wt_upload_kind(v->palette);
     const int th=ao_gpu_active(v) && v->th_valid;
 
     GLint prev_act=0,prev_tex=0,prev_align=4,prev_rl=0;
@@ -10631,6 +10644,7 @@ static void bloom_draw_map_rect(float lx0,float ly0,float lw,float lh,
 
 /* draws the map layers (zoom-out canvas, interpolated view pair, zoomed or plain view) into the bound FBO with the
    bound program; texture unit 0 gets the index/flags/height textures, texel_loc the source texel size */
+static int g_layers_cur_only;   /* 1: bloom_draw_map_layers draws only the current snapshot's layer (water pass) */
 static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
     const int vw=g_present_w;
     if(g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999) {
@@ -10639,7 +10653,7 @@ static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
         const int idx=(g_bloom.canvas_ready>=2 && (g_interp_dx||g_interp_dy) && interp_a<1.0)?g_interp_dx:0;
         const int idy=(g_bloom.canvas_ready>=2 && (g_interp_dx||g_interp_dy) && interp_a<1.0)?g_interp_dy:0;
         g_bloom.Uniform2f(texel_loc,1.0f/(float)GW_CANVAS_TEX_W,1.0f/(float)GW_CANVAS_H);
-        if(interp_a<1.0 && (idx||idy)) {
+        if(interp_a<1.0 && (idx||idy) && !g_layers_cur_only) {
             g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[0]);
             bloom_draw_map_rect((float)(128.0+(GW_CANVAS_MAPX0+interp_a*idx-ux)*z),(float)((interp_a*idy-uy)*z),
                                 tw,th,0.0f,0.0f,1.0f,1.0f,vw);
@@ -10654,9 +10668,11 @@ static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
         const double zz=g_zoom,zx=g_zoom_x,zy=g_zoom_y;
         const float mw=(float)((vw-128)*zz),mh=(float)(480.0*zz);
         g_bloom.Uniform2f(texel_loc,1.0f/(float)vw,1.0f/480.0f);
+        if(!g_layers_cur_only) {
         g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.view_tex[0]);
         bloom_draw_map_rect((float)(128.0+(interp_a*g_interp_dx-zx)*zz),(float)((interp_a*g_interp_dy-zy)*zz),
                             mw,mh,u0,0.0f,1.0f,1.0f,vw);
+        }
         g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.view_tex[1]);
         bloom_draw_map_rect((float)(128.0+(-(1.0-interp_a)*g_interp_dx-zx)*zz),
                             (float)((-(1.0-interp_a)*g_interp_dy-zy)*zz),mw,mh,u0,0.0f,1.0f,1.0f,vw);
@@ -10674,10 +10690,83 @@ static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
     }
 }
 
+/* ---- water_effects on the GPU: the same ripple/glint (water) and highlight (GOOP) formulas as fx_px, evaluated per
+   source texel of the current layer's index texture (R = palette index, G bit 1 = the pixel is ring terrain) with the
+   palette LUT and a 256-entry kind table, into a buffer the size of the scaled frame; the composite lays it over the
+   base. Nothing per pixel on the CPU and no per-frame texture upload (presentation only). */
+static int wt_init(void) {
+    if(g_bloom.prog_wt) return 1;
+    if(g_bloom.wt_failed || g_bloom.failed) return 0;
+    static const char *vs=
+        "#version 120\n"
+        "attribute vec2 a_pos;\n attribute vec2 a_uv;\n attribute vec2 a_suv;\n"
+        "varying vec2 v_uv;\n"
+        "void main(){ v_uv=a_uv; gl_Position=vec4(a_pos,0.0,1.0); }\n";
+    static const char *fs=
+        "#version 120\n"
+        "uniform sampler2D u_idx;\n uniform sampler2D u_lut;\n uniform sampler2D u_kind;\n"
+        "uniform vec2 u_texel;\n uniform vec2 u_off;\n uniform float u_tq;\n"
+        "varying vec2 v_uv;\n"
+        "float S(float p){ return sin(mod(p,1024.0)*0.0061359232)*4096.0; }\n"
+        "float kindof(float k){ return floor(texture2D(u_kind,vec2((k+0.5)/256.0,0.5)).r*3.0+0.5); }\n"
+        "float rnd(float v){ return v>=0.0?floor((v+2048.0)/4096.0):-floor((-v+2048.0)/4096.0); }\n"
+        "void main(){\n"
+        "  vec4 c=texture2D(u_idx,v_uv);\n"
+        "  float k=floor(c.r*255.0+0.5); float gnd=mod(floor(floor(c.g*255.0+0.5)/2.0),2.0);\n"
+        "  float kd=kindof(k);\n"
+        "  if(gnd<0.5 || kd<0.5){ gl_FragColor=vec4(0.0); return; }\n"
+        "  vec2 tp=floor(v_uv/u_texel);\n"
+        "  float wx=tp.x+u_off.x, wy=tp.y+u_off.y, tq=u_tq;\n"
+        "  if(kd<1.5){\n"
+        "    float dxq=(S(wy*24.0+tq*5.0)*13.0+S((wx+wy)*13.0-tq*3.5)*7.0)/20.0;\n"
+        "    float dyq=S(wx*19.0+tq*4.5);\n"
+        "    float dx=rnd(dxq*1.2), dy=rnd(dyq*0.6), ks=k;\n"
+        "    if(dx!=0.0 || dy!=0.0){\n"
+        "      vec4 n=texture2D(u_idx,(tp+vec2(dx,dy)+0.5)*u_texel);\n"
+        "      float nk=floor(n.r*255.0+0.5), ng=mod(floor(floor(n.g*255.0+0.5)/2.0),2.0), nkd=kindof(nk);\n"
+        "      if(ng>0.5 && nkd>0.5 && nkd<1.5) ks=nk;\n"
+        "    }\n"
+        "    float warp=S(wy*9.0+tq*2.0)/56.0+S(wx*7.0-tq*3.0)/72.0;\n"
+        "    float cq=4096.0-abs(S(wx*11.0+wy*5.0+warp+tq*2.0)); cq=cq*cq/4096.0; cq=cq*cq/4096.0;\n"
+        "    vec3 p=texture2D(u_lut,vec2((ks+0.5)/256.0,0.25)).rgb;\n"
+        "    gl_FragColor=vec4(min(p*(1.0+cq*0.07/4096.0),vec3(1.0)),1.0);\n"
+        "  } else {\n"
+        "    float sv=S(wx*9.0+wy*6.0+tq);\n"
+        "    if(sv<=0.0){ gl_FragColor=vec4(0.0); return; }\n"
+        "    sv=sv/4096.0; sv*=sv; sv*=sv; sv*=sv;\n"
+        "    float hue=tq*2.0+wx*5.0-wy*3.0;\n"
+        "    vec3 ir=vec3(2048.0)+vec3(S(hue),S(hue+341.0),S(hue+683.0))/2.0;\n"
+        "    vec3 p=texture2D(u_lut,vec2((k+0.5)/256.0,0.25)).rgb;\n"
+        "    gl_FragColor=vec4(min(p+sv*ir*vec3(70.0,70.0,80.0)/(4096.0*255.0),vec3(1.0)),1.0);\n"
+        "  }\n"
+        "}\n";
+    GLuint p=bloom_link_program(vs,fs);
+    if(!p) { g_bloom.wt_failed=1; gw_flag_trace("TRACE water_effects gpu pass unavailable (CPU water kept)%c",10); return 0; }
+    g_bloom.prog_wt=p;
+    g_bloom.u_wt_idx=g_bloom.GetUniformLocation(p,"u_idx"); g_bloom.u_wt_lut=g_bloom.GetUniformLocation(p,"u_lut");
+    g_bloom.u_wt_kind=g_bloom.GetUniformLocation(p,"u_kind"); g_bloom.u_wt_texel=g_bloom.GetUniformLocation(p,"u_texel");
+    g_bloom.u_wt_off=g_bloom.GetUniformLocation(p,"u_off"); g_bloom.u_wt_tq=g_bloom.GetUniformLocation(p,"u_tq");
+    g_bloom.GenTextures(1,&g_bloom.kind_tex);
+    g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.kind_tex);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+    g_bloom.TexImage2D(GL_TEXTURE_2D,0,GL_R8,256,1,0,GL_RED,GL_UNSIGNED_BYTE,NULL);
+    g_bloom.kind_ok=0; g_wt_ready=1;
+    gw_flag_trace("TRACE water_effects gpu pass on%c",10);
+    return 1;
+}
+/* kind table (0 none, 1 water, 2 GOOP) of the current palette, as fx_classify decided it */
+static void wt_upload_kind(const uint8_t *pal) {
+    if(!g_bloom.prog_wt || (g_bloom.kind_ok && !memcmp(g_bloom.kind_pal,pal,768))) return;
+    uint8_t k8[256]; for(int k=0;k<256;k++) k8[k]=(uint8_t)(g_fx_kind[k]==FX_WATER?85:g_fx_kind[k]==FX_GOOP?170:0);
+    g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.kind_tex);
+    g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,1,GL_RED,GL_UNSIGNED_BYTE,k8);
+    memcpy(g_bloom.kind_pal,pal,768); g_bloom.kind_ok=1;
+}
 static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SDL_Texture *scale_target,
                                       const gw_present_geo *geo,double interp_a) {
-    const int bloom_on=bloom_active(v),ao_on0=ao_gpu_active(v),part_on=part_active(v);
-    const int active=(bloom_on || ao_on0 || part_on) && bloom_ensure_init(g_present_w) && g_bloom.view_tex[1];
+    const int bloom_on=bloom_active(v),ao_on0=ao_gpu_active(v),part_on=part_active(v),wt_on0=fx_active(v) && !g_bloom.wt_failed;
+    const int active=(bloom_on || ao_on0 || part_on || wt_on0) && bloom_ensure_init(g_present_w) && g_bloom.view_tex[1];
     const int ao_on=active && ao_on0 && g_bloom.fbo_ao;
     {   static int last_ao=-1; if(ao_on!=last_ao) { last_ao=ao_on; gw_flag_trace("TRACE terrain_ao gpu=%d strength=%.2f%c",ao_on,(double)g_ini_terrain_ao_strength,10); } }
     if(active!=g_bloom.last_active) {
@@ -10795,6 +10884,34 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
         bloom_draw_map_layers(interp_a,g_bloom.u_ao_texel);
         g_bloom.Disable(GL_SCISSOR_TEST);
     }
+    /* water_effects (GPU): current layer, at the scaled frame's resolution */
+    int wt_on=active && wt_on0 && wt_init() && g_bloom.kind_ok;
+    if(wt_on && (g_bloom.wt_w!=geo->tw || g_bloom.wt_h!=geo->th || !g_bloom.fbo_wt)) {
+        if(g_bloom.fbo_wt) { g_bloom.DeleteFramebuffers(1,&g_bloom.fbo_wt); g_bloom.DeleteTextures(1,&g_bloom.tex_wt); g_bloom.fbo_wt=g_bloom.tex_wt=0; }
+        if(bloom_make_fbo(&g_bloom.fbo_wt,&g_bloom.tex_wt,geo->tw,geo->th,GL_RGBA8)) {
+            g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_wt);
+            g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+            g_bloom.wt_w=geo->tw; g_bloom.wt_h=geo->th;
+        } else { g_bloom.wt_failed=1; g_wt_ready=0; wt_on=0; }
+    }
+    if(wt_on) {
+        const int vw=g_present_w;
+        g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_wt);
+        g_bloom.Viewport(0,0,g_bloom.wt_w,g_bloom.wt_h);
+        g_bloom.Disable(GL_SCISSOR_TEST);
+        g_bloom.ClearColor(0.0f,0.0f,0.0f,0.0f); g_bloom.Clear(GL_COLOR_BUFFER_BIT);
+        g_bloom.Enable(GL_SCISSOR_TEST); g_bloom.Scissor((int)(128.0*g_bloom.wt_w/vw),0,g_bloom.wt_w,g_bloom.wt_h);
+        g_bloom.UseProgram(g_bloom.prog_wt);
+        g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_bloom.u_wt_lut,1);
+        g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.kind_tex); g_bloom.Uniform1i(g_bloom.u_wt_kind,2);
+        g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.Uniform1i(g_bloom.u_wt_idx,0);
+        const int canvas_layer=g_canvas_live && g_bloom.canvas_ready && g_zoom<0.9999;
+        g_bloom.Uniform2f(g_bloom.u_wt_off,(float)((canvas_layer?128.0:0.0)+(double)g_fx_wx),(float)(double)g_fx_wy);
+        {   const uint64_t f=SDL_GetPerformanceFrequency(),t=SDL_GetPerformanceCounter();
+            g_bloom.Uniform1f(g_bloom.u_wt_tq,(float)((double)(t%(f*4096u))*64.0/(double)f)); }
+        g_layers_cur_only=1; bloom_draw_map_layers(interp_a,g_bloom.u_wt_texel); g_layers_cur_only=0;
+        g_bloom.Disable(GL_SCISSOR_TEST);
+    }
     /* Pass 3: Soft-Shoulder Additive Composition onto FBO 0 */
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,0);
     g_bloom.Viewport(geo->dst.x,geo->oh-geo->dst.y-geo->dst.h,geo->dst.w,geo->dst.h);
@@ -10812,6 +10929,10 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.ActiveTexture(GL_TEXTURE3); g_bloom.BindTexture(GL_TEXTURE_2D,ao_on?g_bloom.tex_ao:0u);
     g_bloom.Uniform1i(g_bloom.u_comp_ao,3);
     g_bloom.Uniform1f(g_bloom.u_comp_ao_on,ao_on?1.0f:0.0f);
+    g_bloom.ActiveTexture(GL_TEXTURE4); g_bloom.BindTexture(GL_TEXTURE_2D,wt_on?g_bloom.tex_wt:0u);
+    g_bloom.Uniform1i(g_bloom.u_comp_wt,4);
+    g_bloom.Uniform1f(g_bloom.u_comp_wt_on,wt_on?1.0f:0.0f);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
 
     const float u0=(float)geo->src.x/(float)geo->tw*st_tw;
     const float u1=(float)(geo->src.x+geo->src.w)/(float)geo->tw*st_tw;
@@ -11193,7 +11314,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                    texture already in use), only the panel strip (texture x < 48) is converted here */
                 int cv_conv_w=GW_CANVAS_TEX_W;
                 {   const uint8_t *fs; int fp,fr;
-                    if(visual && !g_terrain_modern_backend && (fx_active(visual) || depth_active(visual)) && g_canvas_tex_ready>=1 &&
+                    if(visual && !g_terrain_modern_backend && ((fx_active(visual) && !g_wt_ready) || depth_active(visual)) && g_canvas_tex_ready>=1 &&
                        fx_source(visual,&fs,&fp,&fr)) cv_conv_w=48; }
                 if(g_canvas_tex[0] && g_canvas_tex[1]) {
                     SDL_Texture *t=g_canvas_tex[0]; g_canvas_tex[0]=g_canvas_tex[1]; g_canvas_tex[1]=t;   /* [0] previous, [1] current */
