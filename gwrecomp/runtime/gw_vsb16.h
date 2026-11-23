@@ -37,4 +37,8 @@ void gw_vsb16_close(void);
 void gw_vsb16_set_enhanced(int on);
 int  gw_vsb16_speech_playing(void);
 const gw_vsb16_stats *gw_vsb16_get_stats(void);
+/* sfx_volume (gwrecomp.ini, 0..100): host output gain of the digital channel (effects and speech, mixed by the game's
+   own Miles mixer into one DMA stream); the guest buffers are only read */
+void gw_vsb16_set_user_volume(int percent);
+double gw_vsb16_take_rms(void);         /* QA: RMS of the queued output since the last call (0..1), -1 when nothing queued */
 #endif

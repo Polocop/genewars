@@ -1,5 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "gw_cdda_audio.h"
+#include <math.h>
 
 #include <SDL.h>
 #include <errno.h>
@@ -58,7 +59,14 @@ static gw_cdda_state g_cdda;
 /* enhanced_audio: smaller queue (about 0.3 s instead of 1 s) so the music gain follows the speech flag in time, and the
    ducking gain: 1.0 -> 0.70 while speech plays, ramped over about 300 ms each way (per stereo frame). */
 static volatile int g_cdda_enh,g_cdda_duck;
+/* user volume 0..100 -> amplitude: (v/100)^1.66, so 50 % is about -10 dB (perceived half loudness) and 0 is silence;
+   applied to the host output only, ramped per stereo frame over ~20 ms (no clicks) */
+static float gw_user_gain_of(int v) { if(v<=0) return 0.0f; if(v>=100) return 1.0f; return powf((float)v/100.0f,1.66f); }
 static float g_cdda_gain=1.0f;
+static volatile float g_cdda_user_target=1.0f; static float g_cdda_user=1.0f;
+static double g_cdda_sq; static uint64_t g_cdda_sq_n;
+void gw_cdda_set_user_volume(int percent) { g_cdda_user_target=gw_user_gain_of(percent); }
+double gw_cdda_take_rms(void) { const double r=g_cdda_sq_n?sqrt(g_cdda_sq/(double)g_cdda_sq_n):-1.0; g_cdda_sq=0.0; g_cdda_sq_n=0; return r; }
 void gw_cdda_set_enhanced(int on) { g_cdda_enh=on; }
 float gw_cdda_gain(void) { return g_cdda_gain; }
 const char *gw_cdda_status(void) {
@@ -421,6 +429,11 @@ void gw_cdda_pump(void) {
                 else if(g_cdda_gain<target) { g_cdda_gain+=step; if(g_cdda_gain>target) g_cdda_gain=target; }
                 mixed_left=(int32_t)((float)mixed_left*g_cdda_gain); mixed_right=(int32_t)((float)mixed_right*g_cdda_gain);
             }
+            {   const float tg=g_cdda_user_target,st=1.0f/(0.02f*(float)GW_CDDA_RATE);
+                if(g_cdda_user<tg) { g_cdda_user+=st; if(g_cdda_user>tg) g_cdda_user=tg; }
+                else if(g_cdda_user>tg) { g_cdda_user-=st; if(g_cdda_user<tg) g_cdda_user=tg; }
+                mixed_left=(int32_t)((float)mixed_left*g_cdda_user); mixed_right=(int32_t)((float)mixed_right*g_cdda_user);
+                const double fl=(double)mixed_left/32768.0,fr=(double)mixed_right/32768.0; g_cdda_sq+=fl*fl+fr*fr; g_cdda_sq_n+=2u; }
             const uint16_t out_left=(uint16_t)gw_cdda_saturate(mixed_left);
             const uint16_t out_right=(uint16_t)gw_cdda_saturate(mixed_right);
             out[i]=(uint8_t)out_left; out[i+1u]=(uint8_t)(out_left>>8);

@@ -18,6 +18,9 @@ void gw_cdda_shutdown(void);
 void gw_cdda_set_enhanced(int on);
 void gw_cdda_set_duck(int on);
 float gw_cdda_gain(void);              /* current ducking gain (QA trace) */
+/* music_volume (gwrecomp.ini, 0..100): host output gain of the CD music; the guest's own MSCDEX volume is untouched */
+void gw_cdda_set_user_volume(int percent);
+double gw_cdda_take_rms(void);          /* QA: RMS of the queued output since the last call (0..1), -1 when nothing queued */
 const char *gw_cdda_status(void);      /* playing/paused/queued bytes (QA trace) */
 
 #endif

@@ -8501,7 +8501,8 @@ static int g_ini_terrain_3d_hd_tiles=1;  /* terrain_3d_hd_tiles: optional HD B32
 static char g_ini_terrain_3d_hd_dir[600];/* terrain_3d_hd_dir: folder holding <BANK>/atlas.png or tile_NNN.png (default: hd_textures next to the exe) */
 static int g_ini_terrain_3d_biome_presets=1; /* terrain_3d_biome_presets: light / particle preset from the level's B32 bank */
 static int g_ini_terrain_3d_smooth_zoom=1;   /* terrain_3d_smooth_zoom: eased wheel zoom (0 = immediate steps) */
-static int g_ini_cursor_120hz=1;             /* cursor_120hz: pointer at the host mouse every presented frame (0 = per game tick) */
+static int g_ini_cursor_120hz=1;
+static int g_ini_music_volume=100,g_ini_sfx_volume=100;   /* music_volume / sfx_volume: host output gain 0..100 */             /* cursor_120hz: pointer at the host mouse every presented frame (0 = per game tick) */
 static int g_pl_on=1,g_hd_on=1;          /* live toggles: Ctrl+F11 point lights, Ctrl+F12 HD tiles (host presentation thread) */
 static int g_tl_scale=2;                 /* 3D terrain: lit layers at this many times the canvas resolution */
 static int g_ini_clean_horizon=1;   /* clean_horizon: drop 1-pixel horizon slivers from the presented frame */
@@ -8610,6 +8611,8 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"terrain_3d_biome_presets")) g_ini_terrain_3d_biome_presets=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_smooth_zoom")) g_ini_terrain_3d_smooth_zoom=atoi(val)!=0;
         else if(!strcmp(key,"cursor_120hz")) g_ini_cursor_120hz=atoi(val)!=0;
+        else if(!strcmp(key,"music_volume")) { const int v=atoi(val); g_ini_music_volume=v<0?0:v>100?100:v; }
+        else if(!strcmp(key,"sfx_volume")) { const int v=atoi(val); g_ini_sfx_volume=v<0?0:v>100?100:v; }
         else if(!strcmp(key,"terrain_3d_hd_tiles")) g_ini_terrain_3d_hd_tiles=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_hd_dir")) snprintf(g_ini_terrain_3d_hd_dir,sizeof g_ini_terrain_3d_hd_dir,"%s",val);
         else if(!strcmp(key,"clean_horizon")) g_ini_clean_horizon=atoi(val)!=0;
@@ -9257,6 +9260,13 @@ extern uint32_t g_gw_audio_scale_q8;
 static void enhanced_audio_tick(void) {
     const int on=g_cli_play_mode && g_ini_enhanced_audio;
     gw_vsb16_set_enhanced(on); gw_cdda_set_enhanced(on);
+    gw_cdda_set_user_volume(g_ini_music_volume); gw_vsb16_set_user_volume(g_ini_sfx_volume);
+    {   /* QA (GW_AUDIO_METER=1): RMS of what each host output queued, every 2 s */
+        static int meter=-1; static uint32_t t0;
+        if(meter<0) { const char *e=getenv("GW_AUDIO_METER"); meter=e && e[0]=='1'; }
+        if(meter && SDL_GetTicks()-t0>=2000u) { t0=SDL_GetTicks();
+            const double mr=gw_cdda_take_rms(),sr=gw_vsb16_take_rms();
+            gw_flag_trace("TRACE audio_meter music_volume=%d sfx_volume=%d music_rms=%.5f sfx_rms=%.5f%c",g_ini_music_volume,g_ini_sfx_volume,mr,sr,10); } }
     {   static int last_duck=-1; const int duck=on && gw_vsb16_speech_playing();
         if(duck!=last_duck) {
             gw_flag_trace("TRACE enhanced_audio cdda_duck=%d music_gain=%.2f cdda_queue=%s%c",duck,gw_cdda_gain(),gw_cdda_status(),10);
@@ -10669,6 +10679,7 @@ static void pl_extract(const gw_interactive_visual_snapshot *v,const gw_terrain_
             for(int x=x0;x<1152;x+=4,rx=(rx+4)&1023) {
                 const uint8_t k=row[x];
                 if(!any[k]) continue;
+                if(x<176 && (y>=480 || v->canvas_panel[y*48+(x-128)])) continue;   /* panel art of the HUD, not the map */
                 const uint8_t sw=g_pl_sw[k],gw=g_pl_gw[k],goop=g_fx_kind[k]==FX_GOOP;
                 const int ground=k==rr[rx],b=brow+((x-128)>>5);
                 if(sw && !ground) { const float w=(float)sw; fw[b]+=w; fr[b]+=w*pal[k*3]; fg[b]+=w*pal[k*3+1]; fb[b]+=w*pal[k*3+2]; fx[b]+=w*x; fy[b]+=w*y; }
@@ -10699,6 +10710,19 @@ static void pl_extract(const gw_interactive_visual_snapshot *v,const gw_terrain_
         }
         #undef PL_ADD
     }
+    {   /* only sources inside the map window the player sees (24 px margin): a light from a ship, beam or glint that is
+           off screen, or behind the HUD, would glow out of nowhere at the edge of the map */
+        const double mw=(double)g_present_w-128.0,z=g_zoom>0.1?g_zoom:1.0;
+        const double ux=GW_CANVAS_VX0+g_zoom_x,uy=GW_CANVAS_VY0+g_zoom_y,vw=mw/z,vh=480.0/z,m=24.0;
+        int k=0;
+        for(int i=0;i<nc;i++) {
+            const double x=cand[i].sx,y=cand[i].sy;
+            if(x>=ux-m && x<=ux+vw+m && y>=uy-m && y<=uy+vh+m) cand[k++]=cand[i];
+            else { static int cut; if(cut<12) { cut++; gw_flag_trace("TRACE terrain_3d light dropped off the visible map class=%d canvas=%.0f,%.0f%c",cand[i].cls,x,y,10); } }
+        }
+        nc=k; }
+    {   static int logged; for(int i=0;i<nc && logged<24;i++) if(cand[i].sx<200.0f) { logged++;
+            gw_flag_trace("TRACE terrain_3d light near HUD edge class=%d canvas=%.0f,%.0f intensity=%.2f%c",cand[i].cls,(double)cand[i].sx,(double)cand[i].sy,(double)cand[i].it,10); } }
     /* strongest first; one light per source cluster (screen distance by class) */
     for(int i=1;i<nc;i++) { pl_cand t=cand[i]; int j=i-1; while(j>=0 && cand[j].score<t.score) { cand[j+1]=cand[j]; j--; } cand[j+1]=t; }
     int used[PL_CANDS]={0};
@@ -10780,6 +10804,9 @@ static void gm_upload(const gw_interactive_visual_snapshot *v) {
     }
     g_gm.shadows=g_ini_soft_shadows && v->spr_valid;
     g_gm.mesh=(v->spr_valid && v->terrain_mesh.count)?&v->terrain_mesh:NULL;
+    {   static int last=-1; const int now=g_gm.mesh!=NULL;
+        if(now!=last) { gw_flag_trace("TRACE terrain_3d mesh %s (triangles=%u spr_valid=%d th_valid=%d fx_ring_valid=%d turn=%u)%c",now?"on":"OFF",
+            v->terrain_mesh.count/3u,v->spr_valid,v->th_valid,v->fx_ring_valid,v->turn,10); last=now; } }
     if(g_gm.shadows || g_gm.mesh) gm_rows(g_gm.t_msk,0,639,GL_RED,v->spr_mask,1u);
     if(g_gm.shadows) {
         g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_shade); g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,1,GL_RED,GL_UNSIGNED_BYTE,v->shade_t); }
@@ -13622,6 +13649,11 @@ static void smka_frame(void) {
         if(out) for(size_t i=0;i<frames_out;i++) for(size_t c=0;c<2u;c++) {
             const size_t at=(i*ch+(c<ch?c:0u))*bps;
             out[2*i+c]=bps==2u?(int16_t)(a[at]|a[at+1]<<8):(int16_t)((a[at]-128)<<8); }
+    }
+    if(out && frames_out) {   /* host output gain: the louder of music_volume / sfx_volume (videos carry both) */
+        const int vv=g_ini_music_volume>g_ini_sfx_volume?g_ini_music_volume:g_ini_sfx_volume;
+        if(vv<100) { const float gn=vv<=0?0.0f:powf((float)vv/100.0f,1.66f);
+            for(size_t i=0;i<frames_out*2u;i++) out[i]=(int16_t)((float)out[i]*gn); }
     }
     if(out && frames_out && g_smka.dev && SDL_QueueAudio(g_smka.dev,out,(Uint32)(frames_out*4u))==0) g_smka.queued_bytes+=frames_out*4u;
     if(out) g_smka.frames_decoded++;
@@ -20617,6 +20649,7 @@ void gw_frame_drawn(unsigned int fn,unsigned int x,unsigned int y,unsigned int f
     g_fr[g_fr_n].caller=(uint8_t)g_draw_caller; g_fr[g_fr_n].fn=(uint8_t)(fn==0x919C0u?0:fn==0x91AE0u?1:2); g_fr_n++;
 }
 static void ev_add(int e,uint32_t off) { const int x=(int)(off%g_spr_w),y=(int)(off/g_spr_w);
+    if(x<176) return;   /* HUD and panel art are redrawn through the same routines: never part of the event's box */
     if(!g_ev[e].n) { g_ev[e].x0=g_ev[e].x1=x; g_ev[e].y0=g_ev[e].y1=y; }
     else { if(x<g_ev[e].x0) g_ev[e].x0=x; if(x>g_ev[e].x1) g_ev[e].x1=x; if(y<g_ev[e].y0) g_ev[e].y0=y; if(y>g_ev[e].y1) g_ev[e].y1=y; }
     g_ev[e].n++; }
@@ -22432,13 +22465,19 @@ static HFONT gl_smaller(HFONT f) {
 }
 /* fit s into maxw units: same font, else smaller ones, else cut with an ellipsis. Returns the font used, the visible
    length in *n and the width in canvas pixels in *wpx. */
+/* a text that had to shrink or be cut (counted; named in the trace of a QA shot run, GW_LAUNCHER_SHOT) */
+static void gl_overflow_note(const wchar_t *s) {
+    GL.overflow++;
+    static int shot=-1; if(shot<0) { const char *e=getenv("GW_LAUNCHER_SHOT"); shot=e && e[0]; }
+    if(shot) { char u[256]; WideCharToMultiByte(CP_UTF8,0,s,-1,u,sizeof u,NULL,NULL); gw_flag_trace("TRACE launcher text_shrunk '%s'%c",u,10); }
+}
 static HFONT gl_fit(HFONT f,const wchar_t *s,int maxw,int *n,int *wpx) {
     const int lim=maxw*GL_S,len=(int)wcslen(s);
-    for(HFONT t=f;t;t=gl_smaller(t)) { const SIZE z=gl_extent(t,s,len); if(z.cx<=lim) { *n=len; *wpx=z.cx; if(t!=f) GL.overflow++; return t; } }
+    for(HFONT t=f;t;t=gl_smaller(t)) { const SIZE z=gl_extent(t,s,len); if(z.cx<=lim) { *n=len; *wpx=z.cx; if(t!=f) gl_overflow_note(s); return t; } }
     HFONT t=GL.f_tiny; int k=len;
     static wchar_t buf[256];
-    while(k>0) { const int m=k<250?k:250; wmemcpy(buf,s,(size_t)m); buf[m]=0x2026; const SIZE z=gl_extent(t,buf,m+1); if(z.cx<=lim) { *n=-(m+1); *wpx=z.cx; GL.overflow++; return t; } k--; }
-    *n=0; *wpx=0; GL.overflow++; return t;
+    while(k>0) { const int m=k<250?k:250; wmemcpy(buf,s,(size_t)m); buf[m]=0x2026; const SIZE z=gl_extent(t,buf,m+1); if(z.cx<=lim) { *n=-(m+1); *wpx=z.cx; gl_overflow_note(s); return t; } k--; }
+    *n=0; *wpx=0; gl_overflow_note(s); return t;
 }
 static void gl_text_fit(HFONT f,int x,int y,int maxw,uint32_t c,const wchar_t *s) {
     int n=0,w=0; HFONT t=gl_fit(f,s,maxw,&n,&w);
@@ -22623,7 +22662,7 @@ static void gl_draw_play(void) {
     if(gl_button((gl_rect){22,320,124,26},GWT(L"IMAGEN DEL CD",L"CD IMAGE"),0,GL.f_small)) GL.result=3;
     {   wchar_t w[300];
         if(g_ini_cd_cue[0]) { const char *b=strrchr(g_ini_cd_cue,92); gl_wide(b?b+1:g_ini_cd_cue,w,300); }
-        else wcscpy(w,GWT(L"(se busca sola junto a la carpeta)",L"(looked for next to the game folder)"));
+        else wcscpy(w,GWT(L"(junto a la carpeta)",L"(next to the folder)"));
         gl_text_fit(GL.f_small,152,327,158,g_ini_cd_cue[0]?GLC_DIMCYAN:GLC_GREY,w); }
 
     /* right: start-up options and the picture settings in use */
@@ -22672,54 +22711,176 @@ static void gl_row_label(int y,const wchar_t *t,const wchar_t *sub) {
     gl_text_fit(GL.f_bold,24,y,192,GLC_AMBER,t);
     if(sub) gl_text_fit(GL.f_small,24,y+15,192,GLC_GREY,sub);
 }
+/* ---- graphics profiles: every visual switch the profiles own, in one table (gwrecomp.ini key, live variable) -------- */
+typedef struct { const char *key; int *var; uint8_t v[3]; } gl_prof_key;   /* v: CLASSIC 1996, HD-2D (v1.1), 3D TERRAIN (v2.0) */
+static gl_prof_key g_gl_prof[]={
+    {"terrain_3d",&g_terrain_3d,{0,0,1}},
+    {"terrain_3d_shadows",&g_ini_terrain_3d_shadows,{0,1,1}},
+    {"terrain_3d_water",&g_ini_terrain_3d_water,{0,1,1}},
+    {"terrain_3d_lights",&g_ini_terrain_3d_lights,{0,1,1}},
+    {"terrain_3d_biome_presets",&g_ini_terrain_3d_biome_presets,{0,1,1}},
+    {"terrain_3d_hd_tiles",&g_ini_terrain_3d_hd_tiles,{0,1,1}},
+    {"terrain_3d_smooth_zoom",&g_ini_terrain_3d_smooth_zoom,{0,1,1}},
+    {"cursor_120hz",&g_ini_cursor_120hz,{0,1,1}},
+    {"emissive_bloom",&g_ini_emissive_bloom,{0,1,1}},
+    {"soft_shadows",&g_ini_soft_shadows,{0,1,1}},
+    {"terrain_ao",&g_ini_terrain_ao,{0,1,1}},
+    {"water_effects",&g_ini_water_effects,{0,1,1}},
+    {"hd2d_particles",&g_ini_hd2d_particles,{0,1,1}},
+};
+enum { GL_NPROF=(int)(sizeof g_gl_prof/sizeof g_gl_prof[0]) };
+/* the profile the current switches match exactly, or 3 = CUSTOM */
+static int gl_profile_now(void) {
+    for(int p=0;p<3;p++) { int ok=1; for(int i=0;i<GL_NPROF && ok;i++) ok=(*g_gl_prof[i].var!=0)==(g_gl_prof[i].v[p]!=0); if(ok) return p; }
+    return 3;
+}
+static void gl_profile_apply(int p) {
+    for(int i=0;i<GL_NPROF;i++) { *g_gl_prof[i].var=g_gl_prof[i].v[p]; gwrecomp_ini_set_int(g_gl_prof[i].key,g_gl_prof[i].v[p]); }
+    gw_flag_trace("TRACE launcher profile=%d%c",p,10);
+}
+/* profile row (GRAPHICS and 3D TERRAIN tabs): three profiles; CUSTOM lights up by itself when a switch leaves them */
+static void gl_profile_row(int y) {
+    const wchar_t *const pr[4]={GWT(L"CLÁSICO 1996",L"CLASSIC 1996"),L"HD-2D (v1.1)",GWT(L"TERRENO 3D (v2.0)",L"3D TERRAIN (v2.0)"),
+                                GWT(L"PERSONALIZADO",L"CUSTOM")};
+    gl_text_fit(GL.f_bold,24,y+5,68,GLC_AMBER,GWT(L"PERFIL",L"PROFILE"));
+    const int cur=gl_profile_now();
+    const int c=gl_choice(96,y,522,22,pr,4,cur,cur==3?0u:8u);
+    if(c>=0 && c<3 && c!=cur) gl_profile_apply(c);
+}
+/* a NO / YES switch bound to an int and a gwrecomp.ini key; dim: drawn muted (it has no effect now) but still clickable */
+static void gl_switch(int y,const wchar_t *t,const wchar_t *sub,int *var,const char *key,int dim) {
+    const wchar_t *const yn[2]={L"NO",GWT(L"SÍ",L"YES")};
+    if(!dim) { gl_row_label(y,t,sub); const int c=gl_choice(228,y,190,22,yn,2,*var!=0,0u);
+        if(c>=0 && c!=(*var!=0)) { *var=c; gwrecomp_ini_set_int(key,c); } return; }
+    gl_text_fit(GL.f_bold,24,y,192,GLC_GREY,t);
+    if(sub) gl_text_fit(GL.f_small,24,y+15,192,0x55527A,sub);
+    for(int i=0;i<2;i++) {
+        const gl_rect r={228+i*97,y,93,22}; const int sel=(*var!=0)==i,hot=gl_in(r);
+        if(sel) gl_panel(r,0x2C524E,0x1A3532,0); else gl_panel(r,hot?0x3A3660:GLC_PANEL2,0x1A1830,1);
+        gl_text_c(GL.f_body,r,sel?0xA8C8C4:hot?GLC_DIMCYAN:GLC_GREY,yn[i]);
+        if(hot && GL.clicked && !sel) { *var=i; gwrecomp_ini_set_int(key,i); }
+    }
+}
 static void gl_draw_display(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
-    /* rows every 24 units: 54, 78, ..., 318 (12 rows, panel 52..352; a choice is 22 tall, the last subtitle ends by 345) */
+    /* profile, then six rows 27 apart (a label and its subtitle take 26), then the HD-2D effects in two columns */
+    gl_profile_row(58);
     const wchar_t *const modes[3]={GWT(L"CLÁSICO 4:3",L"CLASSIC 4:3"),GWT(L"PANORÁMICO 854×480",L"WIDESCREEN 854×480"),L"ZOOM OUT 1152×640"};
-    gl_row_label(54,GWT(L"MODO DE VISTA",L"VIEW MODE"),GWT(L"Zoom: rueda; Inicio = 1x",L"Zoom: wheel; Home = 1x"));
+    gl_row_label(88,GWT(L"MODO DE VISTA",L"VIEW MODE"),GWT(L"Zoom: rueda; Inicio = 1x",L"Zoom: wheel; Home = 1x"));
     int cur=g_ws_canvas?2:g_ws_requested?1:0;
-    int c=gl_choice(228,54,390,22,modes,3,cur,0u);
+    int c=gl_choice(228,88,390,22,modes,3,cur,0u);
     if(c>=0 && c!=cur) { g_ws_requested=c>0; g_ws_canvas=c==2; (void)gwrecomp_ini_set("mode",c==2?"zoomout":c==1?"widescreen":"classic"); }
     static const wchar_t *const res[5]={L"AUTO",L"900p",L"1080p",L"1440p",L"2160p"};
     unsigned dis=0u; for(int i=1;i<5;i++) if(GL.desk_w && (gl_res_w[i]>GL.desk_w || gl_res_h[i]>GL.desk_h)) dis|=1u<<i;
-    gl_row_label(78,GWT(L"RESOLUCIÓN",L"RESOLUTION"),GWT(L"Tamaño de la ventana",L"Window size"));
-    cur=gl_res_index(); c=gl_choice(228,78,390,22,res,5,cur,dis);
+    gl_row_label(115,GWT(L"RESOLUCIÓN",L"RESOLUTION"),GWT(L"Tamaño de la ventana",L"Window size"));
+    cur=gl_res_index(); c=gl_choice(228,115,390,22,res,5,cur,dis);
     if(c>=0 && c!=cur) { g_cli_res_w=gl_res_w[c]; g_cli_res_h=gl_res_h[c]; (void)gwrecomp_ini_set("resolution",gl_res_ini[c]); }
     const wchar_t *const fs[2]={GWT(L"VENTANA",L"WINDOW"),GWT(L"COMPLETA SIN BORDES",L"BORDERLESS FULLSCREEN")};
-    gl_row_label(102,GWT(L"PANTALLA",L"SCREEN"),GWT(L"Sin bordes = escritorio",L"Borderless = desktop size"));
-    c=gl_choice(228,102,390,22,fs,2,g_cli_fullscreen,0u);
+    gl_row_label(142,GWT(L"PANTALLA",L"SCREEN"),GWT(L"Sin bordes = escritorio",L"Borderless = desktop size"));
+    c=gl_choice(228,142,390,22,fs,2,g_cli_fullscreen,0u);
     if(c>=0 && c!=g_cli_fullscreen) { g_cli_fullscreen=c; gwrecomp_ini_set_int("fullscreen",c); }
     const wchar_t *const fps[2]={GWT(L"60 FPS CLÁSICO",L"60 FPS CLASSIC"),GWT(L"120 FPS INTERPOLADO",L"120 FPS INTERPOLATED")};
-    gl_row_label(126,GWT(L"FOTOGRAMAS",L"FRAME RATE"),GWT(L"El ritmo del juego no cambia",L"The game speed stays the same"));
-    cur=g_ini_fps==60u?0:1; c=gl_choice(228,126,390,22,fps,2,cur,0u);
+    gl_row_label(169,GWT(L"FOTOGRAMAS",L"FRAME RATE"),GWT(L"El ritmo del juego no cambia",L"The game speed stays the same"));
+    cur=g_ini_fps==60u?0:1; c=gl_choice(228,169,390,22,fps,2,cur,0u);
     if(c>=0 && c!=cur) { g_ini_fps=c?120u:60u; gwrecomp_ini_set_int("fps",(int)g_ini_fps); }
     const wchar_t *const flt[3]={GWT(L"NÍTIDO",L"SHARP"),GWT(L"EPX SUAVE",L"EPX SMOOTH"),L"CRT"};
-    gl_row_label(150,GWT(L"FILTRO (F7)",L"FILTER (F7)"),GWT(L"También con F7 al jugar",L"Also with F7 while playing"));
-    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,150,390,22,flt,3,cur,0u);
+    gl_row_label(196,GWT(L"FILTRO (F7)",L"FILTER (F7)"),GWT(L"También con F7 al jugar",L"Also with F7 while playing"));
+    cur=g_filter_mode<0?0:g_filter_mode; c=gl_choice(228,196,390,22,flt,3,cur,0u);
     if(c>=0 && c!=cur) { g_filter_mode=c; (void)gwrecomp_ini_set("filter",g_filter_names[c]); }
     const wchar_t *const hz[2]={L"ORIGINAL",GWT(L"LIMPIO",L"CLEAN")};
-    gl_row_label(174,GWT(L"HORIZONTE",L"HORIZON"),GWT(L"Quita píxeles sueltos",L"Removes stray pixels"));
-    c=gl_choice(228,174,390,22,hz,2,g_ini_clean_horizon,0u);
+    gl_row_label(223,GWT(L"HORIZONTE",L"HORIZON"),GWT(L"Quita píxeles sueltos",L"Removes stray pixels"));
+    c=gl_choice(228,223,390,22,hz,2,g_ini_clean_horizon,0u);
     if(c>=0 && c!=g_ini_clean_horizon) { g_ini_clean_horizon=c; gwrecomp_ini_set_int("clean_horizon",c); }
-    const wchar_t *const fx[2]={L"NO",GWT(L"SÍ",L"YES")};
-    gl_row_label(198,GWT(L"EFECTOS AGUA / GOOP",L"WATER / GOOP EFFECTS"),GWT(L"Olas y brillos animados",L"Animated waves and glints"));
-    c=gl_choice(228,198,390,22,fx,2,g_ini_water_effects,0u);
-    if(c>=0 && c!=g_ini_water_effects) { g_ini_water_effects=c; gwrecomp_ini_set_int("water_effects",c); }
-    gl_row_label(222,GWT(L"BLOOM EMISIVO",L"EMISSIVE BLOOM"),GWT(L"Halo en energía, explosiones y GOOP",L"Soft glow on energy, blasts and GOOP"));
-    c=gl_choice(228,222,390,22,fx,2,g_ini_emissive_bloom,0u);
-    if(c>=0 && c!=g_ini_emissive_bloom) { g_ini_emissive_bloom=c; gwrecomp_ini_set_int("emissive_bloom",c); }
-    gl_row_label(246,GWT(L"OCLUSIÓN TERRENO",L"TERRAIN AO"),GWT(L"Sombra en cráteres, valles y pie de colinas",L"Shade in craters, valleys, hill bases"));
-    c=gl_choice(228,246,390,22,fx,2,g_ini_terrain_ao,0u);
-    if(c>=0 && c!=g_ini_terrain_ao) { g_ini_terrain_ao=c; gwrecomp_ini_set_int("terrain_ao",c); }
-    gl_row_label(270,GWT(L"SOMBRAS SUAVES",L"SOFT SHADOWS"),GWT(L"Bordes suaves en las sombras",L"Soft edges on shadows"));
-    c=gl_choice(228,270,390,22,fx,2,g_ini_soft_shadows,0u);
-    if(c>=0 && c!=g_ini_soft_shadows) { g_ini_soft_shadows=c; gwrecomp_ini_set_int("soft_shadows",c); }
-    gl_row_label(294,GWT(L"PARTÍCULAS 4K",L"4K PARTICLES"),GWT(L"Esporas, polvo y chispas en el mapa",L"Spores, dust and sparks on the map"));
-    c=gl_choice(228,294,390,22,fx,2,g_ini_hd2d_particles,0u);
-    if(c>=0 && c!=g_ini_hd2d_particles) { g_ini_hd2d_particles=c; gwrecomp_ini_set_int("hd2d_particles",c); }
-    gl_row_label(318,GWT(L"TERRENO 3D",L"3D TERRAIN"),GWT(L"Relieve, luz y sombras; Ctrl+F9",L"Relief, light and shadows; Ctrl+F9"));
-    c=gl_choice(228,318,390,22,fx,2,g_terrain_3d,0u);
-    if(c>=0 && c!=g_terrain_3d) { g_terrain_3d=c; gwrecomp_ini_set_int("terrain_3d",c); }
+    /* HD-2D effects: two columns of switches (each a full row would not fit) */
+    struct { const wchar_t *t; int *var; const char *key; } fx2[6]={
+        {GWT(L"AGUA / GOOP",L"WATER / GOOP"),&g_ini_water_effects,"water_effects"},
+        {GWT(L"BLOOM EMISIVO",L"EMISSIVE BLOOM"),&g_ini_emissive_bloom,"emissive_bloom"},
+        {GWT(L"OCLUSIÓN TERRENO",L"TERRAIN AO"),&g_ini_terrain_ao,"terrain_ao"},
+        {GWT(L"SOMBRAS SUAVES",L"SOFT SHADOWS"),&g_ini_soft_shadows,"soft_shadows"},
+        {GWT(L"PARTÍCULAS 4K",L"4K PARTICLES"),&g_ini_hd2d_particles,"hd2d_particles"},
+        {GWT(L"TERRENO 3D",L"3D TERRAIN"),&g_terrain_3d,"terrain_3d"}};
+    gl_fill(24,254,594,1,0x3A3660);
+    gl_text_fit(GL.f_bold,24,259,592,GLC_AMBER,GWT(L"EFECTOS HD-2D  ·  más opciones del 3D en la pestaña TERRENO 3D",
+                                                  L"HD-2D EFFECTS  ·  more 3D options in the 3D TERRAIN tab"));
+    const wchar_t *const yn[2]={L"NO",GWT(L"SÍ",L"YES")};
+    for(int i=0;i<6;i++) {
+        const int col=i%2,row=i/2,x=24+col*302,y=276+row*25;
+        gl_text_fit(GL.f_bold,x,y+5,150,GLC_TEXT,fx2[i].t);
+        const int v=*fx2[i].var!=0,cc=gl_choice(x+156,y,130,22,yn,2,v,0u);
+        if(cc>=0 && cc!=v) { *fx2[i].var=cc; gwrecomp_ini_set_int(fx2[i].key,cc); }
+    }
+}
+/* hd_textures next to the exe (or terrain_3d_hd_dir): which bank folders are there; checked once a second */
+static void gl_hd_status(wchar_t *out,size_t n) {
+    static uint32_t last; static wchar_t cache[96];
+    if(!last || SDL_GetTicks()-last>1000u) {
+        last=SDL_GetTicks()|1u;
+        char base[700];
+        if(g_ini_terrain_3d_hd_dir[0]) snprintf(base,sizeof base,"%s",g_ini_terrain_3d_hd_dir);
+        else { char exe[MAX_PATH]; DWORD k=GetModuleFileNameA(NULL,exe,MAX_PATH); while(k && exe[k-1]!='\\' && exe[k-1]!='/') k--;
+            exe[k]=0; snprintf(base,sizeof base,"%shd_textures",exe); }
+        wchar_t banks[40]=L""; int nb=0;
+        for(char b='A';b<='Z';b++) { char p[760]; snprintf(p,sizeof p,"%s\\B32%c",base,b);
+            const DWORD at=GetFileAttributesA(p);
+            if(at!=INVALID_FILE_ATTRIBUTES && (at&FILE_ATTRIBUTE_DIRECTORY) && wcslen(banks)<32) {
+                wchar_t w[8]; swprintf(w,8,L"%ls%c",nb?L" ":L"",b); wcscat(banks,w); nb++; } }
+        if(nb) swprintf(cache,96,GWT(L"hd_textures: B32 %ls",L"hd_textures: B32 %ls"),banks);
+        else swprintf(cache,96,L"%ls",GWT(L"sin hd_textures (tiles originales)",L"no hd_textures (original tiles)"));
+    }
+    wcsncpy(out,cache,n-1); out[n-1]=0;
+}
+static void gl_draw_terrain3d(void) {
+    gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
+    gl_profile_row(58);
+    const int off=!g_terrain_3d;
+    gl_switch(86,GWT(L"TERRENO 3D",L"3D TERRAIN"),GWT(L"Relieve y luz · Ctrl+F9",L"Relief and light · Ctrl+F9"),&g_terrain_3d,"terrain_3d",0);
+    gl_switch(114,GWT(L"SOMBRAS 3D",L"3D SHADOWS"),GWT(L"Colinas y cráteres dan sombra",L"Hills and craters cast shadows"),&g_ini_terrain_3d_shadows,"terrain_3d_shadows",off);
+    gl_switch(142,GWT(L"AGUA 3D",L"3D WATER"),GWT(L"Olas, profundidad y espuma",L"Waves, depth and foam"),&g_ini_terrain_3d_water,"terrain_3d_water",off);
+    gl_switch(170,GWT(L"LUCES 3D",L"3D LIGHTS"),GWT(L"Haz, disparos, GOOP · Ctrl+F11",L"Beam, shots, GOOP · Ctrl+F11"),&g_ini_terrain_3d_lights,"terrain_3d_lights",off);
+    gl_switch(198,GWT(L"BIOMAS 3D",L"3D BIOMES"),GWT(L"Luz y ambiente de cada planeta",L"Light and mood of each planet"),&g_ini_terrain_3d_biome_presets,"terrain_3d_biome_presets",off);
+    gl_switch(226,GWT(L"TEXTURAS HD",L"HD TEXTURES"),GWT(L"hd_textures propias · Ctrl+F12",L"Your hd_textures · Ctrl+F12"),&g_ini_terrain_3d_hd_tiles,"terrain_3d_hd_tiles",off);
+    {   wchar_t st[96]; gl_hd_status(st,96);
+        gl_text_fit(GL.f_small,430,231,190,off?0x55527A:(st[0]==L'h'?GLC_GREEN:GLC_GREY),st); }
+    gl_switch(262,GWT(L"ZOOM SUAVE",L"SMOOTH ZOOM"),GWT(L"Rueda con transición suave",L"Eased mouse-wheel zoom"),&g_ini_terrain_3d_smooth_zoom,"terrain_3d_smooth_zoom",0);
+    gl_switch(290,L"CURSOR 120 HZ",GWT(L"Puntero en cada fotograma",L"Pointer on every frame"),&g_ini_cursor_120hz,"cursor_120hz",0);
+    gl_text_fit(GL.f_small,430,91,190,GLC_GREY,off?GWT(L"apagado: opciones 3D inactivas",L"off: 3D options inactive"):GWT(L"en misiones con zoom out",L"in zoom-out missions"));
+    gl_text_fit(GL.f_small,24,326,592,GLC_GREY,GWT(L"Zoom suave y cursor 120 Hz valen también en 2D · tiles HD: tools/export_b32_tiles.py",
+                                                 L"Smooth zoom and 120 Hz cursor also apply in 2D · HD tiles: tools/export_b32_tiles.py"));
+}
+/* AUDIO: host output volume of each channel the host really receives apart */
+static int gl_slider(int y,const wchar_t *t,const wchar_t *sub,int *var,const char *key) {
+    gl_row_label(y,t,sub);
+    const gl_rect minus={228,y,26,22},plus={540,y,26,22},bar={260,y+3,274,16};
+    int v=*var,nv=v;
+    if(gl_button(minus,L"-",0,GL.f_bold)) nv=v-5;
+    if(gl_button(plus,L"+",0,GL.f_bold)) nv=v+5;
+    gl_panel(bar,GLC_LO,0x1A1830,0);
+    const int fill=(bar.w-4)*v/100;
+    if(fill>0) gl_fill(bar.x+2,bar.y+2,fill,bar.h-4,v?GLC_DIMCYAN:GLC_GREY);
+    for(int k=1;k<10;k++) gl_fill(bar.x+2+(bar.w-4)*k/10,bar.y+bar.h-5,1,3,0x55527A);
+    if(gl_in(bar) && GL.clicked) nv=((GL.mx-bar.x-2)*100+(bar.w-4)/2)/(bar.w-4);
+    nv=nv<0?0:nv>100?100:(nv+2)/5*5;
+    { wchar_t w[8]; swprintf(w,8,L"%d%%",nv); gl_text_fit(GL.f_bold,572,y+5,46,v?GLC_CYAN:GLC_GREY,w); }
+    if(nv!=v) { *var=nv; gwrecomp_ini_set_int(key,nv); return 1; }
+    return 0;
+}
+static void gl_draw_audio(void) {
+    gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
+    gl_slider(64,GWT(L"VOLUMEN MÚSICA",L"MUSIC VOLUME"),GWT(L"Pistas de música del CD",L"The CD music tracks"),&g_ini_music_volume,"music_volume");
+    gl_slider(104,GWT(L"VOLUMEN EFECTOS",L"SFX VOLUME"),GWT(L"Sonidos y voces del juego",L"Game sounds and voices"),&g_ini_sfx_volume,"sfx_volume");
+    const wchar_t *const yn[2]={L"NO",GWT(L"SÍ",L"YES")};
+    gl_row_label(144,GWT(L"AUDIO MEJORADO",L"ENHANCED AUDIO"),GWT(L"Sonido 3D, música baja en voces",L"Positional sound, ducking"));
+    const int c=gl_choice(228,144,190,22,yn,2,g_ini_enhanced_audio!=0,0u);
+    if(c>=0 && c!=(g_ini_enhanced_audio!=0)) { g_ini_enhanced_audio=c; gwrecomp_ini_set_int("enhanced_audio",c); }
+    gl_panel((gl_rect){24,190,592,140},0x2E2B4E,0x1E1C36,0);
+    gl_text_fit(GL.f_bold,34,198,572,GLC_AMBER,GWT(L"CANALES",L"CHANNELS"));
+    const wchar_t *const notes[5]={
+        GWT(L"Música: el CD (pistas de audio), salida propia: el volumen solo la afecta a ella.",L"Music: the CD audio tracks, an output of its own: only this volume affects it."),
+        GWT(L"Efectos: todo lo digital del juego (efectos y voces, mezclados por el propio juego).",L"Effects: all the game's digital sound (effects and voices, mixed by the game itself)."),
+        GWT(L"Vídeos de la intro: siguen el mayor de los dos volúmenes.",L"Intro videos: follow the louder of the two volumes."),
+        GWT(L"0 % es silencio; 50 % suena a la mitad (curva perceptual, sin chasquidos).",L"0 % is silence; 50 % sounds half as loud (perceptual curve, no clicks)."),
+        GWT(L"Solo cambia la salida de audio del PC: la partida no se ve afectada.",L"Only the PC's audio output changes: the game itself is unaffected.")};
+    for(int i=0;i<5;i++) gl_text_fit(GL.f_small,34,220+i*21,572,GLC_TEXT,notes[i]);
 }
 static void gl_draw_controls(void) {
     gl_panel((gl_rect){12,52,616,300},GLC_PANEL2,0x15142A,0);
@@ -22757,12 +22918,17 @@ static void gl_draw(void) {
     gl_text_fit(GL.f_small,16,31,212,GLC_AMBER,GWT(L"RECOMPILACIÓN NATIVA · LANZADOR",L"NATIVE RECOMPILATION · LAUNCHER"));
     {   /* language of the launcher and of the program's own messages (gwrecomp.ini language = es | en) */
         static const wchar_t *const lang[2]={L"ES",L"EN"};
-        const int cur=gw_lang_en(),c=gl_choice(238,12,68,22,lang,2,cur,0u);
+        const int cur=gw_lang_en(),c=gl_choice(166,6,58,20,lang,2,cur,0u);
         if(c>=0 && c!=cur) { g_ini_lang=c; (void)gwrecomp_ini_set("language",c?"en":"es"); }
     }
-    const wchar_t *const tabs[4]={GWT(L"JUGAR",L"PLAY"),GWT(L"MISIONES",L"MISSIONS"),GWT(L"GRÁFICOS",L"GRAPHICS"),GWT(L"CONTROLES",L"CONTROLS")};
-    for(int i=0;i<4;i++) if(gl_button((gl_rect){314+i*81,10,77,26},tabs[i],GL.tab==i?2:0,GL.f_bold)) GL.tab=i;
-    if(GL.tab==0) gl_draw_play(); else if(GL.tab==1) gl_draw_missions(); else if(GL.tab==2) gl_draw_display(); else gl_draw_controls();
+    const wchar_t *const tabs[6]={GWT(L"JUGAR",L"PLAY"),GWT(L"MISIONES",L"MISSIONS"),GWT(L"GRÁFICOS",L"GRAPHICS"),
+        GWT(L"TERRENO 3D",L"3D TERRAIN"),L"AUDIO",GWT(L"CONTROLES",L"CONTROLS")};
+    {   /* tab widths from their own text, right-aligned to the header edge (both languages fit, nothing shrinks) */
+        int w[6],tot=0; for(int i=0;i<6;i++) { w[i]=gl_text_w(GL.f_bold,tabs[i])+12; tot+=w[i]+3; }
+        int x=GL_W-4-tot+3;
+        for(int i=0;i<6;i++) { if(gl_button((gl_rect){x,10,w[i],26},tabs[i],GL.tab==i?2:0,GL.f_bold)) GL.tab=i; x+=w[i]+3; } }
+    if(GL.tab==0) gl_draw_play(); else if(GL.tab==1) gl_draw_missions(); else if(GL.tab==2) gl_draw_display();
+    else if(GL.tab==3) gl_draw_terrain3d(); else if(GL.tab==4) gl_draw_audio(); else gl_draw_controls();
     /* footer: the Gene Wars folder */
     gl_panel((gl_rect){0,358,GL_W,42},0x3A3660,0x1C1A32,1);
     {   wchar_t w[620]; gl_wide(GL.data_dir[0]?GL.data_dir:GWT("(no configurada)","(not set)"),w,620);
@@ -22840,7 +23006,7 @@ static int launcher_run(const char *data_dir,const char *root) {
                 const SDL_Keycode kc=ev.key.keysym.sym;
                 if(kc==SDLK_ESCAPE) GL.result=-1;
                 else if((kc==SDLK_RETURN || kc==SDLK_KP_ENTER) && GL.data_all) { g_cli_skip_intro=g_ini_skip_intro; GL.result=1; }
-                else if(kc==SDLK_TAB) GL.tab=(GL.tab+1)%4;
+                else if(kc==SDLK_TAB) GL.tab=(GL.tab+1)%6;
                 else if(GL.tab==1 && (kc==SDLK_UP || kc==SDLK_DOWN)) GL.sel=GL.sel+(kc==SDLK_UP?-1:1)<1?24:GL.sel+(kc==SDLK_UP?-1:1)>24?1:GL.sel+(kc==SDLK_UP?-1:1);
             }
         }
@@ -22851,7 +23017,7 @@ static int launcher_run(const char *data_dir,const char *root) {
             SDL_Surface *s=SDL_CreateRGBSurfaceWithFormatFrom(GL.px,GL_CW,GL_CH,32,GL_CW*4,SDL_PIXELFORMAT_RGB888);
             if(s) { SDL_SaveBMP(s,p); SDL_FreeSurface(s); }
             gw_flag_trace("TRACE launcher shot tab=%d texts_shrunk_or_cut=%d%c",shot_tab,GL.overflow,10);
-            if(++shot_tab>=4) GL.result=-1; else GL.tab=shot_tab;
+            if(++shot_tab>=6) GL.result=-1; else GL.tab=shot_tab;
         }
         if(GL.result==2) {   /* folder dialog (modal, outside the SDL frame) */
             GL.result=0; gl_pick_folder(win); continue;

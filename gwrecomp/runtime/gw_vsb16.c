@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <math.h>
 
 /* Offsets inside the AIL3DIG driver data area (SB16.DIG, verified against its machine code):
    0x16 IO base, 0x18 IRQ, 0x1A DMA8, 0x1C DMA16 (IO_PARMS)    0x4FC/0x4FE/0x500 DMA buffer: start offset, segment, second-half offset
@@ -209,6 +210,13 @@ int gw_vsb16_driver_call(uint8_t *m, uint32_t sz, uint32_t base, uint16_t fn, ui
     return 1;
 }
 
+/* user volume 0..100 -> amplitude: (v/100)^1.66, so 50 % is about -10 dB (perceived half loudness) and 0 is silence;
+   applied to the host output only, ramped per stereo frame over ~20 ms (no clicks) */
+static float gw_user_gain_of(int v) { if(v<=0) return 0.0f; if(v>=100) return 1.0f; return powf((float)v/100.0f,1.66f); }
+static volatile float g_user_target = 1.0f; static float g_user = 1.0f;
+static double g_out_sq; static uint64_t g_out_n;
+void gw_vsb16_set_user_volume(int percent) { g_user_target = gw_user_gain_of(percent); }
+double gw_vsb16_take_rms(void) { const double r = g_out_n ? sqrt(g_out_sq / (double)g_out_n) : -1.0; g_out_sq = 0.0; g_out_n = 0; return r; }
 static int push_half(const uint8_t *m, uint32_t sz, uint32_t half_index) {
     const uint64_t at64 = (uint64_t)g.dma_start_lin + (uint64_t)half_index * g.half_bytes;
     const uint32_t at = at64 <= UINT32_MAX ? (uint32_t)at64 : UINT32_MAX;
@@ -233,7 +241,12 @@ static int push_half(const uint8_t *m, uint32_t sz, uint32_t half_index) {
         const uint8_t *p = m + at + (size_t)i * frame;
         if (bps == 2) { l = (int16_t)(p[0] | (p[1] << 8)); r = ch == 2 ? (int16_t)(p[2] | (p[3] << 8)) : l; }
         else { l = ((int)p[0] - 128) * 256; r = ch == 2 ? ((int)p[1] - 128) * 256 : l; }
-        out[2 * i] = (int16_t)l; out[2 * i + 1] = (int16_t)r;
+        {   const float tg = g_user_target, st = 1.0f / (0.02f * (float)(g.rate ? g.rate : 22050u));
+            if (g_user < tg) { g_user += st; if (g_user > tg) g_user = tg; }
+            else if (g_user > tg) { g_user -= st; if (g_user < tg) g_user = tg; }
+            const int32_t ol = (int32_t)((float)l * g_user), orr = (int32_t)((float)r * g_user);
+            out[2 * i] = (int16_t)ol; out[2 * i + 1] = (int16_t)orr;
+            const double fl = ol / 32768.0, fr = orr / 32768.0; g_out_sq += fl * fl + fr * fr; g_out_n += 2u; }
         uint32_t a = (uint32_t)(l < 0 ? -l : l); sum += a; if (a > peak) peak = a;
         if (l == INT16_MIN || l == INT16_MAX) g.st.full_scale_endpoint_samples++;
         if (r == INT16_MIN || r == INT16_MAX) g.st.full_scale_endpoint_samples++;

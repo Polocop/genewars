@@ -43,6 +43,20 @@ Prerequisites you install yourself: Git, Python 3.10+ (reference 3.13), MSYS2 wi
 - **Level B** (needs your game files): lift the executable, compile and link the demo from a clean clone of the committed state: `scripts\build.ps1 -Level B`.
 - **Level C** (needs a Level B build): bounded smoke run of the native executable: `scripts\build.ps1 -Level C`, or `scripts\play.ps1` to play.
 
+### Playing: launcher, profiles and keys
+The launcher (double-click `gwrecomp.exe`) saves everything at once in `gwrecomp.ini`, keeping any other key you added.
+- **GRAPHICS → PROFILE**: `CLASSIC 1996` (original look, every effect off), `HD-2D (v1.1)` (bloom, soft shadows, terrain AO,
+  water effects, 4K particles, 120 Hz cursor; flat terrain), `3D TERRAIN (v2.0)` (all of the above plus the 3D terrain and
+  its options). Changing any switch by hand shows `CUSTOM`.
+- **3D TERRAIN** tab: 3D terrain, 3D shadows, 3D water, 3D lights, 3D biomes, HD textures (with the `hd_textures` status),
+  smooth zoom, 120 Hz cursor. **AUDIO** tab: music and effects volume (0-100 %).
+- In a mission: mouse wheel = zoom of the map (0.87x-2x, the HUD stays fixed), `Home` = back to 1x, hold the middle
+  button and drag = scroll, WASD/arrows = scroll, `F7` filter, `F8` turbo, `TAB` hold for turbo 4x, `F10` release the
+  mouse, `Ctrl+F9` 2D/3D terrain, `Ctrl+F11` 3D point lights, `Ctrl+F12` HD terrain tiles.
+- HD terrain tiles: `python tools\export_b32_tiles.py --out <folder of gwrecomp.exe>\hd_textures` exports the terrain
+  banks of **your own** install (one folder per bank: tiles, atlas and `manifest.json` with the missions that use it);
+  upscale them with your own tools, keep the names. Nothing of the game is stored in this repository.
+
 ### What you must provide (not distributed here)
 Your own Gene Wars **1.1 (Europe)** install folder (11 files byte-identical to the retail disc, 2 from the 1.1 update, the installer's `CONFIG.INI`) and the `.cue` of your CD image, verified by SHA-256 (`python tools\rebuild\check_inputs.py` tells you which file differs and what role it has). A fresh installation with an empty `SAVE` directory is supported; **the symbol map and any save file are not needed** ([docs/SYMBOLS.md](docs/SYMBOLS.md), [docs/INPUTS.md](docs/INPUTS.md)). Not verified: that the 1.1 update files are obtainable by everyone, and any second machine.
 

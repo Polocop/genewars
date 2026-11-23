@@ -91,10 +91,12 @@ static inline size_t gw_terrain_build_visible(const uint8_t *ds,unsigned width,u
     const int dy=(int)gw_terrain_read_u32(ds+GW_TERRAIN_CELL_STEP_Y);
     const int scale=(int)gw_terrain_read_u32(ds+GW_TERRAIN_HEIGHT_SCALE);
     const int left=gw_terrain_read_i16(display+0x1D);
-    /* IFCMain normal terrain modes only. A special camera pass may tint or
-       annotate a strip. Leave its original rendering to the compositor. */
+    /* IFCMain terrain modes with the 2:1 projection. MapDisplay +0x1C bit 0x40 (the building placement pass: the game
+       tints the footprint cells red) used to bail out here, which dropped the whole 3D terrain back to the 2D one while a
+       building was being placed. The geometry is the same in that pass; the tinted pixels differ from the terrain index
+       of the mesh and the pack pass keeps them as the game drew them, over the 3D terrain. */
     if(dx!=32 || dy!=16 || scale<0 || scale>4 || left<0 || left%dx ||
-       width<=(unsigned)left || width>1152u || height==0 || height>640u || (display[0x1C]&0x40u)) return 0;
+       width<=(unsigned)left || width>1152u || height==0 || height>640u) return 0;
     const int view_col=gw_terrain_read_i16(display);
     const int view_row=gw_terrain_read_i16(display+2);
     size_t n=0;

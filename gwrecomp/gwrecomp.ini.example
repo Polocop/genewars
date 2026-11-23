@@ -72,6 +72,11 @@ water_effects = 1
 ; 1 = enhanced audio: positional sound panning/distance fitted to the visible map (854 / zoom-out), +-4.5 % random
 ;     pitch on sound effects (never on speech, videos or CD music), CD music lowered 30 % while a voice speaks
 enhanced_audio = 1
+; music volume 0..100 (the CD music tracks, a separate host output; 0 = silence, 50 = about half as loud)
+music_volume = 100
+; sound effects volume 0..100 (all of the game's digital sound: effects and voices, mixed by the game into one
+; stream). The intro videos follow the louder of the two. Only the PC's audio output changes, never the game.
+sfx_volume = 100
 ; 1 = selective GPU emissive bloom (Dual Kawase) on energy beams, explosions, Gene Pod lights and GOOP, in missions only
 emissive_bloom = 1
 ; bloom strength (0.0 .. 1.5, default 0.65)
