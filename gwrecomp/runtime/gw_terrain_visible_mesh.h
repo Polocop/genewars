@@ -141,8 +141,9 @@ typedef struct gw_terrain_mesh_draw {
        lighting, shadows and water depth of the 3D terrain (presentation only) */
     int16_t planet_h[128u*128u];
     int view_col,view_row,height_scale;
-    /* HD terrain overrides: the guest address of each atlas slot's texels, the loaded B32 bank (buffer pointer at
-       0x2EEC88, file name in the startup file table at 0x2DD5AC, e.g. "data/b32a.dat" -> "B32A") */
+    /* HD terrain overrides and biome presets: the guest address of each atlas slot's texels and the B32 bank the
+       level loaded: 0x5CAF0 formats "data\\b32%c.dat" with 'a' + header[0x1C5B] (the level file sits at 0x2F1A28, so
+       the byte is 0x2F3683: 0 A .. 3 D) into the buffer whose pointer is at 0x2EEC8C */
     uint32_t tile_addr[GW_MESH_TILES];
     uint32_t b32_base;
     char b32_name[8];
@@ -162,11 +163,11 @@ static inline void gw_terrain_prepare_draw(const uint8_t *ds,size_t bound,unsign
     draw->view_col=gw_terrain_read_i16(ds+GW_TERRAIN_MAP_DISPLAY);
     draw->view_row=gw_terrain_read_i16(ds+GW_TERRAIN_MAP_DISPLAY+2);
     draw->b32_base=0; draw->b32_name[0]=0;
-    if(bound>0x002DD5C0u) {
-        const char *fn=(const char *)ds+0x002DD5ACu;   /* "data/b32?.dat" */
-        if(!memcmp(fn,"data/b32",8) && fn[8]>='a' && fn[8]<='z' && fn[9]=='.') {
-            draw->b32_name[0]='B'; draw->b32_name[1]='3'; draw->b32_name[2]='2'; draw->b32_name[3]=(char)(fn[8]-'a'+'A'); draw->b32_name[4]=0;
-            draw->b32_base=gw_terrain_read_u32(ds+0x002EEC88u);
+    if(bound>0x002F3684u) {
+        const uint8_t bank=ds[0x002F3683u];
+        if(bank<26u) {
+            draw->b32_name[0]='B'; draw->b32_name[1]='3'; draw->b32_name[2]='2'; draw->b32_name[3]=(char)('A'+bank); draw->b32_name[4]=0;
+            draw->b32_base=gw_terrain_read_u32(ds+0x002EEC8Cu);
         }
     }
     if(count) {

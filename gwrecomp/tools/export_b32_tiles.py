@@ -18,6 +18,10 @@ atlas exactly 8 x N tiles of that size) and copy the folder next to gwrecomp.exe
 GWRecomp loads atlas.png when present, otherwise the tile_*.png files (a missing tile keeps the original texels).
 Only the albedo is replaced: the game logic (water, GOOP, heights) keeps reading the original tile indices.
 
+Banks per mission: each campaign level file LEVELS/CONQnnn.DAT holds its bank at offset 0x1C5B (0 = B32A ... 3 =
+B32D; the game loads the file at 0x2F1A28 and formats "data\b32%c.dat" from that byte); the script reads them and
+lists, per bank, the missions that use it (also in manifest.json).
+
 Palette: missions draw the terrain with DATA/MAIN.PAL (the palette the game keeps loaded in play, checked byte for
 byte against a live mission); --palette picks any other 768-byte VGA (0..63) palette, compressed (RNC) or not.
 
@@ -175,7 +179,8 @@ def load_palette(path: Path) -> list[tuple[int, int, int]]:
     return [tuple((c * 255 // 63) if six else c for c in pal[i * 3:i * 3 + 3]) for i in range(256)]
 
 
-def export_bank(install: Path, letter: str, out_root: Path, palette: Path | None, tiles: bool, atlas: bool) -> dict:
+def export_bank(install: Path, letter: str, out_root: Path, palette: Path | None, tiles: bool, atlas: bool,
+                missions: list[int] | None = None) -> dict:
     bank_file = install / "DATA" / f"B32{letter}.DAT"
     bank = rnc_unpack(bank_file.read_bytes())
     if len(bank) % (BANK_W * TILE):
@@ -190,7 +195,7 @@ def export_bank(install: Path, letter: str, out_root: Path, palette: Path | None
         write_png(out / "atlas.png", BANK_W, rows * TILE, rgb)
     manifest = {"bank": f"B32{letter}", "source": f"DATA/B32{letter}.DAT", "palette": pal_file.name,
                 "tile_size": TILE, "columns": BANK_W // TILE, "rows": rows, "bank_bytes": len(bank),
-                "atlas": "atlas.png" if atlas else None, "tiles": []}
+                "atlas": "atlas.png" if atlas else None, "missions": missions or [], "tiles": []}
     for t in range(rows * (BANK_W // TILE)):
         cx, cy = t % (BANK_W // TILE), t // (BANK_W // TILE)
         name = f"tile_{t:03d}.png"
@@ -204,6 +209,20 @@ def export_bank(install: Path, letter: str, out_root: Path, palette: Path | None
                                   "bank_offset": (cy * TILE) * BANK_W + cx * TILE})
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     return manifest
+
+
+def missions_by_bank(install: Path) -> dict[str, list[int]]:
+    """Campaign missions (LEVELS/CONQ001..024.DAT) per bank letter, from the level header byte at 0x1C5B."""
+    out: dict[str, list[int]] = {}
+    for n in range(1, 25):
+        f = install / "LEVELS" / f"CONQ{n:03d}.DAT"
+        try:
+            data = f.read_bytes()
+        except OSError:
+            continue
+        if len(data) > 0x1C5B and data[0x1C5B] < 26:
+            out.setdefault(chr(ord("A") + data[0x1C5B]), []).append(n)
+    return out
 
 
 def default_install() -> Path | None:
@@ -225,12 +244,16 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     if not a.install or not (a.install / "DATA").is_dir():
         ap.error("Gene Wars install folder not found: pass --install <folder containing DATA>")
+    by_bank = missions_by_bank(a.install)
     for letter in a.bank.upper():
         if letter not in "ABCD":
             ap.error(f"unknown bank {letter}")
-        m = export_bank(a.install, letter, a.out, a.palette, not a.no_tiles, not a.no_atlas)
-        print(f"B32{letter}: {len(m['tiles'])} tiles ({m['columns']}x{m['rows']}), palette {m['palette']} -> "
-              f"{a.out / m['bank']}")
+        if not (a.install / "DATA" / f"B32{letter}.DAT").is_file():
+            print(f"B32{letter}: not in this installation, skipped")
+            continue
+        m = export_bank(a.install, letter, a.out, a.palette, not a.no_tiles, not a.no_atlas, by_bank.get(letter))
+        print(f"B32{letter}: {len(m['tiles'])} tiles ({m['columns']}x{m['rows']}), palette {m['palette']}, "
+              f"missions {','.join(map(str, m['missions'])) or '-'} -> {a.out / m['bank']}")
     return 0
 
 

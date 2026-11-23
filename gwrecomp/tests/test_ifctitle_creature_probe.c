@@ -8279,6 +8279,8 @@ static int g_grab_user_off,g_grab_state;
    logical pixels and is g_zoom times larger on screen; the HUD stays at 1x */
 static double g_zoom=1.0,g_zoom_target=1.0,g_zoom_x,g_zoom_y,g_zoom_ax,g_zoom_ay,g_zoom_px,g_zoom_py;
 static int g_zoom_anim; static uint64_t g_zoom_t;
+static int g_info_up;              /* the information panel (0x24C60, help reports) is on screen (presentation thread) */
+static double g_zoom_resume;       /* zoom to ease back to when the game view returns after a dialog reset it */
 /* zoom-out canvas: map texture of canvas x=176..1151, y=0..639 (current and previous guest frame, for the
    scroll interpolation); g_canvas_live while the presented frame came from the canvas */
 static SDL_Texture *g_canvas_tex[3];
@@ -8497,6 +8499,9 @@ static int g_ini_terrain_3d_water=1;     /* terrain_3d_water: coastal depth colo
 static int g_ini_terrain_3d_lights=1;    /* terrain_3d_lights: dynamic point lights (beam, shots, beacons, GOOP) on the 3D slopes */
 static int g_ini_terrain_3d_hd_tiles=1;  /* terrain_3d_hd_tiles: optional HD B32 tile overrides from hd_textures/ (3D terrain) */
 static char g_ini_terrain_3d_hd_dir[600];/* terrain_3d_hd_dir: folder holding <BANK>/atlas.png or tile_NNN.png (default: hd_textures next to the exe) */
+static int g_ini_terrain_3d_biome_presets=1; /* terrain_3d_biome_presets: light / particle preset from the level's B32 bank */
+static int g_ini_terrain_3d_smooth_zoom=1;   /* terrain_3d_smooth_zoom: eased wheel zoom (0 = immediate steps) */
+static int g_ini_cursor_120hz=1;             /* cursor_120hz: pointer at the host mouse every presented frame (0 = per game tick) */
 static int g_pl_on=1,g_hd_on=1;          /* live toggles: Ctrl+F11 point lights, Ctrl+F12 HD tiles (host presentation thread) */
 static int g_tl_scale=2;                 /* 3D terrain: lit layers at this many times the canvas resolution */
 static int g_ini_clean_horizon=1;   /* clean_horizon: drop 1-pixel horizon slivers from the presented frame */
@@ -8602,6 +8607,9 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"terrain_3d_shadows")) g_ini_terrain_3d_shadows=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_water")) g_ini_terrain_3d_water=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_lights")) g_ini_terrain_3d_lights=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_biome_presets")) g_ini_terrain_3d_biome_presets=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_smooth_zoom")) g_ini_terrain_3d_smooth_zoom=atoi(val)!=0;
+        else if(!strcmp(key,"cursor_120hz")) g_ini_cursor_120hz=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_hd_tiles")) g_ini_terrain_3d_hd_tiles=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_hd_dir")) snprintf(g_ini_terrain_3d_hd_dir,sizeof g_ini_terrain_3d_hd_dir,"%s",val);
         else if(!strcmp(key,"clean_horizon")) g_ini_clean_horizon=atoi(val)!=0;
@@ -8715,7 +8723,7 @@ static int map_interactive_window_to_game(int wx,int wy,int *gx,int *gy) {
         const int panel=lxi<176 && g_interp_panel_active && (g_interp_panel_rgba[lyi*48+(lxi-128)]>>24)!=0u;
         const int edge_r=ox>=g.dst.x+g.dst.w-3,edge_t=oy<=g.dst.y+2,edge_b=oy>=g.dst.y+g.dst.h-3;
         lw=(int)GW_CANVAS_W; lh=(int)GW_CANVAS_H;
-        if(!panel) {
+        if(!panel && !g_info_up) {
             lx=edge_r?(double)(GW_CANVAS_W-1u):GW_CANVAS_VX0+g_zoom_x+(lx-128.0)/g_zoom;
             ly=edge_t?0.0:edge_b?(double)(GW_CANVAS_H-1u):GW_CANVAS_VY0+g_zoom_y+ly/g_zoom;
         }
@@ -8769,13 +8777,22 @@ static void host_zoom_set_target(double target,double lx,double ly) {
 /* per presented frame: eases the zoom towards its target keeping the anchored map point under the cursor */
 static void host_zoom_tick(void) {
     if(!InterlockedCompareExchange(&g_live_ifc_game,0,0)) {
+        /* a help report over the map keeps the player's zoom (its clicks map 1:1, see host_window_guest); any other
+           dialog gets the 1x view and the zoom eases back afterwards */
+        if(g_info_up && g_canvas_live) { g_zoom_t=0; return; }
+        if(g_zoom_target!=1.0 && g_zoom_resume==0.0) g_zoom_resume=g_zoom_target;
         g_zoom=g_zoom_target=1.0; g_zoom_x=g_zoom_y=0.0; g_zoom_anim=0; g_zoom_t=0; return;
+    }
+    if(g_zoom_resume!=0.0 && g_canvas_live) {
+        const double z=g_zoom_resume; g_zoom_resume=0.0;
+        host_zoom_set_target(z,128.0+((double)g_present_w-128.0)*0.5,240.0);
+        gw_flag_trace("TRACE host_controls zoom_resume=%.2f%c",z,10);
     }
     const uint64_t now=SDL_GetPerformanceCounter();
     double dt=g_zoom_t&&g_interactive_perf_frequency?(double)(now-g_zoom_t)/(double)g_interactive_perf_frequency:0.0;
     g_zoom_t=now; if(dt>0.1) dt=0.1;
     if(g_zoom_anim) {
-        const double k=dt*14.0>1.0?1.0:dt*14.0;
+        const double k=(!g_ini_terrain_3d_smooth_zoom || dt*14.0>1.0)?1.0:dt*14.0;
         g_zoom+=(g_zoom_target-g_zoom)*k;
         const double d=g_zoom_target-g_zoom;
         if(d<0.002 && d>-0.002) { g_zoom=g_zoom_target; g_zoom_anim=0; }
@@ -10910,6 +10927,15 @@ static void pt_project(double sx,double sy,double a,double *lx,double *ly) {
 }
 static double pt_zoom(void) { return (g_canvas_live && g_bloom.canvas_ready && (g_zoom<0.9999 || g_gm_frame))?g_zoom:(g_zoom>1.0001?g_zoom:1.0); }
 static void pt_biome(const gw_interactive_visual_snapshot *v) {
+    /* terrain_3d_biome_presets: the level's own B32 bank decides (campaign: A Exceland-type organic, B arid / Brown,
+       C toxic-alien, D icy; any other bank volcanic), read from the level header, no colour heuristic */
+    if(g_ini_terrain_3d_biome_presets && v->terrain_mesh.b32_name[0]) {
+        const char b=v->terrain_mesh.b32_name[3];
+        const int bi=b=='A'?0:b=='B'?1:b=='C'?5:b=='D'?3:2;
+        if(bi!=g_pt_biome) { gw_flag_trace("TRACE hd2d_particles biome=%s (bank %s)%c",bi==0?"organic":bi==1?"arid":bi==5?"toxic":bi==3?"icy":"volcanic",
+            v->terrain_mesh.b32_name,10); g_pt_biome=bi; }
+        return;
+    }
     /* per-pixel vote of the ring's terrain colours (6-bit palette): the surface that covers most of the map wins, so a
        sea of an unusual colour or patches of another ground do not tip an average */
     long vote[4]={0,0,0,0},n=0; const uint32_t total=v->fx_ring_w*v->fx_ring_h;
@@ -10939,10 +10965,21 @@ static void pt_spawn_atmo(int sx0,int sx1,int sy0,int sy1,int water_only) {
     switch(water_only?4:g_pt_biome) {
     case 0: p->kind=PT_GLOW; p->life=6.0f+pt_rand()*6.0f; p->size=(is_near?2.9f:2.0f)+pt_rand()*1.0f;
             p->vx=(pt_rand()-0.5f)*4.0f; p->vy=-1.0f-pt_rand()*2.5f; p->r=0.62f; p->g=1.0f; p->b=0.55f; p->a=is_near?0.50f:0.36f; break;
-    case 1: if(pt_rand()<0.28f) { p->kind=PT_SOFT; p->life=2.5f+pt_rand()*2.0f; p->size=14.0f+pt_rand()*14.0f; p->vx=30.0f+pt_rand()*16.0f; p->vy=10.0f+pt_rand()*5.0f;
-                                  p->r=0.96f; p->g=0.84f; p->b=0.62f; p->a=0.11f; }
+    case 1: {   /* arid: drifting golden dust veils, dust motes and a few warm glinting specks */
+            const float u=pt_rand();
+            if(u<0.24f) { p->kind=PT_SOFT; p->life=2.5f+pt_rand()*2.0f; p->size=14.0f+pt_rand()*14.0f; p->vx=30.0f+pt_rand()*16.0f; p->vy=10.0f+pt_rand()*5.0f;
+                          p->r=1.0f; p->g=0.80f; p->b=0.50f; p->a=0.11f; }
+            else if(u<0.36f) { p->kind=PT_GLOW; p->life=3.0f+pt_rand()*3.0f; p->size=(is_near?1.9f:1.4f)+pt_rand()*0.6f; p->vx=14.0f+pt_rand()*8.0f; p->vy=1.0f+pt_rand()*2.0f;
+                          p->r=1.0f; p->g=0.72f; p->b=0.36f; p->a=is_near?0.50f:0.36f; }
             else { p->kind=PT_SOFT; p->life=5.0f+pt_rand()*5.0f; p->size=(is_near?2.8f:2.0f)+pt_rand()*0.8f; p->vx=9.0f+pt_rand()*6.0f; p->vy=2.0f+pt_rand()*2.0f;
-                   p->r=1.0f; p->g=0.93f; p->b=0.76f; p->a=is_near?0.62f:0.48f; } break;
+                   p->r=1.0f; p->g=0.86f; p->b=0.60f; p->a=is_near?0.60f:0.46f; } } break;
+    case 5: {   /* toxic / alien: slow glowing spores (acid yellow-green, now and then violet) and a faint sickly haze */
+            const float u=pt_rand();
+            if(u<0.15f) { p->kind=PT_SOFT; p->life=8.0f+pt_rand()*6.0f; p->size=22.0f+pt_rand()*18.0f; p->vx=3.0f+pt_rand()*3.0f; p->vy=(pt_rand()-0.5f)*1.5f;
+                          p->r=0.80f; p->g=0.95f; p->b=0.45f; p->a=0.06f; p->par=1.0f; }
+            else { p->kind=PT_GLOW; p->life=6.0f+pt_rand()*6.0f; p->size=(is_near?2.6f:1.8f)+pt_rand()*0.9f; p->vx=(pt_rand()-0.5f)*5.0f; p->vy=-0.8f-pt_rand()*2.0f;
+                   if(pt_rand()<0.25f) { p->r=0.85f; p->g=0.50f; p->b=1.0f; } else { p->r=0.80f; p->g=1.0f; p->b=0.35f; }
+                   p->a=is_near?0.46f:0.32f; } } break;
     case 3: p->kind=PT_SOFT; p->life=7.0f+pt_rand()*5.0f; p->size=(is_near?2.0f:1.4f)+pt_rand()*0.6f; p->vx=3.0f+(pt_rand()-0.5f)*3.0f; p->vy=9.0f+pt_rand()*5.0f;
             p->r=0.95f; p->g=0.97f; p->b=1.0f; p->a=is_near?0.55f:0.40f; break;
     case 4: p->kind=PT_SOFT; p->life=8.0f+pt_rand()*6.0f; p->size=26.0f+pt_rand()*22.0f; p->vx=4.0f+pt_rand()*3.0f; p->vy=(pt_rand()-0.5f)*1.5f;
@@ -12295,6 +12332,7 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         SDL_RenderSetClipRect(g_ifclevel_demo_renderer,NULL);
         if(!map_ok) { fprintf(stderr,"SDL interpolated terrain copy: %s\n",SDL_GetError()); return 0; }
     }
+    g_info_up=visual && visual->info.width && visual->info.height;
     if(visual && !scaled && !present_info_overlay(g_ifclevel_demo_renderer,visual,&dst,g_present_w,NULL)) {
         fprintf(stderr,"SDL information overlay: %s\n",SDL_GetError()); return 0;
     }
@@ -12393,6 +12431,11 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         ptr_valid=1; ptr_w=visual->mouse_w; ptr_h=visual->mouse_h; ptr_pixels=visual->mouse_pixels;
         ptr_palette=visual->palette; ptr_hot_x=visual->mouse_hot_x; ptr_hot_y=visual->mouse_hot_y;
         ptr_x=g_interactive_input_x; ptr_y=g_interactive_input_y;
+        if(!g_ini_cursor_120hz) {   /* the original's rate: where the mouse was when the shown game frame was published */
+            static uint64_t ptr_gen; static int ptr_tx,ptr_ty;
+            if(visual->generation!=ptr_gen) { ptr_gen=visual->generation; ptr_tx=ptr_x; ptr_ty=ptr_y; }
+            ptr_x=ptr_tx; ptr_y=ptr_ty;
+        }
     } else if(g_cli_play_mode && !visual && g_title_pointer_memory) {
         const uint8_t *gm=g_title_pointer_memory;
         const uint32_t sprite=*(const uint32_t *)(gm+0x00376A6Cu),image_guest=0x00377E5Cu;

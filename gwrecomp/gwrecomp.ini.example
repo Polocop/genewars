@@ -57,6 +57,13 @@ terrain_3d_lights = 1
 terrain_3d_hd_tiles = 1
 ; folder holding the <BANK> folders, instead of hd_textures next to the exe
 ; terrain_3d_hd_dir = C:\path\to\hd_textures
+; 1 = light and particle preset of the planet's own terrain bank (organic, arid Brown, toxic-alien, icy): sun colour
+;     and height, shadow light, valley AO, liquid tint, ambient dust / spores / snow. 0 = guess it from the colours
+terrain_3d_biome_presets = 1
+; 1 = the mouse wheel zoom of the map eases smoothly (Home = back to 1x); 0 = each wheel notch applies at once
+terrain_3d_smooth_zoom = 1
+; 1 = the pointer follows the mouse every presented frame (120 Hz); 0 = it moves once per game tick, like the original
+cursor_120hz = 1
 ; 1 = remove the 1-pixel slivers the original terrain drawing leaves on the planet's horizon (shown frame only)
 clean_horizon = 1
 ; 1 = animated water ripples and caustics on the sea and soft highlights on GOOP, in missions only (presented frame

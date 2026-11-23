@@ -33,7 +33,9 @@ static struct {
     int lview[3][2],lhave[3];            /* per canvas layer: display origin (mod 128) and whether it holds a lit frame */
     GLint l_ao,l_tiles,l_fade,l_lut,l_kind,l_nrm,l_sh,l_bump,l_view,l_lx,l_ly,l_lz,l_zs,l_sun,l_sunc,l_sky,l_gnd,l_shon,l_wton,l_mix;
     GLint s_lx,s_ly,s_lz,s_zs;
-    GLint l_plp,l_plc,l_pln,l_hd,l_hdmap,l_hdon,l_hdsz,l_hdm;
+    GLint l_plp,l_plc,l_pln,l_hd,l_hdmap,l_hdon,l_hdsz,l_hdm,l_aos,l_wtint;
+    float aos,wtint[3],expo,shfloor,knorm;   /* biome: valley AO, liquid tint, exposure, shadow floor, brightness hold */
+    GLint l_expo,l_shfloor,l_knorm;
     /* terrain_3d_lights: this game frame's point lights, world space relative to the display origin (xyz, radius in
        cells) and colour x intensity; filled by pl_extract, sent by tl_render */
     float pl_pos[TL_LIGHTS][4],pl_col[TL_LIGHTS][4]; int pl_n;
@@ -69,18 +71,34 @@ static GLuint tl_link(const char *vs_src,const char *fs_src) {
     return p;
 }
 
-/* sun (towards the light), colours per biome: 0 organic, 1 arid, 2 volcanic, 3 icy */
+/* sun (towards the light) and light colours per biome: 0 organic (Exceland, the validated balance), 1 arid (Brown:
+   grazing amber-gold sun, dark warm-violet shadow light, deeper valley AO, warmer murky liquids), 2 volcanic (low
+   orange sun, red-brown shadows), 3 icy (cool pale sun, blue shadows), 4 = 0, 5 toxic / alien (sickly yellow sun,
+   teal-olive shadows, yellow-green liquids). Shadows keep a tactical floor in every preset. */
 static void tl_biome(int bi) {
-    if(bi<0 || bi>3) bi=0;
+    if(bi<0 || bi>5) bi=0;
     g_t3.biome=bi;
-    static const float az[4][2]={{-1.0f,-0.35f},{-1.0f,-0.25f},{-1.0f,-0.45f},{-1.0f,-0.30f}};
-    static const float el[4]={0.44f,0.50f,0.40f,0.38f};   /* elevation (rad): a low sun sculpts the relief */
-    static const float sc[4][3]={{1.05f,0.95f,0.78f},{1.06f,0.88f,0.64f},{1.06f,0.72f,0.50f},{0.94f,0.99f,1.08f}};
-    static const float sk[4][3]={{0.46f,0.62f,1.00f},{0.58f,0.62f,0.90f},{0.50f,0.42f,0.66f},{0.52f,0.70f,1.06f}};
-    static const float gd[4][3]={{0.34f,0.36f,0.26f},{0.44f,0.34f,0.24f},{0.36f,0.22f,0.18f},{0.42f,0.46f,0.54f}};
+    static const float az[6][2]={{-1.0f,-0.35f},{-1.0f,-0.20f},{-1.0f,-0.45f},{-1.0f,-0.30f},{-1.0f,-0.35f},{-1.0f,-0.30f}};
+    static const float el[6]={0.44f,0.36f,0.38f,0.38f,0.44f,0.42f};   /* elevation (rad): a low sun sculpts the relief */
+    static const float sc[6][3]={{1.05f,0.95f,0.78f},{1.14f,0.86f,0.52f},{1.10f,0.70f,0.46f},{0.94f,0.99f,1.08f},{1.05f,0.95f,0.78f},{1.02f,1.04f,0.74f}};
+    static const float sk[6][3]={{0.46f,0.62f,1.00f},{0.62f,0.50f,0.74f},{0.54f,0.40f,0.60f},{0.52f,0.70f,1.06f},{0.46f,0.62f,1.00f},{0.40f,0.62f,0.56f}};
+    static const float gd[6][3]={{0.34f,0.36f,0.26f},{0.46f,0.32f,0.24f},{0.38f,0.20f,0.16f},{0.42f,0.46f,0.54f},{0.34f,0.36f,0.26f},{0.36f,0.40f,0.24f}};
+    static const float ao[6]={1.0f,1.25f,1.15f,0.95f,1.0f,1.05f};
+    static const float shf[6]={0.14f,0.40f,0.32f,0.18f,0.14f,0.22f};   /* light left in cast shadows (tactical floor) */
+    /* exposure, measured: mean brightness of the 3D map within a few % of the 2D frame in every biome (the screens
+       keep their brightness; the low sun only moves light from shadowed to lit slopes) */
+    static const float ex[6]={1.04f,1.75f,1.55f,1.10f,1.04f,1.25f};
+    /* brightness hold: how far each pixel's lit brightness is pulled back towards the 2D frame's own brightness there
+       (0 = free 3D light, the validated organic look; 0.5 = half way): long low-sun shadows stay visible but never
+       sink the screen */
+    static const float kn[6]={0.0f,0.55f,0.50f,0.25f,0.0f,0.40f};
+    static const float wt[6][3]={{1.0f,1.0f,1.0f},{1.05f,0.95f,0.80f},{1.0f,0.85f,0.80f},{0.92f,1.0f,1.08f},{1.0f,1.0f,1.0f},{0.95f,1.05f,0.80f}};
     const float hx=az[bi][0],hy=az[bi][1],hl=sqrtf(hx*hx+hy*hy),c=cosf(el[bi]),s=sinf(el[bi]);
     g_t3.sun[0]=hx/hl*c; g_t3.sun[1]=hy/hl*c; g_t3.sun[2]=s;
-    for(int i=0;i<3;i++) { g_t3.sunc[i]=sc[bi][i]; g_t3.sky[i]=sk[bi][i]; g_t3.gnd[i]=gd[bi][i]; }
+    for(int i=0;i<3;i++) { g_t3.sunc[i]=sc[bi][i]; g_t3.sky[i]=sk[bi][i]; g_t3.gnd[i]=gd[bi][i]; g_t3.wtint[i]=wt[bi][i]; }
+    g_t3.aos=ao[bi]; g_t3.shfloor=shf[bi];
+    g_t3.expo=ex[bi]; g_t3.knorm=kn[bi];
+    gw_flag_trace("TRACE terrain_3d biome preset %d exposure %.2f%c",bi,(double)g_t3.expo,10);
 }
 
 static GLuint tl_tex(int w,int h,GLenum filter,GLenum wrap) {
@@ -120,6 +138,7 @@ static int tl_init(void) {
         "uniform vec3 u_sun,u_sunc,u_sky,u_gnd; uniform float u_shon,u_wton,u_mix,u_zs;\n"
         "uniform vec4 u_pt_light_pos_rad[16]; uniform vec4 u_pt_light_col_int[16]; uniform int u_pt_light_count;\n"
         "uniform sampler2D u_hd,u_hdmap; uniform float u_hdon,u_hdm; uniform vec2 u_hdsz;\n"
+        "uniform float u_aos,u_expo,u_shfloor,u_knorm; uniform vec3 u_wtint;\n"
         "varying vec3 v_material; varying vec2 v_tile_mode; varying vec3 v_world;\n"
         "float shdec(vec2 uv){ vec4 t=texture2D(u_sh,uv); return t.r+t.g/255.0; }\n"
         "float hh(vec2 q){ vec3 p3=fract(vec3(q.xyx)*0.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }\n"
@@ -163,7 +182,7 @@ static int tl_init(void) {
         "  float kind=floor(texture2D(u_kind,vec2((idx+0.5)/256.0,0.5)).r*255.0+0.5);\n"
         "  vec2 W=v_world.xy+u_view;\n"
         "  vec4 nt=texture2D(u_nrm,(W+0.5)/128.0);\n"
-        "  float ao=texture2D(u_ao,(W+0.5)/128.0).r;\n"
+        "  float ao=clamp(1.0-(1.0-texture2D(u_ao,(W+0.5)/128.0).r)*u_aos,0.25,1.0);\n"
         "  vec3 N=normalize(nt.xyz*2.0-1.0);\n"
         "  vec3 bm=texture2D(u_bump,(base+clamp(v_material.xy,0.5,31.5))/vec2(512.0,544.0)).rgb;\n"
         "  vec2 gr=bm.gb*2.0-1.0;\n"
@@ -187,8 +206,8 @@ static int tl_init(void) {
         "  float ndl=max(dot(Nm,u_sun),0.0);\n"
         "  vec3 hemi=mix(u_gnd,u_sky,Nm.z*0.5+0.5);\n"
         "  /* low warm sun against a cooler, deeper sky light; valley/cavity AO from the height grid; shadows never black */\n"
-        "  float vis=mix(0.14,1.0,sh);\n"
-        "  vec3 light=hemi*(0.40*ao)+u_sunc*(ndl*vis*1.30*mix(0.65,1.0,ao));\n"
+        "  float vis=mix(u_shfloor,1.0,sh);\n"
+        "  vec3 light=(hemi*(0.40*ao)+u_sunc*(ndl*vis*1.30*mix(0.65,1.0,ao)))*u_expo;\n"
         "  vec3 V=vec3(0.6124,0.6124,0.5);\n"
         "  float sat=max(alb.r,max(alb.g,alb.b))-min(alb.r,min(alb.g,alb.b));\n"
         "  float rock=clamp(1.0-sat*3.0,0.0,1.0);\n"
@@ -210,6 +229,10 @@ static int tl_init(void) {
         "  pl=pl/(1.0+0.45*pl);\n"
         "  lit+=alb*pl*1.15*mix(0.7,1.0,ao)+pls*0.30*rock;\n"
         "  vec3 col=mix(c2*mix(0.75,1.0,ao),lit,u_mix);\n"
+        /* soft shoulder above 0.8: identity below it (the validated organic look), no clipped highlights above */
+        "  if(u_knorm>0.0){ float L2=dot(c2,vec3(0.3,0.59,0.11)), L3=dot(col,vec3(0.3,0.59,0.11));\n"
+        "    col*=pow(clamp((L2+0.01)/(L3+0.01),0.5,2.5),u_knorm); }\n"
+        "  col=mix(col,0.8+0.2*(1.0-exp(-(col-0.8)/0.2)),step(0.8,col));\n"
         "  float a=1.0;\n"
         "  if(water>0.5){\n"
         "    float hpx=v_world.z/u_zs;\n"
@@ -217,7 +240,7 @@ static int tl_init(void) {
         "    dep=clamp(dep+(vn(W*2.5,320.0)-0.5)*0.30+(vn(W*7.0,896.0)-0.5)*0.12,0.0,1.0);\n"
         "    vec3 shallow=alb*vec3(0.90,1.08,1.04)+vec3(0.00,0.045,0.045);\n"
         "    vec3 deep=alb*vec3(0.30,0.40,0.60);\n"
-        "    col=mix(shallow,deep,smoothstep(0.0,1.0,dep))*mix(0.55,1.0,sh);\n"
+        "    col=mix(shallow,deep,smoothstep(0.0,1.0,dep))*mix(0.55,1.0,sh)*u_wtint;\n"
         "    a=0.1+0.4*dep;\n"
         "    col+=(alb*0.55+vec3(0.06,0.08,0.09))*pl+pls*0.45;\n"
         "  } else if(u_wton>0.5 && kind==2.0) a=0.75;\n"
@@ -252,6 +275,7 @@ static int tl_init(void) {
     TLU(prog_lit,l_shon,"u_shon"); TLU(prog_lit,l_wton,"u_wton"); TLU(prog_lit,l_mix,"u_mix"); TLU(prog_lit,l_ao,"u_ao");
     TLU(prog_lit,l_plp,"u_pt_light_pos_rad"); TLU(prog_lit,l_plc,"u_pt_light_col_int"); TLU(prog_lit,l_pln,"u_pt_light_count");
     TLU(prog_lit,l_hd,"u_hd"); TLU(prog_lit,l_hdmap,"u_hdmap"); TLU(prog_lit,l_hdon,"u_hdon"); TLU(prog_lit,l_hdsz,"u_hdsz"); TLU(prog_lit,l_hdm,"u_hdm");
+    TLU(prog_lit,l_aos,"u_aos"); TLU(prog_lit,l_expo,"u_expo"); TLU(prog_lit,l_shfloor,"u_shfloor"); TLU(prog_lit,l_knorm,"u_knorm"); TLU(prog_lit,l_wtint,"u_wtint");
     TLU(prog_sh,s_lx,"u_lx"); TLU(prog_sh,s_ly,"u_ly"); TLU(prog_sh,s_lz,"u_lz"); TLU(prog_sh,s_zs,"u_zs");
     TLU(prog_bump,b_tiles,"u_tiles"); TLU(prog_bump,b_lut,"u_lut");
     #undef TLU
@@ -642,6 +666,8 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_bloom.Uniform1f(g_t3.l_shon,shadows?1.0f:0.0f);
     g_bloom.Uniform1f(g_t3.l_wton,g_ini_terrain_3d_water?1.0f:0.0f);
     g_bloom.Uniform1f(g_t3.l_mix,0.90f);
+    g_bloom.Uniform1f(g_t3.l_aos,g_t3.aos); g_bloom.Uniform1f(g_t3.l_expo,g_t3.expo); g_bloom.Uniform1f(g_t3.l_shfloor,g_t3.shfloor); g_bloom.Uniform1f(g_t3.l_knorm,g_t3.knorm);
+    g_t3.Uniform3f(g_t3.l_wtint,g_t3.wtint[0],g_t3.wtint[1],g_t3.wtint[2]);
     {   /* HD overrides */
         hd_service(d);
         const int hd=g_hd_on && g_ini_terrain_3d_hd_tiles && g_hd.state==3 && !strcmp(g_hd.bank,d->b32_name);
