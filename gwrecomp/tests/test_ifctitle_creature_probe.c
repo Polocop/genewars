@@ -10656,6 +10656,20 @@ static int pl_world(const gw_terrain_mesh_draw *d,float sx,float sy,float *wx,fl
     }
     return 0;
 }
+/* the pixel (x,y) of colour k lies on a straight 1-pixel line of 24 px or more (the drag-selection rectangle, drawn in
+   palette 145, white): a UI outline, not an effect, so it never becomes a light. A run of the same colour along the
+   row (or the column) with a different colour two pixels beside it on both sides. */
+static int pl_on_line(const uint8_t *cv,int x,int y,uint8_t k) {
+    int a=0,b=0;
+    while(a<40 && x-a-1>=128 && cv[(size_t)y*1152u+(size_t)(x-a-1)]==k) a++;
+    while(b<40 && x+b+1<1152 && cv[(size_t)y*1152u+(size_t)(x+b+1)]==k) b++;
+    if(a+b+1>=24 && y>=2 && y<638 && cv[(size_t)(y-2)*1152u+(size_t)x]!=k && cv[(size_t)(y+2)*1152u+(size_t)x]!=k) return 1;
+    a=b=0;
+    while(a<40 && y-a-1>=0 && cv[(size_t)(y-a-1)*1152u+(size_t)x]==k) a++;
+    while(b<40 && y+b+1<640 && cv[(size_t)(y+b+1)*1152u+(size_t)x]==k) b++;
+    if(a+b+1>=24 && x>=130 && x<1150 && cv[(size_t)y*1152u+(size_t)(x-2)]!=k && cv[(size_t)y*1152u+(size_t)(x+2)]!=k) return 1;
+    return 0;
+}
 static void pl_extract(const gw_interactive_visual_snapshot *v,const gw_terrain_mesh_draw *d) {
     const uint64_t t0=SDL_GetPerformanceCounter();
     pl_cand cand[PL_CANDS]; int nc=0;
@@ -10682,6 +10696,7 @@ static void pl_extract(const gw_interactive_visual_snapshot *v,const gw_terrain_
                 if(x<176 && (y>=480 || v->canvas_panel[y*48+(x-128)])) continue;   /* panel art of the HUD, not the map */
                 const uint8_t sw=g_pl_sw[k],gw=g_pl_gw[k],goop=g_fx_kind[k]==FX_GOOP;
                 const int ground=k==rr[rx],b=brow+((x-128)>>5);
+                if(pl_on_line(v->canvas,x,y,k)) continue;   /* selection rectangle and other 1-px UI outlines*/
                 if(sw && !ground) { const float w=(float)sw; fw[b]+=w; fr[b]+=w*pal[k*3]; fg[b]+=w*pal[k*3+1]; fb[b]+=w*pal[k*3+2]; fx[b]+=w*x; fy[b]+=w*y; }
                 else if(goop && ground) { gc[b]+=1.0f; gx[b]+=(float)x; gy[b]+=(float)y; }
                 else if(gw && ground) { const float w=(float)gw; bw[b]+=w; bx[b]+=w*x; by[b]+=w*y; br[b]+=w*pal[k*3]; bgc[b]+=w*pal[k*3+1]; bbc[b]+=w*pal[k*3+2]; }
