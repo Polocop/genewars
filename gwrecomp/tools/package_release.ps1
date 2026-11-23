@@ -164,6 +164,8 @@ CÓMO EMPEZAR
   4. INICIAR JUEGO (menú original), CONTINUAR ÚLTIMA PARTIDA, o en la pestaña MISIONES elige una y JUGAR MISIÓN.
      La imagen (modo de vista, resolución, filtro...) se ajusta en la pestaña GRÁFICOS.
   Ctrl+F9 alterna el terreno 2D/3D en misiones con zoomout (con cualquier zoom de la rueda).
+  Ctrl+F11 alterna las luces dinámicas 3D; Ctrl+F12 alterna las texturas HD del terreno (carpeta
+  hd_textures\<BANCO>\ junto a gwrecomp.exe, creada con tools/export_b32_tiles.py desde tu instalación).
   Todo lo que cambies en el lanzador se guarda en gwrecomp.ini, junto a gwrecomp.exe.
 
 TECLAS EN PARTIDA
@@ -213,6 +215,8 @@ HOW TO START
 
 IN-GAME KEYS
   Ctrl+F9 switches terrain 2D/3D in zoomout missions (at any wheel zoom).
+  Ctrl+F11 toggles the 3D point lights; Ctrl+F12 toggles the HD terrain tiles (folder hd_textures\<BANK>\ next to
+  gwrecomp.exe, made with tools/export_b32_tiles.py from your own install).
   F7 filter (sharp / EPX / CRT)   F8 turbo 1x/2x/4x   TAB (hold) turbo 4x   Wheel zoom   Home zoom 1x
   F10 release the mouse   WASD / arrows / middle button scroll the map   ESC game options
 

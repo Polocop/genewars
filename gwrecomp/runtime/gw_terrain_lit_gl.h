@@ -20,7 +20,8 @@
 #define GL_REPEAT 0x2901
 #endif
 
-enum { TL_SHADOW=2048, TL_GRID=64 };
+#include "gw_png.h"
+enum { TL_SHADOW=2048, TL_GRID=64, TL_LIGHTS=16 };
 static void bloom_draw_quad(float x0,float y0,float x1,float y1,float u0,float v0,float u1,float v1,
                             float su0,float sv0,float su1,float sv1);
 
@@ -32,6 +33,11 @@ static struct {
     int lview[3][2],lhave[3];            /* per canvas layer: display origin (mod 128) and whether it holds a lit frame */
     GLint l_ao,l_tiles,l_fade,l_lut,l_kind,l_nrm,l_sh,l_bump,l_view,l_lx,l_ly,l_lz,l_zs,l_sun,l_sunc,l_sky,l_gnd,l_shon,l_wton,l_mix;
     GLint s_lx,s_ly,s_lz,s_zs;
+    GLint l_plp,l_plc,l_pln,l_hd,l_hdmap,l_hdon,l_hdsz,l_hdm;
+    /* terrain_3d_lights: this game frame's point lights, world space relative to the display origin (xyz, radius in
+       cells) and colour x intensity; filled by pl_extract, sent by tl_render */
+    float pl_pos[TL_LIGHTS][4],pl_col[TL_LIGHTS][4]; int pl_n;
+    void (APIENTRYP Uniform4fv)(GLint,GLsizei,const GLfloat *);
     GLint b_tiles,b_lut;
     float lx[4],ly[4],lz[4];
     float sun[3],sunc[3],sky[3],gnd[3];
@@ -95,7 +101,8 @@ static int tl_init(void) {
     if(g_t3.ready) return 1;
     *(void **)&g_t3.Uniform3f=SDL_GL_GetProcAddress("glUniform3f");
     *(void **)&g_t3.Uniform4f=SDL_GL_GetProcAddress("glUniform4f");
-    if(!g_t3.Uniform3f || !g_t3.Uniform4f) goto fail;
+    *(void **)&g_t3.Uniform4fv=SDL_GL_GetProcAddress("glUniform4fv");
+    if(!g_t3.Uniform3f || !g_t3.Uniform4f || !g_t3.Uniform4fv) goto fail;
     {
     static const char *vs_lit=
         "#version 120\n"
@@ -111,6 +118,8 @@ static int tl_init(void) {
         "uniform sampler2D u_tiles,u_fade,u_lut,u_kind,u_nrm,u_sh,u_bump,u_ao;\n"
         "uniform vec2 u_view; uniform vec4 u_lx,u_ly,u_lz;\n"
         "uniform vec3 u_sun,u_sunc,u_sky,u_gnd; uniform float u_shon,u_wton,u_mix,u_zs;\n"
+        "uniform vec4 u_pt_light_pos_rad[16]; uniform vec4 u_pt_light_col_int[16]; uniform int u_pt_light_count;\n"
+        "uniform sampler2D u_hd,u_hdmap; uniform float u_hdon,u_hdm; uniform vec2 u_hdsz;\n"
         "varying vec3 v_material; varying vec2 v_tile_mode; varying vec3 v_world;\n"
         "float shdec(vec2 uv){ vec4 t=texture2D(u_sh,uv); return t.r+t.g/255.0; }\n"
         "float hh(vec2 q){ vec3 p3=fract(vec3(q.xyx)*0.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }\n"
@@ -139,6 +148,18 @@ static int tl_init(void) {
         "  vec3 alb=mix(mix(lut(u_lut,r00),lut(u_lut,r10),f.x),mix(lut(u_lut,r01),lut(u_lut,r11),f.x),f.y);\n"
         "  if(v_tile_mode.y>5.5){ vec3 cc=lut(u_lut,idx); float i2=idx;\n"
         "    i2=floor(texture2D(u_fade,(vec2(idx,shade)+0.5)/vec2(256.0,64.0)).r*255.0+0.5); c2=lut(u_lut,i2); alb=cc; }\n"
+        /* HD override: the albedo of this tile's texels from the HD atlas (bank layout, linear + mipmaps), the shaded
+           2D colour scaled by the same ratio; water / GOOP / heights keep coming from the original indices */
+        "  float hdon=0.0;\n"
+        "  if(u_hdon>0.5 && v_tile_mode.y<5.5){\n"
+        "    vec4 hm=texture2D(u_hdmap,vec2((tile+0.5)/259.0,0.5));\n"
+        "    if(hm.a>0.5){\n"
+        "      vec2 o=vec2(floor(hm.r*255.0+0.5),floor(hm.g*255.0+0.5)+256.0*floor(hm.b*255.0+0.5));\n"
+        "      vec3 hd=texture2D(u_hd,(o+clamp(v_material.xy,vec2(u_hdm),vec2(32.0-u_hdm)))/u_hdsz).rgb;\n"
+        "      float lo=dot(alb,vec3(0.3,0.59,0.11)), lc=dot(c2,vec3(0.3,0.59,0.11));\n"
+        "      c2=hd*clamp(lc/max(lo,0.02),0.0,1.5); alb=hd; hdon=1.0;\n"
+        "    }\n"
+        "  }\n"
         "  float kind=floor(texture2D(u_kind,vec2((idx+0.5)/256.0,0.5)).r*255.0+0.5);\n"
         "  vec2 W=v_world.xy+u_view;\n"
         "  vec4 nt=texture2D(u_nrm,(W+0.5)/128.0);\n"
@@ -154,7 +175,7 @@ static int tl_init(void) {
         "  /* 4K micro-detail in world coordinates (periodic over the 128-cell planet): albedo +-10 %, normal relief */\n"
         "  float dn=det(W), dx=det(W+vec2(0.004,0.0))-dn, dy=det(W+vec2(0.0,0.004))-dn;\n"
         "  vec3 Nm=normalize(N-(1.0-water)*(0.9*(gr.x*T+gr.y*B)*im+vec3(dx,dy,0.0)*1.4));\n"
-        "  alb*=1.0+(1.0-water)*0.32*(dn-0.5);\n"
+        "  alb*=1.0+(1.0-water)*0.32*(1.0-0.6*hdon)*(dn-0.5);\n"
         "  float sh=1.0;\n"
         "  if(u_shon>0.5){\n"
         "    vec4 P=vec4(v_world+N*0.06,1.0);\n"
@@ -174,6 +195,20 @@ static int tl_init(void) {
         "  vec3 H=normalize(u_sun+V);\n"
         "  float spec=pow(max(dot(Nm,H),0.0),32.0)*0.20*rock*sh;\n"
         "  vec3 lit=alb*light*1.12+u_sunc*spec;\n"
+        /* dynamic point lights: real 3D normal, (1 - d/r)^2 falloff to exactly 0 at the radius, soft knee so they
+           lift the scene without burning it to white; only where the mesh draws terrain (never the undrawn black) */
+        "  vec3 pl=vec3(0.0), pls=vec3(0.0);\n"
+        "  for(int i=0;i<16;i++){\n"
+        "    if(i>=u_pt_light_count) break;\n"
+        "    vec4 pr=u_pt_light_pos_rad[i]; vec3 Lv=pr.xyz-v_world; Lv.xy=mod(Lv.xy+64.0,128.0)-64.0;\n"
+        "    float d=length(Lv); if(d>=pr.w) continue;\n"
+        "    vec3 Ld=Lv/max(d,1e-3); float at=1.0-d/pr.w; at*=at;\n"
+        "    vec3 lc=u_pt_light_col_int[i].rgb*(u_pt_light_col_int[i].w*at);\n"
+        "    pl+=lc*(max(dot(Nm,Ld),0.0)*0.85+0.15);\n"
+        "    pls+=lc*pow(max(dot(Nm,normalize(Ld+V)),0.0),24.0);\n"
+        "  }\n"
+        "  pl=pl/(1.0+0.45*pl);\n"
+        "  lit+=alb*pl*1.15*mix(0.7,1.0,ao)+pls*0.30*rock;\n"
         "  vec3 col=mix(c2*mix(0.75,1.0,ao),lit,u_mix);\n"
         "  float a=1.0;\n"
         "  if(water>0.5){\n"
@@ -184,6 +219,7 @@ static int tl_init(void) {
         "    vec3 deep=alb*vec3(0.30,0.40,0.60);\n"
         "    col=mix(shallow,deep,smoothstep(0.0,1.0,dep))*mix(0.55,1.0,sh);\n"
         "    a=0.1+0.4*dep;\n"
+        "    col+=(alb*0.55+vec3(0.06,0.08,0.09))*pl+pls*0.45;\n"
         "  } else if(u_wton>0.5 && kind==2.0) a=0.75;\n"
         "  gl_FragColor=vec4(clamp(col,0.0,1.0),a);\n"
         "}\n";
@@ -214,6 +250,8 @@ static int tl_init(void) {
     TLU(prog_lit,l_lx,"u_lx"); TLU(prog_lit,l_ly,"u_ly"); TLU(prog_lit,l_lz,"u_lz"); TLU(prog_lit,l_zs,"u_zs");
     TLU(prog_lit,l_sun,"u_sun"); TLU(prog_lit,l_sunc,"u_sunc"); TLU(prog_lit,l_sky,"u_sky"); TLU(prog_lit,l_gnd,"u_gnd");
     TLU(prog_lit,l_shon,"u_shon"); TLU(prog_lit,l_wton,"u_wton"); TLU(prog_lit,l_mix,"u_mix"); TLU(prog_lit,l_ao,"u_ao");
+    TLU(prog_lit,l_plp,"u_pt_light_pos_rad"); TLU(prog_lit,l_plc,"u_pt_light_col_int"); TLU(prog_lit,l_pln,"u_pt_light_count");
+    TLU(prog_lit,l_hd,"u_hd"); TLU(prog_lit,l_hdmap,"u_hdmap"); TLU(prog_lit,l_hdon,"u_hdon"); TLU(prog_lit,l_hdsz,"u_hdsz"); TLU(prog_lit,l_hdm,"u_hdm");
     TLU(prog_sh,s_lx,"u_lx"); TLU(prog_sh,s_ly,"u_ly"); TLU(prog_sh,s_lz,"u_lz"); TLU(prog_sh,s_zs,"u_zs");
     TLU(prog_bump,b_tiles,"u_tiles"); TLU(prog_bump,b_lut,"u_lut");
     #undef TLU
@@ -396,6 +434,161 @@ static void tl_shadow(const gw_terrain_mesh_draw *d) {
     g_bloom.ClearColor(0.0f,0.0f,0.0f,1.0f);
 }
 
+/* ---- terrain_3d_hd_tiles: optional HD overrides of the B32 terrain tiles -----------------------------------------
+   <dir>/<BANK>/atlas.png (8 tiles wide, square tiles of S px, bank order) or <dir>/<BANK>/tile_NNN.png, dir =
+   terrain_3d_hd_dir or hd_textures next to the exe. Decoded, assembled and mipmapped on a worker thread; uploaded a
+   few rows per game frame (no stall); until then, and when absent, the original B32 texels are used unchanged. */
+#ifndef GL_TEXTURE_MAX_LEVEL
+#define GL_TEXTURE_MAX_LEVEL 0x813D
+#endif
+#ifndef GL_LINEAR_MIPMAP_LINEAR
+#define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#endif
+#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
+#endif
+enum { HD_MAX_TILE=256, HD_MAX_TILES=512, HD_LEVELS=10 };
+static struct {
+    int state;                 /* 0 idle, 1 loading (worker), 2 uploading, 3 ready, 4 none for this bank */
+    char bank[8],path[640];
+    SDL_atomic_t done;         /* worker result: 1 ok, -1 nothing usable */
+    int S,rows,levels,up_level,up_row;
+    uint8_t *mip[HD_LEVELS]; int mw[HD_LEVELS],mh[HD_LEVELS];
+    uint8_t valid[HD_MAX_TILES];
+    GLuint tex,map_tex;
+    uint32_t map_key[259]; int map_valid;
+} g_hd;
+static void hd_free_cpu(void) { for(int i=0;i<HD_LEVELS;i++) { free(g_hd.mip[i]); g_hd.mip[i]=NULL; } }
+/* box-resamples a w x h RGBA image to S x S into dst (tile of the atlas, stride sw pixels) */
+static void hd_put_tile(uint8_t *dst,int sw,const uint8_t *src,int w,int h,int S) {
+    for(int y=0;y<S;y++) for(int x=0;x<S;x++) {
+        const int x0=x*w/S,x1=((x+1)*w+S-1)/S,y0=y*h/S,y1=((y+1)*h+S-1)/S; unsigned acc[4]={0,0,0,0},n=0;
+        for(int yy=y0;yy<y1;yy++) for(int xx=x0;xx<x1;xx++) { const uint8_t *p=src+((size_t)yy*w+xx)*4u; for(int c=0;c<4;c++) acc[c]+=p[c]; n++; }
+        uint8_t *o=dst+((size_t)y*sw+x)*4u; for(int c=0;c<4;c++) o[c]=(uint8_t)((acc[c]+n/2u)/n);
+    }
+}
+static int SDLCALL hd_worker(void *unused) {
+    (void)unused;
+    char fn[700]; int w=0,h=0,S=0,rows=0;
+    uint8_t *atlas=NULL;
+    snprintf(fn,sizeof fn,"%s\\atlas.png",g_hd.path);
+    uint8_t *img=gw_png_load(fn,&w,&h);
+    memset(g_hd.valid,0,sizeof g_hd.valid);
+    if(img && w%8==0 && h%(w/8)==0) {
+        const int src_s=w/8; rows=h/src_s; S=src_s>HD_MAX_TILE?HD_MAX_TILE:src_s;
+        if(rows*8>HD_MAX_TILES) rows=HD_MAX_TILES/8;
+        if(S==src_s) { atlas=img; img=NULL; }
+        else if((atlas=(uint8_t *)malloc((size_t)8*S*rows*S*4u))) {
+            uint8_t *tile=(uint8_t *)malloc((size_t)src_s*src_s*4u);
+            for(int t=0;tile && t<rows*8;t++) {
+                for(int y=0;y<src_s;y++) memcpy(tile+(size_t)y*src_s*4u,img+(((size_t)(t/8)*src_s+y)*w+(size_t)(t%8)*src_s)*4u,(size_t)src_s*4u);
+                hd_put_tile(atlas+(((size_t)(t/8)*S)*8u*S+(size_t)(t%8)*S)*4u,8*S,tile,src_s,src_s,S);
+            }
+            free(tile);
+        }
+        memset(g_hd.valid,1,(size_t)rows*8);
+    } else {
+        int last=-1;
+        for(int t=0;t<HD_MAX_TILES;t++) {
+            snprintf(fn,sizeof fn,"%s\\tile_%03d.png",g_hd.path,t);
+            int tw=0,th=0; uint8_t *ti=gw_png_load(fn,&tw,&th);
+            if(!ti) continue;
+            if(!S) { S=tw<th?tw:th; if(S>HD_MAX_TILE) S=HD_MAX_TILE; if(S<8) { free(ti); S=0; break; }
+                rows=HD_MAX_TILES/8; atlas=(uint8_t *)calloc((size_t)8*S*rows*S,4u); if(!atlas) { free(ti); break; } }
+            hd_put_tile(atlas+(((size_t)(t/8)*S)*8u*S+(size_t)(t%8)*S)*4u,8*S,ti,tw,th,S);
+            free(ti); g_hd.valid[t]=1; last=t;
+        }
+        rows=last>=0?last/8+1:0;
+    }
+    free(img);
+    if(!atlas || !S || !rows) { free(atlas); SDL_AtomicSet(&g_hd.done,-1); return 0; }
+    /* mip chain (2x2 box), down to 4 px per tile so neighbouring tiles never blend */
+    int lw=8*S,lh=rows*S,n=0; g_hd.mip[0]=atlas; g_hd.mw[0]=lw; g_hd.mh[0]=lh;
+    while(n+1<HD_LEVELS && (S>>(n+1))>=4) {
+        const int nw=lw/2,nh=lh/2; uint8_t *m=(uint8_t *)malloc((size_t)nw*nh*4u); if(!m) break;
+        const uint8_t *s=g_hd.mip[n];
+        for(int y=0;y<nh;y++) for(int x=0;x<nw;x++) for(int c=0;c<4;c++) {
+            const uint8_t *p=s+((size_t)(2*y)*lw+2*x)*4u+c;
+            m[((size_t)y*nw+x)*4u+c]=(uint8_t)((p[0]+p[4]+p[(size_t)lw*4u]+p[(size_t)lw*4u+4u]+2)>>2);
+        }
+        n++; g_hd.mip[n]=m; g_hd.mw[n]=nw; g_hd.mh[n]=nh; lw=nw; lh=nh;
+    }
+    g_hd.levels=n+1; g_hd.S=S; g_hd.rows=rows;
+    SDL_AtomicSet(&g_hd.done,1);
+    return 0;
+}
+/* once per game frame: start loading the bank's HD pack, upload a slice, or nothing */
+static void hd_service(const gw_terrain_mesh_draw *d) {
+    if(!g_ini_terrain_3d_hd_tiles || !d->b32_name[0]) return;
+    if(strcmp(g_hd.bank,d->b32_name)) {
+        if(g_hd.state==1) return;                          /* the worker finishes the previous bank first */
+        hd_free_cpu(); g_hd.state=4; g_hd.map_valid=0;
+        snprintf(g_hd.bank,sizeof g_hd.bank,"%s",d->b32_name);
+        char base[600];
+        if(g_ini_terrain_3d_hd_dir[0]) snprintf(base,sizeof base,"%s",g_ini_terrain_3d_hd_dir);
+        else { char exe[MAX_PATH]; DWORD n=GetModuleFileNameA(NULL,exe,MAX_PATH); while(n && exe[n-1]!='\\' && exe[n-1]!='/') n--;
+            exe[n]=0; snprintf(base,sizeof base,"%shd_textures",exe); }
+        snprintf(g_hd.path,sizeof g_hd.path,"%s\\%s",base,g_hd.bank);
+        const DWORD at=GetFileAttributesA(g_hd.path);
+        if(at==INVALID_FILE_ATTRIBUTES || !(at&FILE_ATTRIBUTE_DIRECTORY)) {
+            gw_flag_trace("TRACE terrain_3d hd_tiles none for %s (%s)%c",g_hd.bank,g_hd.path,10); return; }
+        SDL_AtomicSet(&g_hd.done,0); g_hd.state=1;
+        SDL_Thread *th=SDL_CreateThread(hd_worker,"gw_hd_tiles",NULL);
+        if(th) SDL_DetachThread(th); else g_hd.state=4;
+        gw_flag_trace("TRACE terrain_3d hd_tiles loading %s%c",g_hd.path,10);
+        return;
+    }
+    if(g_hd.state==1) {
+        const int r=SDL_AtomicGet(&g_hd.done);
+        if(!r) return;
+        if(r<0) { g_hd.state=4; gw_flag_trace("TRACE terrain_3d hd_tiles nothing usable in %s%c",g_hd.path,10); return; }
+        if(!g_hd.tex) g_bloom.GenTextures(1,&g_hd.tex);
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_hd.tex);
+        g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,4); g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
+        for(int l=0;l<g_hd.levels;l++) g_bloom.TexImage2D(GL_TEXTURE_2D,l,GL_RGBA8,g_hd.mw[l],g_hd.mh[l],0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAX_LEVEL,g_hd.levels-1);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_LINEAR); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+        g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+        if(SDL_GL_ExtensionSupported("GL_EXT_texture_filter_anisotropic")) g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAX_ANISOTROPY_EXT,8);
+        g_hd.up_level=0; g_hd.up_row=0; g_hd.state=2;
+        gw_flag_trace("TRACE terrain_3d hd_tiles %s decoded: tile %dpx, %d rows, %d mip levels%c",g_hd.bank,g_hd.S,g_hd.rows,g_hd.levels,10);
+        return;
+    }
+    if(g_hd.state==2) {   /* about 2 MB per game frame */
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_hd.tex);
+        g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,4); g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
+        size_t budget=2u<<20;
+        while(budget && g_hd.up_level<g_hd.levels) {
+            const int l=g_hd.up_level,w=g_hd.mw[l],h=g_hd.mh[l];
+            int n=(int)(budget/((size_t)w*4u)); if(n<1) n=1;
+            if(n>h-g_hd.up_row) n=h-g_hd.up_row;
+            g_bloom.TexSubImage2D(GL_TEXTURE_2D,l,0,g_hd.up_row,w,n,GL_RGBA,GL_UNSIGNED_BYTE,g_hd.mip[l]+(size_t)g_hd.up_row*w*4u);
+            g_hd.up_row+=n; budget=budget>(size_t)n*w*4u?budget-(size_t)n*w*4u:0;
+            if(g_hd.up_row>=h) { g_hd.up_level++; g_hd.up_row=0; }
+        }
+        if(g_hd.up_level>=g_hd.levels) { hd_free_cpu(); g_hd.state=3; g_hd.map_valid=0;
+            gw_flag_trace("TRACE terrain_3d hd_tiles %s ready (%dx%d)%c",g_hd.bank,8*g_hd.S,g_hd.rows*g_hd.S,10); }
+    }
+}
+/* per atlas slot: where its texels sit in the bank (x, y in bank pixels) when the HD pack has that tile */
+static void hd_slot_map(const gw_terrain_mesh_draw *d) {
+    if(!g_hd.map_tex) { g_hd.map_tex=tl_tex(259,1,GL_NEAREST,GL_CLAMP_TO_EDGE); g_hd.map_valid=0; }
+    if(g_hd.map_valid && !memcmp(g_hd.map_key,d->tile_addr,sizeof(uint32_t)*(d->tiles<259u?d->tiles:259u))) return;
+    uint8_t m[259u*4u]; memset(m,0,sizeof m);
+    const uint32_t bank_bytes=(uint32_t)g_hd.rows*32u*256u;
+    for(unsigned i=0;i<d->tiles && i<259u;i++) {
+        const uint32_t a=d->tile_addr[i];
+        if(a<d->b32_base || a-d->b32_base>=bank_bytes) continue;
+        const uint32_t rel=a-d->b32_base,x=rel%256u,y=rel/256u;
+        if(x+32u>256u || y+32u>(uint32_t)g_hd.rows*32u || !g_hd.valid[(y/32u)*8u+x/32u]) continue;
+        m[i*4u]=(uint8_t)x; m[i*4u+1]=(uint8_t)(y&255u); m[i*4u+2]=(uint8_t)(y>>8); m[i*4u+3]=255u;
+    }
+    g_bloom.BindTexture(GL_TEXTURE_2D,g_hd.map_tex);
+    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,4); g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,259,1,GL_RGBA,GL_UNSIGNED_BYTE,m);
+    memcpy(g_hd.map_key,d->tile_addr,sizeof(uint32_t)*(d->tiles<259u?d->tiles:259u)); g_hd.map_valid=1;
+}
+
 /* once per game frame, after terrain_gl_render (the tile atlas and the mesh VBO are current): the lit layer */
 static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     if(!d || !d->count || !tl_init() || !tl_size(scale)) return 0;
@@ -449,6 +642,22 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_bloom.Uniform1f(g_t3.l_shon,shadows?1.0f:0.0f);
     g_bloom.Uniform1f(g_t3.l_wton,g_ini_terrain_3d_water?1.0f:0.0f);
     g_bloom.Uniform1f(g_t3.l_mix,0.90f);
+    {   /* HD overrides */
+        hd_service(d);
+        const int hd=g_hd_on && g_ini_terrain_3d_hd_tiles && g_hd.state==3 && !strcmp(g_hd.bank,d->b32_name);
+        if(hd) { hd_slot_map(d);
+            g_bloom.ActiveTexture(GL_TEXTURE8); g_bloom.BindTexture(GL_TEXTURE_2D,g_hd.tex); g_bloom.Uniform1i(g_t3.l_hd,8);
+            g_bloom.ActiveTexture(GL_TEXTURE9); g_bloom.BindTexture(GL_TEXTURE_2D,g_hd.map_tex); g_bloom.Uniform1i(g_t3.l_hdmap,9);
+            g_bloom.ActiveTexture(GL_TEXTURE0);
+            g_bloom.Uniform2f(g_t3.l_hdsz,256.0f,(float)(g_hd.rows*32));
+            g_bloom.Uniform1f(g_t3.l_hdm,16.0f/(float)g_hd.S); }
+        g_bloom.Uniform1f(g_t3.l_hdon,hd?1.0f:0.0f);
+        /* point lights */
+        const int n=(g_pl_on && g_ini_terrain_3d_lights)?g_t3.pl_n:0;
+        if(n) { g_t3.Uniform4fv(g_t3.l_plp,n,&g_t3.pl_pos[0][0]); g_t3.Uniform4fv(g_t3.l_plc,n,&g_t3.pl_col[0][0]); }
+        g_bloom.Uniform1i(g_t3.l_pln,n);
+        g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,g_gl_mesh.tiles);
+    }
     g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_gl_mesh.vbo);   /* uploaded by terrain_gl_render this game frame */
     g_bloom.BindBuffer(GL_ELEMENT_ARRAY_BUFFER,g_gl_mesh.ibo);
     const GLsizei stride=sizeof d->vertex[0];

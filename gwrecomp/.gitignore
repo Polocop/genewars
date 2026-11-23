@@ -19,3 +19,5 @@ placement-*/
 snap.req
 # a local gwrecomp.ini holds your own paths; gwrecomp.ini.example is the template
 /gwrecomp.ini
+# local HD terrain overrides exported from your own Gene Wars install (tools/export_b32_tiles.py): never committed
+hd_textures/

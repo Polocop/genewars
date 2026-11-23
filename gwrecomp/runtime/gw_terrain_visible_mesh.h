@@ -141,6 +141,11 @@ typedef struct gw_terrain_mesh_draw {
        lighting, shadows and water depth of the 3D terrain (presentation only) */
     int16_t planet_h[128u*128u];
     int view_col,view_row,height_scale;
+    /* HD terrain overrides: the guest address of each atlas slot's texels, the loaded B32 bank (buffer pointer at
+       0x2EEC88, file name in the startup file table at 0x2DD5AC, e.g. "data/b32a.dat" -> "B32A") */
+    uint32_t tile_addr[GW_MESH_TILES];
+    uint32_t b32_base;
+    char b32_name[8];
     gw_terrain_mesh_vertex vertex[3u*GW_TERRAIN_GPU_FIXTURE_CAP];
     uint8_t texels[GW_MESH_TILES][1024];
     uint8_t fade[64u*256u];
@@ -156,6 +161,14 @@ static inline void gw_terrain_prepare_draw(const uint8_t *ds,size_t bound,unsign
     draw->height_scale=(int)gw_terrain_read_u32(ds+GW_TERRAIN_HEIGHT_SCALE);
     draw->view_col=gw_terrain_read_i16(ds+GW_TERRAIN_MAP_DISPLAY);
     draw->view_row=gw_terrain_read_i16(ds+GW_TERRAIN_MAP_DISPLAY+2);
+    draw->b32_base=0; draw->b32_name[0]=0;
+    if(bound>0x002DD5C0u) {
+        const char *fn=(const char *)ds+0x002DD5ACu;   /* "data/b32?.dat" */
+        if(!memcmp(fn,"data/b32",8) && fn[8]>='a' && fn[8]<='z' && fn[9]=='.') {
+            draw->b32_name[0]='B'; draw->b32_name[1]='3'; draw->b32_name[2]='2'; draw->b32_name[3]=(char)(fn[8]-'a'+'A'); draw->b32_name[4]=0;
+            draw->b32_base=gw_terrain_read_u32(ds+0x002EEC88u);
+        }
+    }
     if(count) {
         const uint8_t *map=ds+GW_TERRAIN_MAP;
         for(unsigned i=0;i<128u*128u;i++) draw->planet_h[i]=gw_terrain_read_i16(map+14u*i+2u);
@@ -167,6 +180,7 @@ static inline void gw_terrain_prepare_draw(const uint8_t *ds,size_t bound,unsign
         while(slot<tiles && tile_address[slot]!=tex) slot++;
         if(slot==tiles) {
             if(!tex || tex>bound-(31u*256u+32u) || tiles==GW_MESH_TILES) return;
+            draw->tile_addr[tiles]=tex;
             tile_address[tiles++]=tex;
             for(unsigned row=0;row<32;row++)
                 memcpy(draw->texels[slot]+32u*row,ds+tex+256u*row,32u);

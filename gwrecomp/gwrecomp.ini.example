@@ -47,6 +47,16 @@ terrain_3d = 1
 terrain_3d_shadows = 1
 ; 1 = 3D water: coastal colour from the depth, shore foam, animated waves with Fresnel and sun glints, glowing GOOP
 terrain_3d_water = 1
+; 1 = dynamic point lights on the 3D slopes: the cyan Ethereal beam, warm shots / explosions / sparks, building and
+;     Gene Pod lights, a soft green glow around GOOP (only on explored terrain). Ctrl+F11 toggles them live.
+terrain_3d_lights = 1
+; 1 = HD terrain tiles, if you made some: hd_textures\<BANK>\atlas.png (or tile_000.png ...) next to gwrecomp.exe,
+;     exported from your own install with tools/export_b32_tiles.py and upscaled with your own tools. Without the
+;     folder the original 1996 tiles are used unchanged; sprites, HUD and texts are never touched. Ctrl+F12 toggles
+;     the HD tiles live (before / after on the same frame).
+terrain_3d_hd_tiles = 1
+; folder holding the <BANK> folders, instead of hd_textures next to the exe
+; terrain_3d_hd_dir = C:\path\to\hd_textures
 ; 1 = remove the 1-pixel slivers the original terrain drawing leaves on the planet's horizon (shown frame only)
 clean_horizon = 1
 ; 1 = animated water ripples and caustics on the sea and soft highlights on GOOP, in missions only (presented frame

@@ -8494,6 +8494,10 @@ static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launch
 static int g_terrain_3d=1;  /* host presentation thread only */
 static int g_ini_terrain_3d_shadows=1;   /* terrain_3d_shadows: directional shadow map of hills and craters (3D terrain) */
 static int g_ini_terrain_3d_water=1;     /* terrain_3d_water: coastal depth colour, foam, waves, Fresnel and glints (3D terrain) */
+static int g_ini_terrain_3d_lights=1;    /* terrain_3d_lights: dynamic point lights (beam, shots, beacons, GOOP) on the 3D slopes */
+static int g_ini_terrain_3d_hd_tiles=1;  /* terrain_3d_hd_tiles: optional HD B32 tile overrides from hd_textures/ (3D terrain) */
+static char g_ini_terrain_3d_hd_dir[600];/* terrain_3d_hd_dir: folder holding <BANK>/atlas.png or tile_NNN.png (default: hd_textures next to the exe) */
+static int g_pl_on=1,g_hd_on=1;          /* live toggles: Ctrl+F11 point lights, Ctrl+F12 HD tiles (host presentation thread) */
 static int g_tl_scale=2;                 /* 3D terrain: lit layers at this many times the canvas resolution */
 static int g_ini_clean_horizon=1;   /* clean_horizon: drop 1-pixel horizon slivers from the presented frame */
 static int g_ini_water_effects=1;   /* water_effects: animated water ripples/caustics and GOOP highlights (presented frame only) */
@@ -8597,6 +8601,9 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"terrain_3d")) g_terrain_3d=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_shadows")) g_ini_terrain_3d_shadows=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_water")) g_ini_terrain_3d_water=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_lights")) g_ini_terrain_3d_lights=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_hd_tiles")) g_ini_terrain_3d_hd_tiles=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_hd_dir")) snprintf(g_ini_terrain_3d_hd_dir,sizeof g_ini_terrain_3d_hd_dir,"%s",val);
         else if(!strcmp(key,"clean_horizon")) g_ini_clean_horizon=atoi(val)!=0;
         else if(!strcmp(key,"water_effects")) g_ini_water_effects=atoi(val)!=0;
         else if(!strcmp(key,"enhanced_audio")) g_ini_enhanced_audio=atoi(val)!=0;
@@ -8835,6 +8842,17 @@ static int host_controls_event(const SDL_Event *ev) {
                 gw_flag_trace("TRACE host_controls terrain_3d=%d%c",g_terrain_3d,10);
             }
             mesh_shortcut_down=down; return 1;
+        }
+        {   /* Ctrl+F11: 3D point lights on/off; Ctrl+F12: HD B32 tile overrides on/off (live before/after comparison) */
+            static int f11_down,f12_down;
+            int *held=k==SDLK_F11?&f11_down:k==SDLK_F12?&f12_down:NULL;
+            if(held && (*held || (down && (ev->key.keysym.mod&KMOD_CTRL)))) {
+                if(down && !*held && !ev->key.repeat) {
+                    int *t=k==SDLK_F11?&g_pl_on:&g_hd_on; *t=!*t;
+                    gw_flag_trace("TRACE host_controls terrain_3d_%s=%d%c",k==SDLK_F11?"lights":"hd_tiles",*t,10);
+                }
+                *held=down; return 1;
+            }
         }
         if(ev->key.repeat) return k==SDLK_F7 || k==SDLK_F8 || k==SDLK_F10 || (map && (k==SDLK_TAB || k==SDLK_HOME || bit));
         if(k==SDLK_F7) {
@@ -10156,6 +10174,7 @@ restore:
     return g_bloom.ready;
 }
 
+static uint8_t g_pl_sw[256],g_pl_gw[256];   /* terrain_3d_lights: sprite / ground emission weight per palette index */
 static void bloom_classify(const uint8_t *pal) {
     if(g_bloom.pal_ok && !memcmp(g_bloom.pal_cache,pal,768)) return;
     memcpy(g_bloom.pal_cache,pal,768); g_bloom.pal_ok=1;
@@ -10204,6 +10223,7 @@ static void bloom_classify(const uint8_t *pal) {
         if(su>255) su=255; if(gu>255) gu=255; if(bu>255) bu=255;
         lut[(256+k)*4+0]=(uint8_t)su;
         lut[(256+k)*4+1]=(uint8_t)gu;
+        g_pl_sw[k]=(uint8_t)su; g_pl_gw[k]=(uint8_t)gu;
         lut[(256+k)*4+2]=(uint8_t)bu;
         lut[(256+k)*4+3]=255u;
     }
@@ -10582,6 +10602,142 @@ static void gm_rows(GLuint t,int y0,int y1,GLenum fmt,const void *base,size_t bp
 }
 /* once per new game frame (presentation thread, GL context current, unpack alignment 1): raw uploads and layer rotation;
    the passes run at the start of the next composite (gm_passes) */
+/* ---- terrain_3d_lights: point lights of the world for the 3D terrain, once per game frame, read-only ------------
+   Sources, from the published snapshot only: the Ethereal teleport beam and ship (the hd2d_particles events), the
+   sprite / effect emission of the frame (shots, explosions, sparks, Gene Pod and building lights: the emissive_bloom
+   palette classification) and the GOOP / beacon emission of the ground, gathered in 32 x 32 canvas blocks on a 2 px
+   lattice. Each source is placed on the terrain under it (front-most mesh triangle at its canvas point: world cell and
+   height), kept in persistent slots in planet coordinates and eased in / out, so lights neither jump on scroll nor
+   flicker when sources come and go. */
+enum { PL_BEAM=0, PL_SHIP=1, PL_FX=2, PL_BEACON=3, PL_GOOP=4, PL_CANDS=32 };
+typedef struct { float sx,sy,zo,r,c[3],it,score; int cls; } pl_cand;
+static struct { float ax,ay,z,r,c[3],it,target; int cls,alive; } g_pl_slot[TL_LIGHTS];
+static uint32_t g_pl_tick; static double g_pl_ms_acc,g_pl_ms_max; static unsigned g_pl_calls,g_pl_n_acc,g_pl_cls_acc[5];
+static float pl_wrap(float d) { d=fmodf(d+64.0f,128.0f); if(d<0.0f) d+=128.0f; return d-64.0f; }
+/* canvas point -> world point (cell relative to the display origin, height px) of the front-most triangle there */
+static int pl_world(const gw_terrain_mesh_draw *d,float sx,float sy,float *wx,float *wy,float *wz) {
+    for(int t=(int)(d->count/3u)-1;t>=0;t--) {
+        const gw_terrain_mesh_vertex *a=&d->vertex[3*t],*b=a+1,*c=a+2;
+        if((sx<a->x && sx<b->x && sx<c->x) || (sx>a->x && sx>b->x && sx>c->x) ||
+           (sy<a->y && sy<b->y && sy<c->y) || (sy>a->y && sy>b->y && sy>c->y)) continue;
+        const float den=(b->y-c->y)*(a->x-c->x)+(c->x-b->x)*(a->y-c->y);
+        if(den>-1e-6f && den<1e-6f) continue;
+        const float l0=((b->y-c->y)*(sx-c->x)+(c->x-b->x)*(sy-c->y))/den,l1=((c->y-a->y)*(sx-c->x)+(a->x-c->x)*(sy-c->y))/den,l2=1.0f-l0-l1;
+        if(l0<-0.02f || l1<-0.02f || l2<-0.02f) continue;
+        *wx=l0*a->wx+l1*b->wx+l2*c->wx; *wy=l0*a->wy+l1*b->wy+l2*c->wy; *wz=l0*a->wz+l1*b->wz+l2*c->wz;
+        return 1;
+    }
+    return 0;
+}
+static void pl_extract(const gw_interactive_visual_snapshot *v,const gw_terrain_mesh_draw *d) {
+    const uint64_t t0=SDL_GetPerformanceCounter();
+    pl_cand cand[PL_CANDS]; int nc=0;
+    g_pl_tick++;
+    if(g_ini_terrain_3d_lights && g_terrain_3d && d && d->count && v->canvas_valid && v->fx_ring_valid) {
+        if(g_bloom.lut_tex) bloom_classify(v->palette);
+        static float fw[640],fr[640],fg[640],fb[640],fx[640],fy[640],bw[640],bx[640],by[640],br[640],bgc[640],bbc[640],gc[640],gx[640],gy[640];
+        memset(fw,0,sizeof fw); memset(fr,0,sizeof fr); memset(fg,0,sizeof fg); memset(fb,0,sizeof fb); memset(fx,0,sizeof fx); memset(fy,0,sizeof fy);
+        memset(bw,0,sizeof bw); memset(bx,0,sizeof bx); memset(by,0,sizeof by); memset(br,0,sizeof br); memset(bgc,0,sizeof bgc); memset(bbc,0,sizeof bbc);
+        memset(gc,0,sizeof gc); memset(gx,0,sizeof gx); memset(gy,0,sizeof gy);
+        const uint8_t *pal=v->palette;
+        uint8_t any[256]; for(int k=0;k<256;k++) any[k]=(uint8_t)(g_pl_sw[k]|g_pl_gw[k]|(g_fx_kind[k]==FX_GOOP));
+        int rx0=((int)v->ring_x-128)%1024; if(rx0<0) rx0+=1024;
+        /* 4 x 2 lattice, alternate rows offset by 2 px (1 sample per 8 px, every 2 px column covered every 4 rows) */
+        for(int y=0;y<640;y+=2) {
+            const uint8_t *row=v->canvas+(size_t)y*1152u;
+            int ry=(y+(int)v->ring_y)%640; if(ry<0) ry+=640;
+            const uint8_t *rr=v->fx_ring+(size_t)ry*1152u+128u;
+            const int x0=128+((y>>1)&1)*2;
+            int rx=(rx0+x0-128)&1023; const int brow=(y>>5)*32;
+            for(int x=x0;x<1152;x+=4,rx=(rx+4)&1023) {
+                const uint8_t k=row[x];
+                if(!any[k]) continue;
+                const uint8_t sw=g_pl_sw[k],gw=g_pl_gw[k],goop=g_fx_kind[k]==FX_GOOP;
+                const int ground=k==rr[rx],b=brow+((x-128)>>5);
+                if(sw && !ground) { const float w=(float)sw; fw[b]+=w; fr[b]+=w*pal[k*3]; fg[b]+=w*pal[k*3+1]; fb[b]+=w*pal[k*3+2]; fx[b]+=w*x; fy[b]+=w*y; }
+                else if(goop && ground) { gc[b]+=1.0f; gx[b]+=(float)x; gy[b]+=(float)y; }
+                else if(gw && ground) { const float w=(float)gw; bw[b]+=w; bx[b]+=w*x; by[b]+=w*y; br[b]+=w*pal[k*3]; bgc[b]+=w*pal[k*3+1]; bbc[b]+=w*pal[k*3+2]; }
+            }
+        }
+        #define PL_ADD(cls_,sx_,sy_,zo_,r_,cr_,cg_,cb_,it_,pri_) do { if(nc<PL_CANDS) { pl_cand *q=&cand[nc++]; q->cls=(cls_); q->sx=(sx_); q->sy=(sy_); \
+            q->zo=(zo_); q->r=(r_); q->c[0]=(cr_); q->c[1]=(cg_); q->c[2]=(cb_); q->it=(it_); q->score=(it_)*(r_)*(pri_); } \
+            else { int m=0; for(int i_=1;i_<nc;i_++) if(cand[i_].score<cand[m].score) m=i_; \
+                if(cand[m].score<(it_)*(r_)*(pri_)) { pl_cand *q=&cand[m]; q->cls=(cls_); q->sx=(sx_); q->sy=(sy_); q->zo=(zo_); q->r=(r_); \
+                    q->c[0]=(cr_); q->c[1]=(cg_); q->c[2]=(cb_); q->it=(it_); q->score=(it_)*(r_)*(pri_); } } } while(0)
+        if(v->ev_beam_n>40) PL_ADD(PL_BEAM,v->ev_beam_x+v->ev_beam_w*0.5f,(float)(v->ev_beam_y+v->ev_beam_h-3),1.1f,5.0f,0.38f,0.92f,1.0f,2.1f,100.0f);
+        if(v->ev_ship_n>150) PL_ADD(PL_SHIP,v->ev_ship_x+v->ev_ship_w*0.5f,v->ev_ship_y+v->ev_ship_h*0.5f,1.6f,4.0f,0.55f,0.85f,1.0f,0.9f,50.0f);
+        for(int b=0;b<640;b++) {
+            const float W=fw[b]*8.0f/255.0f;
+            if(W>=10.0f) {
+                const float cr=fr[b]/fw[b],cg=fg[b]/fw[b],cb=fb[b]/fw[b],m=fmaxf(cr,fmaxf(cg,cb)),s=sqrtf(W);
+                if(m>=1.0f) PL_ADD(PL_FX,fx[b]/fw[b],fy[b]/fw[b],0.55f,fminf(fmaxf(1.4f+0.14f*s,1.6f),3.4f),cr/m,cg/m,cb/m,fminf(fmaxf(0.45f+0.10f*s,0.5f),1.7f),1.0f);
+            }
+            const float B=bw[b]*8.0f/255.0f;
+            if(B>=12.0f) {
+                const float cr=br[b]/bw[b],cg=bgc[b]/bw[b],cb=bbc[b]/bw[b],m=fmaxf(cr,fmaxf(cg,cb)),s=sqrtf(B);
+                if(m>=1.0f) PL_ADD(PL_BEACON,bx[b]/bw[b],by[b]/bw[b],0.35f,fminf(fmaxf(1.6f+0.10f*s,1.8f),2.8f),cr/m,cg/m,cb/m,fminf(0.25f+0.06f*s,0.9f),0.8f);
+            }
+            const float G=gc[b]*8.0f;
+            if(G>=64.0f) PL_ADD(PL_GOOP,gx[b]/gc[b],gy[b]/gc[b],0.25f,2.4f,0.32f,1.0f,0.48f,0.18f+0.27f*fminf(G/600.0f,1.0f),0.6f);
+        }
+        #undef PL_ADD
+    }
+    /* strongest first; one light per source cluster (screen distance by class) */
+    for(int i=1;i<nc;i++) { pl_cand t=cand[i]; int j=i-1; while(j>=0 && cand[j].score<t.score) { cand[j+1]=cand[j]; j--; } cand[j+1]=t; }
+    int used[PL_CANDS]={0};
+    for(int s=0;s<TL_LIGHTS;s++) g_pl_slot[s].target=0.0f;
+    int kept=0;
+    for(int i=0;i<nc && kept<TL_LIGHTS;i++) {
+        const pl_cand *q=&cand[i]; int dup=0;
+        const float sep=q->cls==PL_GOOP?72.0f:q->cls==PL_BEACON?56.0f:40.0f;
+        for(int j=0;j<i && !dup;j++) if(used[j] && cand[j].cls==q->cls) { const float dx=cand[j].sx-q->sx,dy=cand[j].sy-q->sy; dup=dx*dx+dy*dy<sep*sep; }
+        float wx,wy,wz;
+        if(dup || !pl_world(d,q->sx,q->sy,&wx,&wy,&wz)) continue;
+        used[i]=1; kept++;
+        const float ax=fmodf(wx+(float)d->view_col+1280.0f,128.0f),ay=fmodf(wy+(float)d->view_row+1280.0f,128.0f),z=wz*TL_ZS+q->zo;
+        int best=-1; float bd=q->cls==PL_BEAM?3.0f:1.6f; bd*=bd;
+        for(int s=0;s<TL_LIGHTS;s++) if(g_pl_slot[s].alive && g_pl_slot[s].cls==q->cls && g_pl_slot[s].target==0.0f) {
+            const float dx=pl_wrap(g_pl_slot[s].ax-ax),dy=pl_wrap(g_pl_slot[s].ay-ay),dd=dx*dx+dy*dy; if(dd<bd) { bd=dd; best=s; } }
+        if(best<0) {   /* a free slot, else the weakest one that is fading */
+            for(int s=0;s<TL_LIGHTS && best<0;s++) if(!g_pl_slot[s].alive) best=s;
+            if(best<0) { for(int s=0;s<TL_LIGHTS;s++) if(g_pl_slot[s].target==0.0f && (best<0 || g_pl_slot[s].it<g_pl_slot[best].it)) best=s; }
+            if(best<0) continue;
+            g_pl_slot[best].alive=1; g_pl_slot[best].cls=q->cls; g_pl_slot[best].it=0.0f;
+            g_pl_slot[best].ax=ax; g_pl_slot[best].ay=ay; g_pl_slot[best].z=z; g_pl_slot[best].r=q->r;
+            memcpy(g_pl_slot[best].c,q->c,sizeof q->c);
+        }
+        float *p=&g_pl_slot[best].ax;
+        p[0]=fmodf(p[0]+pl_wrap(ax-p[0])*0.5f+128.0f,128.0f); p[1]=fmodf(p[1]+pl_wrap(ay-p[1])*0.5f+128.0f,128.0f);
+        g_pl_slot[best].z+=(z-g_pl_slot[best].z)*0.5f; g_pl_slot[best].r+=(q->r-g_pl_slot[best].r)*0.5f;
+        for(int c=0;c<3;c++) g_pl_slot[best].c[c]+=(q->c[c]-g_pl_slot[best].c[c])*0.5f;
+        g_pl_slot[best].target=q->it;
+    }
+    /* ease in / out, then the uniform arrays relative to this frame's display origin */
+    int n=0;
+    for(int s=0;s<TL_LIGHTS;s++) {
+        if(!g_pl_slot[s].alive) continue;
+        const float tg=g_pl_slot[s].target; g_pl_slot[s].it+=(tg-g_pl_slot[s].it)*(tg>g_pl_slot[s].it?0.55f:0.30f);
+        if(tg==0.0f && g_pl_slot[s].it<0.01f) { g_pl_slot[s].alive=0; continue; }
+        if(!d) continue;
+        g_pl_cls_acc[g_pl_slot[s].cls]++;
+        float it=g_pl_slot[s].it;
+        if(g_pl_slot[s].cls==PL_FX) it*=0.88f+0.12f*sinf((float)g_pl_tick*1.7f+(float)s*2.3f);
+        float *P=g_t3.pl_pos[n],*C=g_t3.pl_col[n];
+        P[0]=pl_wrap(g_pl_slot[s].ax-(float)d->view_col); P[1]=pl_wrap(g_pl_slot[s].ay-(float)d->view_row); P[2]=g_pl_slot[s].z; P[3]=g_pl_slot[s].r;
+        C[0]=g_pl_slot[s].c[0]; C[1]=g_pl_slot[s].c[1]; C[2]=g_pl_slot[s].c[2]; C[3]=it;
+        n++;
+    }
+    g_t3.pl_n=n;
+    const double ms=(double)(SDL_GetPerformanceCounter()-t0)*1000.0/(double)SDL_GetPerformanceFrequency();
+    g_pl_ms_acc+=ms; if(ms>g_pl_ms_max) g_pl_ms_max=ms; g_pl_n_acc+=(unsigned)n;
+    if(++g_pl_calls==400u) {
+        gw_flag_trace("TRACE terrain_3d lights avg_n=%.1f (beam %.1f ship %.1f fx %.1f beacon %.1f goop %.1f) extract_ms avg=%.3f max=%.3f%c",
+            (double)g_pl_n_acc/400.0,g_pl_cls_acc[0]/400.0,g_pl_cls_acc[1]/400.0,g_pl_cls_acc[2]/400.0,g_pl_cls_acc[3]/400.0,g_pl_cls_acc[4]/400.0,
+            g_pl_ms_acc/400.0,g_pl_ms_max,10);
+        memset(g_pl_cls_acc,0,sizeof g_pl_cls_acc); g_pl_calls=0; g_pl_ms_acc=0.0; g_pl_ms_max=0.0; g_pl_n_acc=0;
+    }
+}
+
 static void gm_upload(const gw_interactive_visual_snapshot *v) {
     {   GLuint t=g_bloom.canvas_tex[0]; g_bloom.canvas_tex[0]=g_bloom.canvas_tex[1]; g_bloom.canvas_tex[1]=g_bloom.canvas_tex[2]; g_bloom.canvas_tex[2]=t;
         t=g_gm.aux[0]; g_gm.aux[0]=g_gm.aux[1]; g_gm.aux[1]=g_gm.aux[2]; g_gm.aux[2]=t; }
@@ -10615,6 +10771,7 @@ static void gm_upload(const gw_interactive_visual_snapshot *v) {
         g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_kind); g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,1,GL_RED,GL_UNSIGNED_BYTE,k8);
         memcpy(g_gm.kind_pal,v->palette,768); g_gm.kind_ok=1; }
     g_gm.ring_x=v->ring_x; g_gm.ring_y=v->ring_y; g_gm.th=v->th_valid; g_gm.pending=1; g_gm_nup++;
+    pl_extract(v,g_gm.mesh);
 }
 
 static int part_active(const gw_interactive_visual_snapshot *v);
