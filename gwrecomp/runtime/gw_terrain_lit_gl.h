@@ -28,7 +28,7 @@ static struct {
     int failed,ready,scale,w,h,biome,nrm_ok,hs_last;
     GLuint prog_lit,prog_sh,prog_bump;
     GLuint lit[3],fbo,depth_rb;
-    GLuint ocean_tex,ao_tex,sh_tex,sh_fbo,sh_rb,nrm_tex,bump_tex,bump_fbo,grid_vbo,grid_ibo;
+    GLuint ao_tex,sh_tex,sh_fbo,sh_rb,nrm_tex,bump_tex,bump_fbo,grid_vbo,grid_ibo;
     int lview[3][2],lhave[3];            /* per canvas layer: display origin (mod 128) and whether it holds a lit frame */
     GLint l_ao,l_tiles,l_fade,l_lut,l_kind,l_nrm,l_sh,l_bump,l_view,l_lx,l_ly,l_lz,l_zs,l_sun,l_sunc,l_sky,l_gnd,l_shon,l_wton,l_mix;
     GLint s_lx,s_ly,s_lz,s_zs;
@@ -83,75 +83,6 @@ static GLuint tl_tex(int w,int h,GLenum filter,GLenum wrap) {
     g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,(GLint)wrap); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,(GLint)wrap);
     g_bloom.TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);
     return t;
-}
-
-
-/* 512 x 512 periodic ocean texture, built once on the CPU (no assets): RG = wave normal (x, y) from the gradient of a
-   periodic height field (elongated wind waves with integer wave vectors + sharp capillary ripples from periodic value
-   noise), B = organic foam noise (periodic fbm), A = 1. GL_REPEAT, mipmapped, linear. */
-#ifndef GL_GENERATE_MIPMAP
-#define GL_GENERATE_MIPMAP 0x8191
-#endif
-#ifndef GL_LINEAR_MIPMAP_LINEAR
-#define GL_LINEAR_MIPMAP_LINEAR 0x2703
-#endif
-static float tl_hash2(int x,int y,int P) { x&=P-1; y&=P-1; uint32_t h=(uint32_t)x*374761393u+(uint32_t)y*668265263u; h=(h^(h>>13))*1274126177u; return (float)((h^(h>>16))&0xFFFFu)/65535.0f; }
-static float tl_vnoise(float x,float y,int P) {
-    const int ix=(int)floorf(x),iy=(int)floorf(y); float fx=x-(float)ix,fy=y-(float)iy;
-    fx=fx*fx*(3.0f-2.0f*fx); fy=fy*fy*(3.0f-2.0f*fy);
-    const float a=tl_hash2(ix,iy,P),b=tl_hash2(ix+1,iy,P),c=tl_hash2(ix,iy+1,P),d=tl_hash2(ix+1,iy+1,P);
-    return (a+(b-a)*fx)+((c+(d-c)*fx)-(a+(b-a)*fx))*fy;
-}
-/* built on a worker thread (about 200 ms of CPU), uploaded by the presentation thread once done; flat until then */
-static uint8_t *g_ocean_px; static SDL_atomic_t g_ocean_done;
-static int SDLCALL tl_ocean_build(void *unused) {
-    (void)unused;
-    enum { N=512 };
-    float *h=(float *)malloc(sizeof(float)*N*N); uint8_t *px=(uint8_t *)malloc(N*N*4u);
-    if(!h || !px) { free(h); free(px); SDL_AtomicSet(&g_ocean_done,-1); return 0; }
-    static const int kv[][2]={{6,2},{7,3},{9,2},{5,1},{11,4},{13,3},{8,-1},{15,5},{17,4},{19,6},{23,5},{27,8},{31,7},{37,10},{41,9},{47,13}};
-    float amp[16],ph[16];
-    for(int i=0;i<16;i++) { const float k=sqrtf((float)(kv[i][0]*kv[i][0]+kv[i][1]*kv[i][1])); amp[i]=1.0f/powf(k,1.25f); ph[i]=tl_hash2(i,7,64)*6.2831853f; }
-    for(int y=0;y<N;y++) for(int x=0;x<N;x++) {
-        float v=0.0f;
-        for(int i=0;i<16;i++) { const float a=6.2831853f*((float)(kv[i][0]*x+kv[i][1]*y)/(float)N)+ph[i]; const float s=sinf(a); v+=amp[i]*(s>0.0f?s*s*1.6f-0.4f:s*0.6f); }
-        /* capillary ripples: periodic value noise, 3 octaves (lattice 32, 64, 128 over the tile) */
-        v+=0.050f*tl_vnoise(x/16.0f,y/16.0f,32)+0.030f*tl_vnoise(x/8.0f,y/8.0f,64)+0.018f*tl_vnoise(x/4.0f,y/4.0f,128);
-        h[y*N+x]=v;
-    }
-    for(int y=0;y<N;y++) for(int x=0;x<N;x++) {
-        const float gx=(h[y*N+((x+1)&(N-1))]-h[y*N+((x-1)&(N-1))])*0.5f*22.0f;
-        const float gy=(h[((y+1)&(N-1))*N+x]-h[((y-1)&(N-1))*N+x])*0.5f*22.0f;
-        float nx=gx,ny=gy; if(nx>1.0f) nx=1.0f;
-        if(nx<-1.0f) nx=-1.0f;
-        if(ny>1.0f) ny=1.0f;
-        if(ny<-1.0f) ny=-1.0f;
-        float f=0.0f,am=0.5f; int P=16;
-        for(int o=0;o<5;o++) { f+=am*tl_vnoise(x*(float)P/(float)N,y*(float)P/(float)N,P); am*=0.5f; P*=2; }
-        uint8_t *o=px+((size_t)y*N+(size_t)x)*4u;
-        o[0]=(uint8_t)(nx*127.5f+127.5f); o[1]=(uint8_t)(ny*127.5f+127.5f); o[2]=(uint8_t)(f*255.0f/0.97f>255.0f?255:(int)(f*255.0f/0.97f)); o[3]=255;
-    }
-    free(h); g_ocean_px=px; SDL_AtomicSet(&g_ocean_done,1);
-    return 0;
-}
-static GLuint tl_ocean(void) {
-    static const uint8_t flat[4]={128,128,128,255};
-    GLuint t=0; g_bloom.GenTextures(1,&t); g_bloom.BindTexture(GL_TEXTURE_2D,t);
-    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_REPEAT); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_REPEAT);
-    g_bloom.TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1,1,0,GL_RGBA,GL_UNSIGNED_BYTE,flat);
-    SDL_Thread *th=SDL_CreateThread(tl_ocean_build,"gw_ocean",NULL);
-    if(th) SDL_DetachThread(th);
-    return t;
-}
-static void tl_ocean_poll(void) {
-    if(!g_ocean_px || SDL_AtomicGet(&g_ocean_done)!=1 || !g_t3.ocean_tex) return;
-    g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.ocean_tex);
-    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_LINEAR);
-    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_GENERATE_MIPMAP,1);
-    g_bloom.TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,512,512,0,GL_RGBA,GL_UNSIGNED_BYTE,g_ocean_px);
-    free(g_ocean_px); g_ocean_px=NULL; SDL_AtomicSet(&g_ocean_done,2);
-    gw_flag_trace("TRACE terrain_3d ocean normal map 512x512 ready%c",10);
 }
 
 #define TL_GLSL_COMMON \
@@ -241,11 +172,7 @@ static int tl_init(void) {
         "  float sat=max(alb.r,max(alb.g,alb.b))-min(alb.r,min(alb.g,alb.b));\n"
         "  float rock=clamp(1.0-sat*3.0,0.0,1.0);\n"
         "  vec3 H=normalize(u_sun+V);\n"
-        "  float hpx0=v_world.z/u_zs;\n"
-        /* wet shore: the low land just above the sea (cells counted as sea-side by the depth field) darker, glossier */
-        "  float wet=(1.0-water)*smoothstep(0.02,0.22,nt.a)*(1.0-smoothstep(3.0,13.0,hpx0));\n"
-        "  alb*=1.0-0.18*wet;\n"
-        "  float spec=pow(max(dot(Nm,H),0.0),32.0)*(0.20*rock+0.30*wet)*sh;\n"
+        "  float spec=pow(max(dot(Nm,H),0.0),32.0)*0.20*rock*sh;\n"
         "  vec3 lit=alb*light*1.12+u_sunc*spec;\n"
         "  vec3 col=mix(c2*mix(0.75,1.0,ao),lit,u_mix);\n"
         "  float a=1.0;\n"
@@ -253,11 +180,9 @@ static int tl_init(void) {
         "    float hpx=v_world.z/u_zs;\n"
         "    float dep=clamp(1.0-hpx/22.0,0.0,1.0)*0.55+0.45*nt.a;\n"
         "    dep=clamp(dep+(vn(W*2.5,320.0)-0.5)*0.30+(vn(W*7.0,896.0)-0.5)*0.12,0.0,1.0);\n"
-        /* Beer-Lambert: translucent green-turquoise over the sunken sand at the shore, sober slate-petrol out at sea */
-        "    vec3 shallow=mix(vec3(0.20,0.55,0.50),alb*vec3(0.95,1.05,0.95),0.25);\n"
-        "    vec3 deep=vec3(0.050,0.175,0.255)+u_sky*0.045;\n"
-        "    float ab=1.0-exp(-dep*4.5*0.85);\n"
-        "    col=mix(shallow,deep,ab)*mix(0.58,1.0,sh);\n"
+        "    vec3 shallow=alb*vec3(0.90,1.08,1.04)+vec3(0.00,0.045,0.045);\n"
+        "    vec3 deep=alb*vec3(0.30,0.40,0.60);\n"
+        "    col=mix(shallow,deep,smoothstep(0.0,1.0,dep))*mix(0.55,1.0,sh);\n"
         "    a=0.1+0.4*dep;\n"
         "  } else if(u_wton>0.5 && kind==2.0) a=0.75;\n"
         "  gl_FragColor=vec4(clamp(col,0.0,1.0),a);\n"
@@ -307,7 +232,6 @@ static int tl_init(void) {
     /* normals + sea depth of the planet grid, bilinear, wrapping */
     g_t3.nrm_tex=tl_tex(128,128,GL_LINEAR,GL_REPEAT);
     g_t3.ao_tex=tl_tex(128,128,GL_LINEAR,GL_REPEAT);
-    g_t3.ocean_tex=tl_ocean();
     /* bump atlas (same layout as the tile atlas), bilinear inside a tile */
     g_t3.bump_tex=tl_tex(512,544,GL_LINEAR,GL_CLAMP_TO_EDGE);
     g_bloom.GenFramebuffers(1,&g_t3.bump_fbo);
@@ -480,7 +404,6 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_bloom.Enable(GL_DEPTH_TEST);
     g_gl_mesh.DepthFunc(GL_LESS); g_gl_mesh.DepthMask(GL_TRUE); g_gl_mesh.ClearDepth(1.0);
     tl_planet(d);
-    tl_ocean_poll();
     const int shadows=g_ini_terrain_3d_shadows!=0;
     if(shadows) tl_shadow(d);
     /* bump atlas from the tile atlas just uploaded */
