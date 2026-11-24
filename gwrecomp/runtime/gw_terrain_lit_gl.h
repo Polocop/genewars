@@ -21,13 +21,24 @@
 #endif
 
 #include "gw_png.h"
+#include "gw_terrain_atmosphere.h"
 enum { TL_SHADOW=2048, TL_GRID=64, TL_LIGHTS=16 };
 static void bloom_draw_quad(float x0,float y0,float x1,float y1,float u0,float v0,float u1,float v1,
                             float su0,float sv0,float su1,float sv1);
 
 static struct {
     int failed,ready,scale,w,h,biome,nrm_ok,hs_last;
-    GLuint prog_lit,prog_sh,prog_bump;
+    GLuint prog_lit,prog_sh,prog_bump,prog_sky,prog_wave;
+    GLuint wave_fbo,wave_tex,wave_vbo[3];
+    unsigned wave_n[3];
+    GLint wave_time;
+    uint8_t sea_dist[128u*128u];
+    GLuint refl[3],refl_fbo,refl_rb;
+    int refl_have[3],refl_failed;
+    GLint l_reflect,l_water_plane,l_ring,l_ring_off;
+    GLint l_time_of_day,l_flash,sky_phase,sky_dir,sky_color;
+    float layer_night[3],layer_sun[3][3],layer_sunc[3][3],layer_sky[3][3];
+    float day_sun[3],day_sunc[3],day_sky[3],day_gnd[3],night;
     GLuint lit[3],fbo,depth_rb;
     GLuint ao_tex,sh_tex,sh_fbo,sh_rb,nrm_tex,bump_tex,bump_fbo,grid_vbo,grid_ibo;
     int lview[3][2],lhave[3];            /* per canvas layer: display origin (mod 128) and whether it holds a lit frame */
@@ -96,9 +107,37 @@ static void tl_biome(int bi) {
     const float hx=az[bi][0],hy=az[bi][1],hl=sqrtf(hx*hx+hy*hy),c=cosf(el[bi]),s=sinf(el[bi]);
     g_t3.sun[0]=hx/hl*c; g_t3.sun[1]=hy/hl*c; g_t3.sun[2]=s;
     for(int i=0;i<3;i++) { g_t3.sunc[i]=sc[bi][i]; g_t3.sky[i]=sk[bi][i]; g_t3.gnd[i]=gd[bi][i]; g_t3.wtint[i]=wt[bi][i]; }
+    memcpy(g_t3.day_sun,g_t3.sun,sizeof g_t3.sun);
+    memcpy(g_t3.day_sunc,g_t3.sunc,sizeof g_t3.sunc);
+    memcpy(g_t3.day_sky,g_t3.sky,sizeof g_t3.sky);
+    memcpy(g_t3.day_gnd,g_t3.gnd,sizeof g_t3.gnd);
     g_t3.aos=ao[bi]; g_t3.shfloor=shf[bi];
     g_t3.expo=ex[bi]; g_t3.knorm=kn[bi];
     gw_flag_trace("TRACE terrain_3d biome preset %d exposure %.2f%c",bi,(double)g_t3.expo,10);
+}
+
+static void tl_atmosphere(void) {
+    const float phase=g_atmosphere.time_of_day;
+    const float orbit=phase*6.283185307f;
+    const float h=cosf(orbit);
+    const float gold=1.0f-atm_smooth(0.04f,0.63f,fabsf(h));
+    g_t3.night=atm_smooth(0.0f,0.66f,-h);
+    const float angle=atan2f(g_t3.day_sun[1],g_t3.day_sun[0])+orbit;
+    const float noon=asinf(g_t3.day_sun[2]);
+    const float elev=0.105f+(noon-0.105f)*fmaxf(h,0.0f)+0.32f*g_t3.night;
+    g_t3.sun[0]=cosf(angle)*cosf(elev);
+    g_t3.sun[1]=sinf(angle)*cosf(elev);
+    g_t3.sun[2]=sinf(elev);
+    if(phase==0.0f) memcpy(g_t3.sun,g_t3.day_sun,sizeof g_t3.sun);
+    static const float sunset[3]={1.34f,0.77f,0.34f}, moon[3]={0.32f,0.43f,0.62f};
+    static const float dusk_sky[3]={0.43f,0.47f,0.79f}, moon_sky[3]={0.29f,0.38f,0.58f};
+    static const float dusk_gnd[3]={0.29f,0.27f,0.43f}, moon_gnd[3]={0.19f,0.25f,0.36f};
+    for(int i=0;i<3;i++) {
+        const float n=g_t3.night;
+        g_t3.sunc[i]=(g_t3.day_sunc[i]*(1.0f-gold)+sunset[i]*gold)*(1.0f-n)+moon[i]*n;
+        g_t3.sky[i]=(g_t3.day_sky[i]*(1.0f-gold)+dusk_sky[i]*gold)*(1.0f-n)+moon_sky[i]*n;
+        g_t3.gnd[i]=(g_t3.day_gnd[i]*(1.0f-gold)+dusk_gnd[i]*gold)*(1.0f-n)+moon_gnd[i]*n;
+    }
 }
 
 static GLuint tl_tex(int w,int h,GLenum filter,GLenum wrap) {
@@ -125,11 +164,17 @@ static int tl_init(void) {
     static const char *vs_lit=
         "#version 120\n"
         "attribute vec3 a_pos; attribute vec3 a_uv; attribute vec2 a_suv; attribute vec3 a_world;\n"
-        "uniform float u_zs;\n"
-        "varying vec3 v_material; varying vec2 v_tile_mode; varying vec3 v_world;\n"
+        "uniform float u_zs,u_reflect,u_water_plane;\n"
+        "varying vec3 v_material; varying vec2 v_tile_mode; varying vec3 v_world; varying vec2 v_screen;\n"
         "void main(){\n"
         /* the layer texture covers canvas x 128..1151; the same half-pixel sample centre as the index pass */
-        "  gl_Position=vec4(((a_pos.x+0.5)-128.0)*2.0/1024.0-1.0,(a_pos.y+0.5)*2.0/640.0-1.0,a_pos.z,1.0);\n"
+        "  v_screen=a_pos.xy;\n"
+        "  float y=a_pos.y, z=a_pos.z;\n"
+        "  if(u_reflect>0.5){\n"
+        "    y+=2.0*(a_world.z-u_water_plane);\n"
+        "    z=clamp(-0.025*(a_world.x+a_world.y)+0.001*a_world.z,-0.99,0.99);\n"
+        "  }\n"
+        "  gl_Position=vec4(((a_pos.x+0.5)-128.0)*2.0/1024.0-1.0,(y+0.5)*2.0/640.0-1.0,z,1.0);\n"
         "  v_material=a_uv; v_tile_mode=a_suv; v_world=vec3(a_world.xy,a_world.z*u_zs);\n"
         "}\n";
     static const char *fs_lit= TL_GLSL_COMMON
@@ -139,8 +184,10 @@ static int tl_init(void) {
         "uniform vec4 u_pt_light_pos_rad[16]; uniform vec4 u_pt_light_col_int[16]; uniform int u_pt_light_count;\n"
         "uniform sampler2D u_hd,u_hdmap; uniform float u_hdon,u_hdm; uniform vec2 u_hdsz;\n"
         "uniform float u_aos,u_expo,u_shfloor,u_knorm; uniform vec3 u_wtint;\n"
-        "varying vec3 v_material; varying vec2 v_tile_mode; varying vec3 v_world;\n"
-        "float shdec(vec2 uv){ vec4 t=texture2D(u_sh,uv); return t.r+t.g/255.0; }\n"
+        "uniform sampler2D u_ring; uniform vec2 u_ring_off;\n"
+        "uniform float u_reflect,u_water_plane,u_time_of_day,u_flash;\n"
+        "varying vec3 v_material; varying vec2 v_tile_mode; varying vec3 v_world; varying vec2 v_screen;\n"
+        "float shdec(vec2 uv){ vec4 t=texture2D(u_sh,uv); return t.b>0.5?t.r+t.g/255.0:1.0; }\n"
         "float hh(vec2 q){ vec3 p3=fract(vec3(q.xyx)*0.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }\n"
         "float vn(vec2 p,float P){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);\n"
         "  float a=hh(mod(i,P)), b=hh(mod(i+vec2(1.0,0.0),P)), c=hh(mod(i+vec2(0.0,1.0),P)), d=hh(mod(i+vec2(1.0,1.0),P));\n"
@@ -156,15 +203,25 @@ static int tl_init(void) {
         "  vec2 tp=clamp(floor(v_material.xy),0.0,31.0);\n"
         "  float idx=rd8(u_tiles,base+tp,vec2(512.0,544.0));\n"
         "  if(v_tile_mode.y>5.5 && idx==0.0) discard;\n"
+        "  float kind=floor(texture2D(u_kind,vec2((idx+0.5)/256.0,0.5)).r*255.0+0.5);\n"
+        "  if(u_reflect>0.5){\n"
+        "    if(v_world.z/u_zs<u_water_plane || kind==1.0 || v_screen.x<128.0 || v_screen.x>=1152.0 || v_screen.y<0.0 || v_screen.y>=640.0) discard;\n"
+        "    vec2 p=mod(floor(v_screen+0.5)-vec2(128.0,0.0)+u_ring_off,vec2(1024.0,640.0))+vec2(128.0,0.0);\n"
+        "    if(rd8(u_ring,p,vec2(1152.0,640.0))==0.0) discard;\n"
+        "  }\n"
         "  float shade=clamp(floor(v_material.z),0.0,63.0);\n"
         "  /* sharp bilinear of the B32 texels: solid texel interiors, a one-pixel antialiased seam between texels */\n"
         "  vec2 pt=v_material.xy-0.5; vec2 i0=floor(pt); vec2 fw=max(fwidth(v_material.xy),vec2(1e-4));\n"
         "  vec2 f=clamp((fract(pt)-0.5)/fw+0.5,0.0,1.0);\n"
+        "  vec3 c2,alb;\n"
+        "  if(u_reflect>0.5){ float raw; c2=lut(u_lut,texel(base,tp,shade,raw)); alb=lut(u_lut,idx); }\n"
+        "  else {\n"
         "  float r00,r10,r01,r11;\n"
         "  float t00=texel(base,i0,shade,r00), t10=texel(base,i0+vec2(1.0,0.0),shade,r10);\n"
         "  float t01=texel(base,i0+vec2(0.0,1.0),shade,r01), t11=texel(base,i0+vec2(1.0,1.0),shade,r11);\n"
-        "  vec3 c2=mix(mix(lut(u_lut,t00),lut(u_lut,t10),f.x),mix(lut(u_lut,t01),lut(u_lut,t11),f.x),f.y);\n"
-        "  vec3 alb=mix(mix(lut(u_lut,r00),lut(u_lut,r10),f.x),mix(lut(u_lut,r01),lut(u_lut,r11),f.x),f.y);\n"
+        "  c2=mix(mix(lut(u_lut,t00),lut(u_lut,t10),f.x),mix(lut(u_lut,t01),lut(u_lut,t11),f.x),f.y);\n"
+        "  alb=mix(mix(lut(u_lut,r00),lut(u_lut,r10),f.x),mix(lut(u_lut,r01),lut(u_lut,r11),f.x),f.y);\n"
+        "  }\n"
         "  if(v_tile_mode.y>5.5){ vec3 cc=lut(u_lut,idx); float i2=idx;\n"
         "    i2=floor(texture2D(u_fade,(vec2(idx,shade)+0.5)/vec2(256.0,64.0)).r*255.0+0.5); c2=lut(u_lut,i2); alb=cc; }\n"
         /* HD override: the albedo of this tile's texels from the HD atlas (bank layout, linear + mipmaps), the shaded
@@ -179,29 +236,35 @@ static int tl_init(void) {
         "      c2=hd*clamp(lc/max(lo,0.02),0.0,1.5); alb=hd; hdon=1.0;\n"
         "    }\n"
         "  }\n"
-        "  float kind=floor(texture2D(u_kind,vec2((idx+0.5)/256.0,0.5)).r*255.0+0.5);\n"
         "  vec2 W=v_world.xy+u_view;\n"
         "  vec4 nt=texture2D(u_nrm,(W+0.5)/128.0);\n"
         "  float ao=clamp(1.0-(1.0-texture2D(u_ao,(W+0.5)/128.0).r)*u_aos,0.25,1.0);\n"
-        "  vec3 N=normalize(nt.xyz*2.0-1.0);\n"
+        "  vec3 N=normalize(nt.xyz*2.0-1.0), Nm=N;\n"
+        "  float water=(u_wton>0.5 && kind==1.0)?1.0:0.0;\n"
+        "  if(u_reflect<0.5){\n"
         "  vec3 bm=texture2D(u_bump,(base+clamp(v_material.xy,0.5,31.5))/vec2(512.0,544.0)).rgb;\n"
         "  vec2 gr=bm.gb*2.0-1.0;\n"
         "  vec3 dp1=dFdx(v_world), dp2=dFdy(v_world); vec2 du1=dFdx(v_material.xy), du2=dFdy(v_material.xy);\n"
         "  vec3 p2=cross(dp2,N), p1=cross(N,dp1);\n"
         "  vec3 T=p2*du1.x+p1*du2.x, B=p2*du1.y+p1*du2.y;\n"
         "  float im=inversesqrt(max(max(dot(T,T),dot(B,B)),1e-12));\n"
-        "  float water=(u_wton>0.5 && kind==1.0)?1.0:0.0;\n"
         "  /* 4K micro-detail in world coordinates (periodic over the 128-cell planet): albedo +-10 %, normal relief */\n"
         "  float dn=det(W), dx=det(W+vec2(0.004,0.0))-dn, dy=det(W+vec2(0.0,0.004))-dn;\n"
-        "  vec3 Nm=normalize(N-(1.0-water)*(0.9*(gr.x*T+gr.y*B)*im+vec3(dx,dy,0.0)*1.4));\n"
+        "  Nm=normalize(N-(1.0-water)*(0.9*(gr.x*T+gr.y*B)*im+vec3(dx,dy,0.0)*1.4));\n"
         "  alb*=1.0+(1.0-water)*0.32*(1.0-0.6*hdon)*(dn-0.5);\n"
+        "  }\n"
         "  float sh=1.0;\n"
         "  if(u_shon>0.5){\n"
         "    vec4 P=vec4(v_world+N*0.06,1.0);\n"
         "    vec3 l=vec3(dot(u_lx,P),dot(u_ly,P),dot(u_lz,P))*0.5+0.5;\n"
         "    float d=l.z-0.0018, s=0.0;\n"
-        "    for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++) s+=(shdec(l.xy+vec2(float(i),float(j))*(1.3/2048.0))<d)?0.0:1.0;\n"
-        "    sh=(l.x>0.0 && l.x<1.0 && l.y>0.0 && l.y<1.0)?s/9.0:1.0;\n"
+        "    if(l.x>0.0 && l.x<1.0 && l.y>0.0 && l.y<1.0){\n"
+        "      if(u_reflect>0.5) sh=step(d,shdec(l.xy));\n"
+        "      else {\n"
+        "        for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++) s+=(shdec(l.xy+vec2(float(i),float(j))*(1.3/2048.0))<d)?0.0:1.0;\n"
+        "        sh=s/9.0;\n"
+        "      }\n"
+        "    }\n"
         "  }\n"
         "  float ndl=max(dot(Nm,u_sun),0.0);\n"
         "  vec3 hemi=mix(u_gnd,u_sky,Nm.z*0.5+0.5);\n"
@@ -216,13 +279,14 @@ static int tl_init(void) {
         "  vec3 lit=alb*light*1.12+u_sunc*spec;\n"
         /* dynamic point lights: real 3D normal, (1 - d/r)^2 falloff to exactly 0 at the radius, soft knee so they
            lift the scene without burning it to white; only where the mesh draws terrain (never the undrawn black) */
+        "  float night=smoothstep(0.0,0.66,-cos(u_time_of_day*6.283185307));\n"
         "  vec3 pl=vec3(0.0), pls=vec3(0.0);\n"
         "  for(int i=0;i<16;i++){\n"
         "    if(i>=u_pt_light_count) break;\n"
-        "    vec4 pr=u_pt_light_pos_rad[i]; vec3 Lv=pr.xyz-v_world; Lv.xy=mod(Lv.xy+64.0,128.0)-64.0;\n"
+        "    vec4 pr=u_pt_light_pos_rad[i]; pr.w*=1.0+0.28*night; vec3 Lv=pr.xyz-v_world; Lv.xy=mod(Lv.xy+64.0,128.0)-64.0;\n"
         "    float d=length(Lv); if(d>=pr.w) continue;\n"
         "    vec3 Ld=Lv/max(d,1e-3); float at=1.0-d/pr.w; at*=at;\n"
-        "    vec3 lc=u_pt_light_col_int[i].rgb*(u_pt_light_col_int[i].w*at);\n"
+        "    vec3 lc=u_pt_light_col_int[i].rgb*(u_pt_light_col_int[i].w*at*(1.0+0.44*night));\n"
         "    pl+=lc*(max(dot(Nm,Ld),0.0)*0.85+0.15);\n"
         "    pls+=lc*pow(max(dot(Nm,normalize(Ld+V)),0.0),24.0);\n"
         "  }\n"
@@ -233,6 +297,9 @@ static int tl_init(void) {
         "  if(u_knorm>0.0){ float L2=dot(c2,vec3(0.3,0.59,0.11)), L3=dot(col,vec3(0.3,0.59,0.11));\n"
         "    col*=pow(clamp((L2+0.01)/(L3+0.01),0.5,2.5),u_knorm); }\n"
         "  col=mix(col,0.8+0.2*(1.0-exp(-(col-0.8)/0.2)),step(0.8,col));\n"
+        "  col=mix(col,max(col*0.78,c2*vec3(0.39,0.44,0.53)),night);\n"
+        "  if(u_reflect>0.5 && kind==2.0) col+=alb*0.28;\n"
+        "  if(u_reflect>0.5) col+=alb*vec3(0.40,0.46,0.62)*u_flash*(0.24+0.76*max(dot(Nm,vec3(-0.39,-0.50,0.77)),0.0));\n"
         "  float a=1.0;\n"
         "  if(water>0.5){\n"
         "    float hpx=v_world.z/u_zs;\n"
@@ -252,7 +319,7 @@ static int tl_init(void) {
         "  gl_Position=vec4(l,1.0); v_d=l.z*0.5+0.5; }\n";
     static const char *fs_sh=
         "#version 120\n varying float v_d;\n"
-        "void main(){ float d=clamp(v_d,0.0,1.0)*255.0; gl_FragColor=vec4(floor(d)/255.0,fract(d),0.0,1.0); }\n";
+        "void main(){ float d=clamp(v_d,0.0,1.0)*255.0; gl_FragColor=vec4(floor(d)/255.0,fract(d),1.0,1.0); }\n";
     /* luminance and its gradient inside each 32 x 32 tile of the atlas (wrapping inside the tile) */
     static const char *vs_q=
         "#version 120\n attribute vec2 a_pos;\n void main(){ gl_Position=vec4(a_pos,0.0,1.0); }\n";
@@ -263,6 +330,38 @@ static int tl_init(void) {
         "  float xl=L(b+vec2(mod(q.x+31.0,32.0),q.y)), xr=L(b+vec2(mod(q.x+1.0,32.0),q.y));\n"
         "  float yd=L(b+vec2(q.x,mod(q.y+31.0,32.0))), yu=L(b+vec2(q.x,mod(q.y+1.0,32.0)));\n"
         "  gl_FragColor=vec4(L(p),clamp((xr-xl)*0.5+0.5,0.0,1.0),clamp((yu-yd)*0.5+0.5,0.0,1.0),1.0); }\n";
+    static const char *fs_sky=
+        "#version 120\n"
+        "uniform float u_time_of_day; uniform vec3 u_sun,u_sunc;\n"
+        "void main(){\n"
+        "  vec2 uv=gl_TexCoord[0].xy;\n"
+        "  float h=cos(u_time_of_day*6.283185307);\n"
+        "  float dusk=1.0-smoothstep(0.04,0.68,abs(h)), night=smoothstep(0.0,0.66,-h);\n"
+        "  vec3 horizon=mix(mix(vec3(0.14,0.27,0.36),vec3(0.56,0.24,0.13),dusk),vec3(0.09,0.15,0.28),night);\n"
+        "  vec3 zenith=mix(vec3(0.09,0.20,0.34),vec3(0.034,0.062,0.145),night);\n"
+        "  vec2 at=vec2(0.50+0.30*(u_sun.x-u_sun.y),0.25+u_sun.z*0.46);\n"
+        "  float d=length((uv-at)*vec2(1.6,1.0));\n"
+        "  float halo=0.12*exp(-17.0*d)+0.61*(1.0-smoothstep(0.010,0.020,d));\n"
+        "  gl_FragColor=vec4(mix(horizon,zenith,smoothstep(0.0,1.0,uv.y))+u_sunc*halo,1.0);\n"
+        "}\n";
+    static const char *vs_sky=
+        "#version 120\n attribute vec2 a_pos,a_uv;\n"
+        "void main(){ gl_Position=vec4(a_pos,0.0,1.0); gl_TexCoord[0]=vec4(a_uv,0.0,1.0); }\n";
+    static const char *vs_wave=
+        "#version 120\n"
+        "attribute vec3 a_pos,a_uv; uniform float u_time; varying float v_rise;\n"
+        "void main(){\n"
+        "  vec2 q=a_uv.xy*(6.283185307/128.0);\n"
+        "  v_rise=a_uv.z*(0.51*sin(dot(q,vec2(25.0,11.0))+u_time*1.9)\n"
+        "                +0.28*sin(dot(q,vec2(-13.0,21.0))-u_time*1.6));\n"
+        "  vec2 p=a_pos.xy+vec2(-127.5,0.5-v_rise);\n"
+        "  gl_Position=vec4(p*2.0/vec2(1024.0,640.0)-1.0,a_pos.z,1.0);\n"
+        "}\n";
+    static const char *fs_wave=
+        "#version 120\n varying float v_rise;\n"
+        "void main(){ gl_FragColor=vec4(0.5+0.5*v_rise,1.0,0.0,1.0); }\n";
+    g_t3.prog_wave=tl_link(vs_wave,fs_wave);
+    g_t3.prog_sky=tl_link(vs_sky,fs_sky);
     g_t3.prog_lit=tl_link(vs_lit,fs_lit);
     g_t3.prog_sh=tl_link(vs_sh,fs_sh);
     g_t3.prog_bump=tl_link(vs_q,fs_bump);
@@ -278,7 +377,23 @@ static int tl_init(void) {
     TLU(prog_lit,l_aos,"u_aos"); TLU(prog_lit,l_expo,"u_expo"); TLU(prog_lit,l_shfloor,"u_shfloor"); TLU(prog_lit,l_knorm,"u_knorm"); TLU(prog_lit,l_wtint,"u_wtint");
     TLU(prog_sh,s_lx,"u_lx"); TLU(prog_sh,s_ly,"u_ly"); TLU(prog_sh,s_lz,"u_lz"); TLU(prog_sh,s_zs,"u_zs");
     TLU(prog_bump,b_tiles,"u_tiles"); TLU(prog_bump,b_lut,"u_lut");
+    TLU(prog_lit,l_reflect,"u_reflect"); TLU(prog_lit,l_water_plane,"u_water_plane");
+    TLU(prog_lit,l_ring,"u_ring"); TLU(prog_lit,l_ring_off,"u_ring_off");
+    TLU(prog_lit,l_time_of_day,"u_time_of_day"); TLU(prog_lit,l_flash,"u_flash");
+    if(g_t3.prog_sky) {
+        TLU(prog_sky,sky_phase,"u_time_of_day"); TLU(prog_sky,sky_dir,"u_sun"); TLU(prog_sky,sky_color,"u_sunc");
+    } else g_t3.refl_failed=1;
+    if(g_t3.prog_wave) { TLU(prog_wave,wave_time,"u_time"); }
     #undef TLU
+    }
+    if(g_t3.prog_wave && g_ini_terrain_3d_water && g_ini_terrain_3d_water_reflections) {
+        if(bloom_make_fbo(&g_t3.wave_fbo,&g_t3.wave_tex,1024,640,GL_RGBA8))
+            g_bloom.GenBuffers(3,g_t3.wave_vbo);
+        else {
+            g_bloom.DeleteFramebuffers(1,&g_t3.wave_fbo);
+            g_bloom.DeleteTextures(1,&g_t3.wave_tex);
+            g_t3.wave_fbo=g_t3.wave_tex=0;
+        }
     }
     /* shadow map: packed 16-bit depth in RG, nearest */
     g_t3.sh_tex=tl_tex(TL_SHADOW,TL_SHADOW,GL_NEAREST,GL_CLAMP_TO_EDGE);
@@ -325,12 +440,36 @@ fail:
     return 0;
 }
 
+static int tl_reflection_size(void) {
+    if(g_t3.refl_failed) return 0;
+    if(g_t3.refl_fbo) return 1;
+    const int w=g_t3.w/2,h=g_t3.h/2;
+    for(int i=0;i<3;i++) g_t3.refl[i]=tl_tex(w,h,GL_LINEAR,GL_CLAMP_TO_EDGE);
+    g_bloom.GenFramebuffers(1,&g_t3.refl_fbo);
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.refl_fbo);
+    g_bloom.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,g_t3.refl[1],0);
+    if(!g_t3.refl_rb) g_gl_mesh.GenRenderbuffers(1,&g_t3.refl_rb);
+    g_gl_mesh.BindRenderbuffer(GL_RENDERBUFFER,g_t3.refl_rb);
+    g_gl_mesh.RenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH_COMPONENT16,w,h);
+    g_gl_mesh.BindRenderbuffer(GL_RENDERBUFFER,0);
+    g_gl_mesh.FramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_RENDERBUFFER,g_t3.refl_rb);
+    g_t3.refl_failed=g_bloom.CheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE;
+    gw_flag_trace("TRACE terrain_3d planar reflection %dx%d ok=%d%c",w,h,!g_t3.refl_failed,10);
+    return !g_t3.refl_failed;
+}
+
 /* lit layer textures at scale s (s x the canvas resolution), reallocated when the window's scale changes */
 static int tl_size(int s) {
     if(s<1) s=1;
     if(s>4) s=4;
     if(s==g_t3.scale && g_t3.lit[0]) return 1;
     for(int i=0;i<3;i++) if(g_t3.lit[i]) { g_bloom.DeleteTextures(1,&g_t3.lit[i]); g_t3.lit[i]=0; g_t3.lhave[i]=0; }
+    for(int i=0;i<3;i++) {
+        if(g_t3.refl[i]) g_bloom.DeleteTextures(1,&g_t3.refl[i]);
+        g_t3.refl[i]=0; g_t3.refl_have[i]=0;
+    }
+    if(g_t3.refl_fbo) g_bloom.DeleteFramebuffers(1,&g_t3.refl_fbo);
+    g_t3.refl_fbo=0;
     g_t3.w=1024*s; g_t3.h=640*s; g_t3.scale=s;
     for(int i=0;i<3;i++) g_t3.lit[i]=tl_tex(g_t3.w,g_t3.h,GL_LINEAR,GL_CLAMP_TO_EDGE);
     if(!g_t3.depth_rb) g_gl_mesh.GenRenderbuffers(1,&g_t3.depth_rb);
@@ -355,6 +494,14 @@ static void tl_rotate(void) {
     g_t3.lview[1][0]=g_t3.lview[2][0]; g_t3.lview[1][1]=g_t3.lview[2][1]; g_t3.lhave[1]=g_t3.lhave[2];
     g_t3.lview[2][0]=a; g_t3.lview[2][1]=b; g_t3.lhave[2]=h;
     g_t3.lhave[1]=0;
+    t=g_t3.refl[0]; g_t3.refl[0]=g_t3.refl[1]; g_t3.refl[1]=g_t3.refl[2]; g_t3.refl[2]=t;
+    g_t3.refl_have[0]=g_t3.refl_have[1]; g_t3.refl_have[1]=0;
+    t=g_t3.wave_vbo[0]; g_t3.wave_vbo[0]=g_t3.wave_vbo[1]; g_t3.wave_vbo[1]=g_t3.wave_vbo[2]; g_t3.wave_vbo[2]=t;
+    g_t3.wave_n[0]=g_t3.wave_n[1]; g_t3.wave_n[1]=0;
+    g_t3.layer_night[0]=g_t3.layer_night[1];
+    memcpy(g_t3.layer_sun[0],g_t3.layer_sun[1],sizeof g_t3.layer_sun[0]);
+    memcpy(g_t3.layer_sunc[0],g_t3.layer_sunc[1],sizeof g_t3.layer_sunc[0]);
+    memcpy(g_t3.layer_sky[0],g_t3.layer_sky[1],sizeof g_t3.layer_sky[0]);
 }
 
 static inline int tl_hpx(const gw_terrain_mesh_draw *d,int col,int row) {
@@ -366,7 +513,8 @@ static inline int tl_hpx(const gw_terrain_mesh_draw *d,int col,int row) {
 static void tl_planet(const gw_terrain_mesh_draw *d) {
     if(g_t3.nrm_ok && g_t3.hs_last==d->height_scale && !memcmp(g_t3.last_h,d->planet_h,sizeof g_t3.last_h)) return;
     memcpy(g_t3.last_h,d->planet_h,sizeof g_t3.last_h); g_t3.hs_last=d->height_scale;
-    static uint8_t px[128u*128u*4u]; static uint8_t dist[128u*128u]; static uint16_t q[128u*128u];
+    static uint8_t px[128u*128u*4u]; static uint16_t q[128u*128u];
+    uint8_t *dist=g_t3.sea_dist;
     unsigned qh=0,qt=0;
     for(int r=0;r<128;r++) for(int c=0;c<128;c++) {
         const unsigned i=(unsigned)r*128u+(unsigned)c;
@@ -409,6 +557,58 @@ static void tl_planet(const gw_terrain_mesh_draw *d) {
     g_t3.nrm_ok=1;
 }
 
+/* The water surface follows the terrain mesh's shared vertices. Store only triangles touching
+   deep water, and keep the two snapshots used by the interpolated camera. */
+static void tl_wave_upload(const gw_terrain_mesh_draw *d) {
+    if(!g_t3.wave_vbo[1]) return;
+    static float data[3u*GW_TERRAIN_GPU_FIXTURE_CAP][6];
+    unsigned n=0;
+    for(unsigned i=0;i<d->count;i+=3) {
+        const gw_terrain_mesh_vertex *tri=d->vertex+i;
+        if(tri->mode>5.5f) continue;
+        float depth[3];
+        for(int j=0;j<3;j++) {
+            const unsigned c=(unsigned)((int)tri[j].wx+d->view_col)&127u;
+            const unsigned r=(unsigned)((int)tri[j].wy+d->view_row)&127u;
+            depth[j]=atm_smooth(2.0f,5.0f,(float)g_t3.sea_dist[r*128u+c]);
+        }
+        if(depth[0]+depth[1]+depth[2]==0.0f) continue;
+        for(int j=0;j<3;j++,n++) {
+            data[n][0]=tri[j].x; data[n][1]=tri[j].y; data[n][2]=tri[j].depth;
+            data[n][3]=tri[j].wx+(float)(d->view_col&127);
+            data[n][4]=tri[j].wy+(float)(d->view_row&127);
+            data[n][5]=depth[j];
+        }
+    }
+    g_t3.wave_n[1]=n;
+    if(n) {
+        g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_t3.wave_vbo[1]);
+        g_bloom.BufferData(GL_ARRAY_BUFFER,n*sizeof data[0],data,GL_STREAM_DRAW);
+    }
+}
+
+/* The displacement field is rasterised from the moving vertices at presentation rate.
+   It carries screen-space height in R and coverage in G. Black decodes to zero height. */
+static int tl_wave_render(int layer,float time) {
+    if(!g_t3.wave_n[layer]) return 0;
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.wave_fbo);
+    g_bloom.Viewport(0,0,1024,640);
+    g_bloom.Disable(GL_SCISSOR_TEST);
+    g_bloom.ClearColor(0.0f,0.0f,0.0f,1.0f);
+    g_bloom.Clear(GL_COLOR_BUFFER_BIT);
+    g_bloom.UseProgram(g_t3.prog_wave);
+    g_bloom.Uniform1f(g_t3.wave_time,time);
+    g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_t3.wave_vbo[layer]);
+    const GLsizei stride=6*(GLsizei)sizeof(float);
+    g_bloom.VertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,stride,(const void *)0);
+    g_bloom.VertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,stride,(const void *)(3*sizeof(float)));
+    g_bloom.DrawArrays(GL_TRIANGLES,0,(GLsizei)g_t3.wave_n[layer]);
+    g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_bloom.vbo);
+    g_bloom.VertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,stride,(const void *)0);
+    g_bloom.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,stride,(const void *)(2*sizeof(float)));
+    return 1;
+}
+
 /* the shadow casters around the view and the light's orthographic projection fitted to them */
 static void tl_shadow(const gw_terrain_mesh_draw *d) {
     static float vb[(TL_GRID+1)*(TL_GRID+1)*3];
@@ -440,7 +640,7 @@ static void tl_shadow(const gw_terrain_mesh_draw *d) {
     g_t3.lz[0]=-L[0]*sz; g_t3.lz[1]=-L[1]*sz; g_t3.lz[2]=-L[2]*sz; g_t3.lz[3]=-mn[2]*sz-1.0f;
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.sh_fbo);
     g_bloom.Viewport(0,0,TL_SHADOW,TL_SHADOW);
-    g_bloom.ClearColor(1.0f,1.0f,0.0f,1.0f);
+    g_bloom.ClearColor(0.0f,0.0f,0.0f,1.0f);
     g_bloom.Clear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
     g_bloom.UseProgram(g_t3.prog_sh);
     g_t3.Uniform4f(g_t3.s_lx,g_t3.lx[0],g_t3.lx[1],g_t3.lx[2],g_t3.lx[3]);
@@ -620,7 +820,13 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_bloom.Disable(GL_CULL_FACE); g_bloom.Disable(GL_DITHER); g_bloom.Disable(GL_BLEND); g_bloom.Disable(GL_SCISSOR_TEST);
     g_bloom.Enable(GL_DEPTH_TEST);
     g_gl_mesh.DepthFunc(GL_LESS); g_gl_mesh.DepthMask(GL_TRUE); g_gl_mesh.ClearDepth(1.0);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
+    g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    const int waves=g_ini_terrain_3d_water && g_ini_terrain_3d_water_reflections;
+    const int reflection=waves && tl_reflection_size();
+    tl_atmosphere();
     tl_planet(d);
+    tl_wave_upload(d);
     const int shadows=g_ini_terrain_3d_shadows!=0;
     if(shadows) tl_shadow(d);
     /* bump atlas from the tile atlas just uploaded */
@@ -635,14 +841,25 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_bloom.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(const void *)(2*sizeof(float)));
     g_bloom.VertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(const void *)(4*sizeof(float)));
     bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
-    g_bloom.Enable(GL_DEPTH_TEST);
-    /* the lit mesh into the current layer */
+    g_t3.refl_have[1]=reflection;
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.fbo);
     g_bloom.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,g_t3.lit[1],0);
     g_bloom.Viewport(0,0,g_t3.w,g_t3.h);
-    g_bloom.ClearColor(0.0f,0.0f,0.0f,0.0f);
-    g_bloom.Clear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-    g_bloom.ClearColor(0.0f,0.0f,0.0f,1.0f);
+    g_bloom.Clear(GL_DEPTH_BUFFER_BIT);
+    bloom_fill_buffer(0.0f,0.0f);
+    if(reflection) {
+        g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.refl_fbo);
+        g_bloom.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,g_t3.refl[1],0);
+        g_bloom.Viewport(0,0,g_t3.w/2,g_t3.h/2);
+        g_bloom.ClearColor(0.0f,0.0f,0.0f,1.0f);
+        g_bloom.Clear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        g_bloom.UseProgram(g_t3.prog_sky);
+        g_bloom.Uniform1f(g_t3.sky_phase,g_atmosphere.time_of_day);
+        g_t3.Uniform3f(g_t3.sky_dir,g_t3.sun[0],g_t3.sun[1],g_t3.sun[2]);
+        g_t3.Uniform3f(g_t3.sky_color,g_t3.sunc[0],g_t3.sunc[1],g_t3.sunc[2]);
+        bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+    }
+    g_bloom.Enable(GL_DEPTH_TEST);
     g_bloom.UseProgram(g_t3.prog_lit);
     g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,g_gl_mesh.tiles); g_bloom.Uniform1i(g_t3.l_tiles,0);
     g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_gl_mesh.fade); g_bloom.Uniform1i(g_t3.l_fade,1);
@@ -652,6 +869,12 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_bloom.ActiveTexture(GL_TEXTURE5); g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.sh_tex); g_bloom.Uniform1i(g_t3.l_sh,5);
     g_bloom.ActiveTexture(GL_TEXTURE6); g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.bump_tex); g_bloom.Uniform1i(g_t3.l_bump,6);
     g_bloom.ActiveTexture(GL_TEXTURE7); g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.ao_tex); g_bloom.Uniform1i(g_t3.l_ao,7);
+    g_bloom.ActiveTexture(GL_TEXTURE0+10); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_ring);
+    g_bloom.Uniform1i(g_t3.l_ring,10);
+    g_bloom.Uniform2f(g_t3.l_ring_off,(float)(g_gm.ring_x-128),(float)g_gm.ring_y);
+    g_bloom.Uniform1f(g_t3.l_water_plane,8.0f*(float)d->height_scale);
+    g_bloom.Uniform1f(g_t3.l_time_of_day,g_atmosphere.time_of_day);
+    g_bloom.Uniform1f(g_t3.l_flash,g_atmosphere.flash);
     g_bloom.ActiveTexture(GL_TEXTURE0);
     const int vc=d->view_col&127,vr=d->view_row&127;
     g_bloom.Uniform2f(g_t3.l_view,(float)vc,(float)vr);
@@ -684,6 +907,8 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
         g_bloom.Uniform1i(g_t3.l_pln,n);
         g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,g_gl_mesh.tiles);
     }
+    /* HD streaming can bind its own target while servicing a new atlas. */
+    if(reflection) g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.refl_fbo);
     g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_gl_mesh.vbo);   /* uploaded by terrain_gl_render this game frame */
     g_bloom.BindBuffer(GL_ELEMENT_ARRAY_BUFFER,g_gl_mesh.ibo);
     const GLsizei stride=sizeof d->vertex[0];
@@ -692,6 +917,13 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_bloom.VertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,stride,(const void *)offsetof(gw_terrain_mesh_vertex,tile));
     g_bloom.EnableVertexAttribArray(3);
     g_bloom.VertexAttribPointer(3,3,GL_FLOAT,GL_FALSE,stride,(const void *)offsetof(gw_terrain_mesh_vertex,wx));
+    if(reflection) {
+        g_bloom.Uniform1f(g_t3.l_reflect,1.0f);
+        g_gl_mesh.DrawElements(GL_TRIANGLES,(GLsizei)d->count,GL_UNSIGNED_SHORT,0);
+    }
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.fbo);
+    g_bloom.Viewport(0,0,g_t3.w,g_t3.h);
+    g_bloom.Uniform1f(g_t3.l_reflect,0.0f);
     g_gl_mesh.DrawElements(GL_TRIANGLES,(GLsizei)d->count,GL_UNSIGNED_SHORT,0);
     g_bloom.DisableVertexAttribArray(3);
     g_bloom.BindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
@@ -707,6 +939,10 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
             gw_flag_trace("TRACE terrain_3d wrap crossed origin %d,%d -> %d,%d%c",pvc,pvr,vc,vr,10);
         pvc=vc; pvr=vr;
         static unsigned nt; if(++nt%80u==0u) gw_flag_trace("TRACE terrain_3d origin %d,%d%c",vc,vr,10); }
+    g_t3.layer_night[1]=g_t3.night;
+    memcpy(g_t3.layer_sun[1],g_t3.sun,sizeof g_t3.sun);
+    memcpy(g_t3.layer_sunc[1],g_t3.sunc,sizeof g_t3.sunc);
+    memcpy(g_t3.layer_sky[1],g_t3.sky,sizeof g_t3.sky);
     g_t3.lview[1][0]=vc; g_t3.lview[1][1]=vr; g_t3.lhave[1]=1;
     return 1;
 }

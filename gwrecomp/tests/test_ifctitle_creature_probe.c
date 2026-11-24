@@ -8498,6 +8498,10 @@ static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launch
 static int g_terrain_3d=1;  /* host presentation thread only */
 static int g_ini_terrain_3d_shadows=1;   /* terrain_3d_shadows: directional shadow map of hills and craters (3D terrain) */
 static int g_ini_terrain_3d_water=1;     /* terrain_3d_water: coastal depth colour, foam, waves, Fresnel and glints (3D terrain) */
+static int g_ini_terrain_3d_day_night=1, g_ini_terrain_3d_day_night_period=360;
+static int g_ini_terrain_3d_weather=1, g_ini_terrain_3d_water_reflections=1;
+enum { ATM_AUTO, ATM_FIRST, ATM_SECOND, ATM_THIRD, ATM_OFF, ATM_MODES };
+static int g_day_mode=ATM_AUTO,g_weather_mode=ATM_AUTO;
 static int g_ini_terrain_3d_lights=1;    /* terrain_3d_lights: dynamic point lights (beam, shots, beacons, GOOP) on the 3D slopes */
 static int g_ini_terrain_3d_hd_tiles=1;  /* terrain_3d_hd_tiles: optional HD B32 tile overrides from hd_textures/ (3D terrain) */
 static char g_ini_terrain_3d_hd_dir[600];/* terrain_3d_hd_dir: folder holding <BANK>/atlas.png or tile_NNN.png (default: hd_textures next to the exe) */
@@ -8609,6 +8613,14 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"terrain_3d")) g_terrain_3d=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_shadows")) g_ini_terrain_3d_shadows=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_water")) g_ini_terrain_3d_water=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_day_night")) g_ini_terrain_3d_day_night=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_day_night_period")) {
+            char *end;
+            long seconds=strtol(val,&end,10);
+            if(end!=val && !*end && seconds>=1 && seconds<=86400) g_ini_terrain_3d_day_night_period=(int)seconds;
+        }
+        else if(!strcmp(key,"terrain_3d_weather")) g_ini_terrain_3d_weather=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_water_reflections")) g_ini_terrain_3d_water_reflections=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_lights")) g_ini_terrain_3d_lights=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_biome_presets")) g_ini_terrain_3d_biome_presets=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_smooth_zoom")) g_ini_terrain_3d_smooth_zoom=atoi(val)!=0;
@@ -8849,10 +8861,10 @@ static LONG host_pan_bit(SDL_Keycode k) {
 }
 /* Host controls in play mode. Returns 1 when the event is consumed (never reaches the game). */
 static int host_controls_event(const SDL_Event *ev) {
-    static int mesh_shortcut_down;
+    static int mesh_shortcut_down,day_shortcut_down,weather_shortcut_down;
     const int map=(int)InterlockedCompareExchange(&g_live_ifc_map,0,0);
     if(ev->type==SDL_WINDOWEVENT && ev->window.event==SDL_WINDOWEVENT_FOCUS_LOST) {
-        mesh_shortcut_down=0;
+        mesh_shortcut_down=day_shortcut_down=weather_shortcut_down=0;
         InterlockedExchange(&g_pan_hold,0); InterlockedExchange(&g_turbo_tab,0); g_mid_drag=0; return 0;
     }
     if(ev->type==SDL_KEYDOWN || ev->type==SDL_KEYUP) {
@@ -8874,6 +8886,24 @@ static int host_controls_event(const SDL_Event *ev) {
                     gw_flag_trace("TRACE host_controls terrain_3d_%s=%d%c",k==SDLK_F11?"lights":"hd_tiles",*t,10);
                 }
                 *held=down; return 1;
+            }
+        }
+        if(k==SDLK_F7 || k==SDLK_F8) {
+            int *held=k==SDLK_F7?&day_shortcut_down:&weather_shortcut_down;
+            if(*held || (down && (ev->key.keysym.mod&KMOD_CTRL))) {
+                if(map && down && !*held && !ev->key.repeat) {
+                    int *mode=k==SDLK_F7?&g_day_mode:&g_weather_mode;
+                    static const char *const modes[2][ATM_MODES]={
+                        {"auto","noon","sunset","night","off"},
+                        {"auto","clear","moderate","storm","off"}
+                    };
+                    const int weather=k==SDLK_F8;
+                    *mode=(*mode+1)%ATM_MODES;
+                    gw_flag_trace("TRACE host_controls terrain_3d_%s=%s%c",
+                        weather?"weather":"day_night",modes[weather][*mode],10);
+                }
+                *held=down;
+                return 1;
             }
         }
         if(ev->key.repeat) return k==SDLK_F7 || k==SDLK_F8 || k==SDLK_F10 || (map && (k==SDLK_TAB || k==SDLK_HOME || bit));
@@ -9813,7 +9843,8 @@ static struct {
     GLuint fbo_qtr_a,tex_qtr_a,fbo_qtr_b,tex_qtr_b;
     GLuint fbo_eig,tex_eig;
     GLuint vbo;
-    GLuint prog_extract,prog_down,prog_up,prog_comp;
+    GLuint prog_extract,prog_down,prog_up,prog_comp,prog_fill;
+    GLint u_fill;
     GLint u_ext_idx,u_ext_lut,u_ext_hud,u_ext_texel;
     GLint u_down_tex,u_down_hp;
     GLint u_up_tex,u_up_prev,u_up_hp;
@@ -9838,6 +9869,12 @@ static struct {
     void (APIENTRYP Disable)(GLenum);
     GLboolean (APIENTRYP IsEnabled)(GLenum);
     void (APIENTRYP GetIntegerv)(GLenum,GLint *);
+    void (APIENTRYP PushAttrib)(GLbitfield);
+    void (APIENTRYP PopAttrib)(void);
+    void (APIENTRYP PushClientAttrib)(GLbitfield);
+    void (APIENTRYP PopClientAttrib)(void);
+    SDL_GLContext sdl_program_context;
+    GLint sdl_solid_program;
     void (APIENTRYP PixelStorei)(GLenum,GLint);
     void (APIENTRYP ClearColor)(GLclampf,GLclampf,GLclampf,GLclampf);
     void (APIENTRYP GetFloatv)(GLenum,GLfloat *);
@@ -9889,7 +9926,9 @@ static int bloom_load_gl(void) {
     BGL(GenTextures,glGenTextures); BGL(DeleteTextures,glDeleteTextures); BGL(BindTexture,glBindTexture);
     BGL(TexImage2D,glTexImage2D); BGL(TexSubImage2D,glTexSubImage2D); BGL(TexParameteri,glTexParameteri);
     BGL(Viewport,glViewport); BGL(Scissor,glScissor); BGL(Enable,glEnable); BGL(Disable,glDisable);
-    BGL(IsEnabled,glIsEnabled); BGL(GetIntegerv,glGetIntegerv); BGL(PixelStorei,glPixelStorei);
+    BGL(GetIntegerv,glGetIntegerv); BGL(PixelStorei,glPixelStorei);
+    BGL(PushAttrib,glPushAttrib); BGL(PopAttrib,glPopAttrib);
+    BGL(PushClientAttrib,glPushClientAttrib); BGL(PopClientAttrib,glPopClientAttrib);
     BGL(ClearColor,glClearColor); BGL(GetFloatv,glGetFloatv); BGL(Clear,glClear); BGL(DrawArrays,glDrawArrays); BGL(GetError,glGetError);
     BGL(ActiveTexture,glActiveTexture); BGL(GenBuffers,glGenBuffers); BGL(BindBuffer,glBindBuffer); BGL(BufferData,glBufferData);
     BGL(CreateShader,glCreateShader); BGL(DeleteShader,glDeleteShader); BGL(ShaderSource,glShaderSource);
@@ -10114,14 +10153,19 @@ static int bloom_ensure_init(int logical_w) {
             "  float ao=1.0-u_strength*smoothstep(0.0,0.30,occ);\n"
             "  gl_FragColor=vec4(ao,ao,ao,1.0);\n"
             "}\n";
+        static const char *fs_fill=
+            "#version 120\n uniform vec2 u_fill;\n"
+            "void main(){ gl_FragColor=vec4(vec3(u_fill.x),u_fill.y); }\n";
+        g_bloom.prog_fill=bloom_link_program(vs_quad,fs_fill);
         g_bloom.prog_extract=bloom_link_program(vs_quad,fs_extract);
         g_bloom.prog_down=bloom_link_program(vs_quad,fs_down);
         g_bloom.prog_up=bloom_link_program(vs_quad,fs_up);
         g_bloom.prog_comp=bloom_link_program(vs_quad,fs_comp);
         g_bloom.prog_ao=bloom_link_program(vs_quad,fs_ao);
-        if(!g_bloom.prog_extract||!g_bloom.prog_down||!g_bloom.prog_up||!g_bloom.prog_comp||!g_bloom.prog_ao) {
+        if(!g_bloom.prog_extract||!g_bloom.prog_down||!g_bloom.prog_up||!g_bloom.prog_comp||!g_bloom.prog_ao||!g_bloom.prog_fill) {
             g_bloom.failed=1; goto restore;
         }
+        g_bloom.u_fill=g_bloom.GetUniformLocation(g_bloom.prog_fill,"u_fill");
         g_bloom.u_ext_idx=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_idx_tex");
         g_bloom.u_ext_lut=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_lut");
         g_bloom.u_ext_hud=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_hud_mask");
@@ -10256,20 +10300,15 @@ static void bloom_classify(const uint8_t *pal) {
         lut[(256+k)*4+2]=(uint8_t)bu;
         lut[(256+k)*4+3]=255u;
     }
-    GLint prev_tex=0,prev_act=0,prev_align=4,prev_rl=0;
-    g_bloom.GetIntegerv(GL_ACTIVE_TEXTURE,&prev_act);
+    g_bloom.PushAttrib(GL_TEXTURE_BIT);
+    g_bloom.PushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
     g_bloom.ActiveTexture(GL_TEXTURE0);
-    g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&prev_tex);
-    g_bloom.GetIntegerv(GL_UNPACK_ALIGNMENT,&prev_align);
-    g_bloom.GetIntegerv(GL_UNPACK_ROW_LENGTH,&prev_rl);
     g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,1);
     g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
     g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex);
     g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,2,GL_RGBA,GL_UNSIGNED_BYTE,lut);
-    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,prev_align);
-    g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,prev_rl);
-    g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex);
-    g_bloom.ActiveTexture((GLenum)prev_act);
+    g_bloom.PopClientAttrib();
+    g_bloom.PopAttrib();
 }
 
 static int bloom_active(const gw_interactive_visual_snapshot *v) {
@@ -10393,6 +10432,7 @@ static struct {
     GLint cd_idx,cd_ring,cd_msk,cd_shade,cd_lut,cd_kind,cd_off;
     GLint bh_src,bv_src,bv_cand,bv_ring,bv_off,bv_on,bv_mesh,bv_mesh_on;
     GLint mp_pk,mp_aux,mp_lut,mp_lit,mp_view,mp_lsz,mp_time,mp_sun,mp_sunc,mp_sky,mp_kind;
+    GLint mp_reflect,mp_reflect_on,mp_weather,mp_night,mp_wave,mp_wave_on,mp_normals,mp_weather_cam;
     uint8_t kind_pal[768];
     uint8_t *ring_last; int16_t *hgt_last; int last_valid;
 } g_gm;
@@ -10411,6 +10451,7 @@ static GLuint gm_tex(int w,int h,GLenum ifmt,GLenum fmt) {
     return t;
 }
 #include "gw_terrain_mesh_gl.h"
+static void bloom_fill_buffer(float gray,float alpha);
 #include "gw_terrain_lit_gl.h"
 #define GM_GLSL_COMMON \
     "#version 120\n" \
@@ -10454,7 +10495,7 @@ static int gm_init(void) {
         "  float mU=floor(texture2D(u_mesh,(vec2(cx,y-1.0)+0.5)/S).r*255.0+0.5), mD=floor(texture2D(u_mesh,(vec2(cx,y+1.0)+0.5)/S).r*255.0+0.5);\n"
         "  bool tmatch=m.g>0.5 && (c==mi || c==mL || c==mR || c==mU || c==mD);\n"
         "  bool ui=u_mesh_on>0.5 && m.g>0.5 && msk>0.5 && msk<1.5 && !tmatch;\n"
-        "  if(u_mesh_on>0.5 && gnd>0.5 && drawn>0.5 && m.g>0.5 && !ui){ c=mi; lt=u_lit_on; }\n"
+        "  if(u_mesh_on>0.5 && gnd>0.5 && drawn>0.5 && m.g>0.5 && !ui && c>0.0){ c=mi; lt=u_lit_on; }\n"
         "  else if(ui){\n"
         "    gnd=0.0;\n"
         "    vec3 pc=texture2D(u_plut,vec2((c+0.5)/256.0,0.25)).rgb, pg=texture2D(u_plut,vec2((mi+0.5)/256.0,0.25)).rgb;\n"
@@ -10513,12 +10554,15 @@ static int gm_init(void) {
         "#version 120\n"
         "uniform sampler2D u_pk; uniform sampler2D u_aux; uniform sampler2D u_lut; uniform sampler2D u_lit; uniform sampler2D u_kind;\n"
         "uniform vec3 u_view; uniform vec2 u_lsz; uniform float u_time; uniform vec3 u_sun,u_sunc,u_sky;\n"
+        "uniform sampler2D u_reflect,u_wave,u_normals; uniform float u_reflect_on,u_night,u_wave_on;\n"
+        "uniform vec4 u_weather; uniform vec2 u_weather_camera;\n"
         "varying vec2 v_uv;\n"
         "vec3 lut(float k){ return texture2D(u_lut,vec2((k+0.5)/256.0,0.25)).rgb; }\n"
         "float hh(vec2 q){ vec3 p3=fract(vec3(q.xyx)*0.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }\n"
         "float vn(vec2 p,float P){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);\n"
         "  float a=hh(mod(i,P)), b=hh(mod(i+vec2(1.0,0.0),P)), c=hh(mod(i+vec2(0.0,1.0),P)), d=hh(mod(i+vec2(1.0,1.0),P));\n"
         "  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y); }\n"
+        ATM_GLSL_WEATHER
         "/* 1 where the packed pixel at canvas offset o is terrain that is not water (the coastline, texel exact) */\n"
         "float landat(vec2 o){ vec4 p=texture2D(u_pk,v_uv+o*vec2(1.0/1024.0,1.0/640.0)); float G=floor(p.g*255.0+0.5);\n"
         "  float k=floor(texture2D(u_kind,vec2((floor(p.r*255.0+0.5)+0.5)/256.0,0.5)).r*255.0+0.5);\n"
@@ -10550,6 +10594,13 @@ static int gm_init(void) {
         "          col=L.rgb*(1.0+0.20*pu)+vec3(0.10,0.04,0.17)*pu;\n"
         "        } else {\n"
         "          float dep=clamp((Ln.a-0.1)/0.4,0.0,1.0);\n"
+        "          float rise=0.0;\n"
+        "          if(u_wave_on>0.5 && dep>0.4){\n"
+        "            vec2 field=texture2D(u_wave,v_uv).rg;\n"
+        "            rise=(2.0*field.r-field.g)*smoothstep(0.4,0.65,dep);\n"
+        "            vec4 displaced=texture2D(u_lit,sb+vec2(0.0,rise/640.0));\n"
+        "            if(displaced.a>0.05 && displaced.a<0.55) L.rgb=displaced.rgb;\n"
+        "          }\n"
         "          /* two crossed layers of moving waves (integer wave numbers: periodic over the planet) */\n"
         "          vec2 k1=vec2(83.0,31.0),k2=vec2(-47.0,71.0),k3=vec2(233.0,-97.0),k4=vec2(61.0,257.0),k5=vec2(-311.0,149.0),k6=vec2(173.0,409.0);\n"
         "          float a1=dot(k1,q)+t*1.9,a2=dot(k2,q)-t*1.6,a3=dot(k3,q)+t*3.1,a4=dot(k4,q)-t*2.7,a5=dot(k5,q)+t*4.3,a6=dot(k6,q)-t*3.9;\n"
@@ -10576,12 +10627,38 @@ static int gm_init(void) {
         "          land+=0.6*(landat(vec2(3.0,2.0))+landat(vec2(-3.0,2.0))+landat(vec2(3.0,-2.0))+landat(vec2(-3.0,-2.0)));\n"
         "          land/=6.4;\n"
         "          float foam=smoothstep(0.08,0.55,land+(n-0.5)*0.55)*(0.55+0.45*sin(t*1.7+n*9.0));\n"
+        "          if(u_reflect_on>0.5){\n"
+        "            vec3 mir=texture2D(u_reflect,clamp(v_uv+N.xy*vec2(0.010,0.018)+vec2(0.0,rise/320.0),0.0,1.0)).rgb;\n"
+        "            float fr=clamp(0.13+F*2.2,0.0,0.42)*smoothstep(0.28,0.78,dep)*(1.0-land)*(1.0-foam);\n"
+        "            col=mix(col,max(mir,col*0.86),fr*lum);\n"
+        "          }\n"
+
         "          col=mix(col,vec3(0.90,0.95,0.98)*clamp(lb*4.0,0.35,1.0),clamp(foam*0.7,0.0,0.7));\n"
+        "          col*=1.0-0.38*u_night;\n"
         "        }\n"
         "      }\n"
         "      /* soft edge into the unexplored / undrawn black: coverage of drawn terrain around the pixel, world noise */\n"
         "      float en=vn(W*3.0,384.0)*0.6+vn(W*11.0,1408.0)*0.4;\n"
-        "      col*=smoothstep(0.42+0.22*(en-0.5),0.98,a.a);\n"
+        "      float seen=smoothstep(0.42+0.22*(en-0.5),0.98,a.a);\n"
+        "      if(c>0.0 && seen>0.0 && max(col.r,max(col.g,col.b))>0.0){\n"
+        "        float biome=u_weather.z;\n"
+        "        if(u_weather.w>0.0){\n"
+        "          vec3 n=normalize(texture2D(u_normals,(W+0.5)/128.0).xyz*2.0-1.0);\n"
+        "          float strike=0.24+0.76*max(dot(n,vec3(-0.39,-0.50,0.77)),0.0);\n"
+        "          col+=col*vec3(0.78,0.88,1.14)*(u_weather.w*strike);\n"
+        "        }\n"
+        "        if(biome!=0.0 && u_weather.x>0.015){\n"
+        "          vec2 parallax=u_weather_camera*0.25;\n"
+        "          float mist=weather_layer(W,u_weather.y,biome,0.0)*0.31\n"
+        "                    +weather_layer(W+parallax,u_weather.y,biome,1.0)*0.40\n"
+        "                    +weather_layer(W+2.0*parallax,u_weather.y,biome,2.0)*0.49;\n"
+        "          vec3 tint=vec3(0.90,0.58,0.22);\n"
+        "          if(biome==5.0) tint=mix(vec3(0.66,0.37,0.84),vec3(0.38,0.86,0.42),0.5+0.5*sin(W.x*0.4+W.y*0.3));\n"
+        "          else if(biome==3.0) tint=vec3(0.87,0.94,1.0);\n"
+        "          col=mix(col,tint,clamp(mist*u_weather.x,0.0,0.62));\n"
+        "        }\n"
+        "      }\n"
+        "      col*=seen;\n"
         "    }\n"
         "  }\n"
         "  if(m>0.0 && (a.b>0.5 || gnd>0.5)) col=under*(1.0-m*0.68);\n"
@@ -10610,6 +10687,11 @@ static int gm_init(void) {
     g_gm.mp_pk=GMU(p_map,"u_pk"); g_gm.mp_aux=GMU(p_map,"u_aux"); g_gm.mp_lut=GMU(p_map,"u_lut");
     g_gm.mp_lit=GMU(p_map,"u_lit"); g_gm.mp_view=GMU(p_map,"u_view"); g_gm.mp_lsz=GMU(p_map,"u_lsz"); g_gm.mp_time=GMU(p_map,"u_time");
     g_gm.mp_sun=GMU(p_map,"u_sun"); g_gm.mp_sunc=GMU(p_map,"u_sunc"); g_gm.mp_sky=GMU(p_map,"u_sky"); g_gm.mp_kind=GMU(p_map,"u_kind");
+    g_gm.mp_reflect=GMU(p_map,"u_reflect"); g_gm.mp_reflect_on=GMU(p_map,"u_reflect_on");
+    g_gm.mp_weather=GMU(p_map,"u_weather"); g_gm.mp_night=GMU(p_map,"u_night");
+    g_gm.mp_wave=GMU(p_map,"u_wave"); g_gm.mp_wave_on=GMU(p_map,"u_wave_on");
+    g_gm.mp_normals=GMU(p_map,"u_normals");
+    g_gm.mp_weather_cam=GMU(p_map,"u_weather_camera");
     g_gm.hu_idx=GMU(p_hud,"u_idx"); g_gm.hu_lut=GMU(p_hud,"u_lut");
     #undef GMU
     g_gm.t_idx=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_ring=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_hgt=gm_tex(1152,640,GL_RG8,GL_RG);
@@ -10849,12 +10931,9 @@ static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_
     if(fx_active(v) && wt_init()) wt_upload_kind(v->palette);
     const int th=ao_gpu_active(v) && v->th_valid;
 
-    GLint prev_act=0,prev_tex=0,prev_align=4,prev_rl=0;
-    g_bloom.GetIntegerv(GL_ACTIVE_TEXTURE,&prev_act);
+    g_bloom.PushAttrib(GL_TEXTURE_BIT);
+    g_bloom.PushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
     g_bloom.ActiveTexture(GL_TEXTURE0);
-    g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&prev_tex);
-    g_bloom.GetIntegerv(GL_UNPACK_ALIGNMENT,&prev_align);
-    g_bloom.GetIntegerv(GL_UNPACK_ROW_LENGTH,&prev_rl);
     g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,1);
     g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
 
@@ -10911,10 +10990,8 @@ static void bloom_upload_frame(const gw_interactive_visual_snapshot *v,const gw_
         g_bloom.canvas_ready=g_bloom.canvas_ready<2?g_bloom.canvas_ready+1:2;
     } else g_bloom.canvas_ready=0;
 
-    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,prev_align);
-    g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,prev_rl);
-    g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex);
-    g_bloom.ActiveTexture((GLenum)prev_act);
+    g_bloom.PopClientAttrib();
+    g_bloom.PopAttrib();
 }
 
 /* ---- hd2d_particles (gwrecomp.ini, launcher GRÁFICOS): atmospheric and event particles drawn by the GPU at the
@@ -11154,6 +11231,7 @@ static void pt_draw(const gw_interactive_visual_snapshot *v,double interp_a) {
     int nv[2]={0,0}; float *out[2]; out[0]=g_pt_verts; out[1]=g_pt_verts+(size_t)PT_MAX*6u*10u/2u;
     for(int i=0;i<PT_MAX;i++) {
         const gw_particle *p=&g_pt[i]; if(!p->live) continue;
+        if((p->flags&1) && g_gm_frame && g_gm.lit_applied) continue;  /* atmosphere belongs to the masked 3D map */
         const int pass=p->kind==PT_GLOW?0:1; if(nv[pass]+6>PT_MAX*6/2) continue;
         const double sx=p->x-g_pt_ax*p->par,sy=p->y-g_pt_ay*p->par;
         if(sx<sx0-8 || sx>=sx1+8 || sy<-8 || sy>=rows+8) continue;
@@ -11222,6 +11300,13 @@ static void bloom_draw_quad(float x0,float y0,float x1,float y1,
     g_bloom.DrawArrays(GL_TRIANGLE_STRIP,0,4);
 }
 
+/* Intermediate targets use alpha/neutral AO as data. The GL clear colour stays opaque black. */
+static void bloom_fill_buffer(float gray,float alpha) {
+    g_bloom.UseProgram(g_bloom.prog_fill);
+    g_bloom.Uniform2f(g_bloom.u_fill,gray,alpha);
+    bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f,0.0f,0.0f,1.0f,1.0f,0.0f,0.0f,1.0f,1.0f);
+}
+
 static void bloom_draw_map_rect(float lx0,float ly0,float lw,float lh,
                                 float u0,float v0,float u1,float v1,int view_w) {
     const float x0=lx0/(float)view_w*2.0f-1.0f, x1=(lx0+lw)/(float)view_w*2.0f-1.0f;
@@ -11234,12 +11319,35 @@ static void bloom_draw_map_rect(float lx0,float ly0,float lw,float lh,
 /* draws the map layers (zoom-out canvas, interpolated view pair, zoomed or plain view) into the bound FBO with the
    bound program; texture unit 0 gets the index/flags/height textures, texel_loc the source texel size */
 static int g_layers_cur_only;   /* 1: bloom_draw_map_layers draws only the current snapshot's layer (water pass) */
+static float g_layers_wave_time;
 static GLint g_layers_view_loc=-1;   /* map pass: per layer, its lit 3D texture on unit 7 and (origin col, row, present) */
 static void gm_layer_lit(int k) {
     if(g_layers_view_loc<0) return;
     const int on=g_t3.ready && g_gm.lit_applied && g_t3.lhave[k] && g_t3.lit[k];
-    g_bloom.ActiveTexture(GL_TEXTURE7); g_bloom.BindTexture(GL_TEXTURE_2D,on?g_t3.lit[k]:0u); g_bloom.ActiveTexture(GL_TEXTURE0);
-    if(g_t3.Uniform3f) g_t3.Uniform3f(g_layers_view_loc,(float)g_t3.lview[k][0],(float)g_t3.lview[k][1],on?1.0f:0.0f);
+    const int reflection=on && g_t3.refl_have[k];
+    const int wave=on && tl_wave_render(k,g_layers_wave_time);
+    if(wave) {
+        const int vw=g_present_w;
+        g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_gm.map_fbo);
+        g_bloom.Viewport(0,0,g_gm.map_w,g_gm.map_h);
+        g_bloom.Enable(GL_SCISSOR_TEST);
+        g_bloom.Scissor((int)(128.0*g_gm.map_w/vw),0,g_gm.map_w,g_gm.map_h);
+        g_bloom.UseProgram(g_gm.p_map);
+    }
+    g_bloom.ActiveTexture(GL_TEXTURE9); g_bloom.BindTexture(GL_TEXTURE_2D,wave?g_t3.wave_tex:0u);
+    g_bloom.Uniform1f(g_gm.mp_wave_on,wave?1.0f:0.0f);
+    g_bloom.ActiveTexture(GL_TEXTURE7); g_bloom.BindTexture(GL_TEXTURE_2D,on?g_t3.lit[k]:0u);
+    g_bloom.ActiveTexture(GL_TEXTURE8); g_bloom.BindTexture(GL_TEXTURE_2D,reflection?g_t3.refl[k]:0u);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
+    if(g_t3.Uniform3f) {
+        g_t3.Uniform3f(g_layers_view_loc,(float)g_t3.lview[k][0],(float)g_t3.lview[k][1],on?1.0f:0.0f);
+        const float *sun=g_t3.layer_sun[k],*light=g_t3.layer_sunc[k],*sky=g_t3.layer_sky[k];
+        g_t3.Uniform3f(g_gm.mp_sun,sun[0],sun[1],sun[2]);
+        g_t3.Uniform3f(g_gm.mp_sunc,light[0],light[1],light[2]);
+        g_t3.Uniform3f(g_gm.mp_sky,sky[0],sky[1],sky[2]);
+    }
+    g_bloom.Uniform1f(g_gm.mp_night,on?g_t3.layer_night[k]:0.0f);
+    g_bloom.Uniform1f(g_gm.mp_reflect_on,reflection?1.0f:0.0f);
 }
 static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
     const int vw=g_present_w;
@@ -11429,16 +11537,28 @@ static int gm_map(const gw_present_geo *geo,double interp_a) {
     g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_gm.mp_lut,1);
     g_bloom.Uniform1i(g_gm.mp_aux,5);
     g_bloom.Uniform1i(g_gm.mp_lit,7);
+    g_bloom.Uniform1i(g_gm.mp_reflect,8);
+    g_bloom.Uniform1i(g_gm.mp_wave,9);
+    gm_bind(10,g_t3.nrm_tex,g_gm.mp_normals);
     g_bloom.ActiveTexture(GL_TEXTURE3); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_kind); g_bloom.Uniform1i(g_gm.mp_kind,3);
     if(g_t3.ready) {
         g_bloom.Uniform2f(g_gm.mp_lsz,(float)g_t3.w,(float)g_t3.h);
         const uint64_t f=SDL_GetPerformanceFrequency(),t=SDL_GetPerformanceCounter();
         const double per=20.0*3.14159265358979;   /* every wave speed is a multiple of 0.1 rad/s: seamless period */
-        g_bloom.Uniform1f(g_gm.mp_time,(float)fmod((double)t/(double)f,per));
-        g_t3.Uniform3f(g_gm.mp_sun,g_t3.sun[0],g_t3.sun[1],g_t3.sun[2]);
-        g_t3.Uniform3f(g_gm.mp_sunc,g_t3.sunc[0],g_t3.sunc[1],g_t3.sunc[2]);
-        g_t3.Uniform3f(g_gm.mp_sky,g_t3.sky[0],g_t3.sky[1],g_t3.sky[2]);
+        g_layers_wave_time=(float)fmod((double)t/(double)f,per);
+        g_bloom.Uniform1f(g_gm.mp_time,g_layers_wave_time);
+        g_t3.Uniform4f(g_gm.mp_weather,g_atmosphere.weather,g_atmosphere.weather_time,
+            (float)g_t3.biome,g_atmosphere.flash);
     }
+    const float a=(float)interp_a;
+    const int prev=g_t3.lhave[0] && g_bloom.canvas_ready>=2 && (g_interp_dx||g_interp_dy);
+    float camera[2];
+    for(int i=0;i<2;i++) {
+        const int origin=g_t3.lview[1][i];
+        const int step=prev?((g_t3.lview[0][i]-origin+192)&127)-64:0;
+        camera[i]=(float)origin+(1.0f-a)*(float)step;
+    }
+    g_bloom.Uniform2f(g_gm.mp_weather_cam,camera[0],camera[1]);
     g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.Uniform1i(g_gm.mp_pk,0);
     GLint dummy=-1;
     g_layers_view_loc=g_gm.mp_view;
@@ -11488,27 +11608,16 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     float st_tw=1.0f,st_th=1.0f;
     if(SDL_GL_BindTexture(scale_target,&st_tw,&st_th)!=0) return 0;
 
-    /* Save GL state */
-    GLint prev_fbo=0,prev_prog=0,prev_act=0,prev_vbo=0,prev_vp[4]={0},prev_sc[4]={0},prev_align=4,prev_rl=0;
-    GLint prev_tex0=0,prev_tex1=0,prev_tex2=0,prev_bsrc_r=0,prev_bdst_r=0,prev_bsrc_a=0,prev_bdst_a=0;
-    GLboolean prev_sc_en=0,prev_bl_en=0;
-    g_bloom.GetIntegerv(GL_FRAMEBUFFER_BINDING,&prev_fbo);
-    g_bloom.GetIntegerv(GL_CURRENT_PROGRAM,&prev_prog);
-    g_bloom.GetIntegerv(GL_ACTIVE_TEXTURE,&prev_act);
-    g_bloom.GetIntegerv(GL_ARRAY_BUFFER_BINDING,&prev_vbo);
-    g_bloom.GetIntegerv(GL_VIEWPORT,prev_vp);
-    g_bloom.GetIntegerv(GL_SCISSOR_BOX,prev_sc);
-    g_bloom.GetIntegerv(GL_UNPACK_ALIGNMENT,&prev_align);
-    g_bloom.GetIntegerv(GL_UNPACK_ROW_LENGTH,&prev_rl);
-    g_bloom.GetIntegerv(GL_BLEND_SRC_RGB,&prev_bsrc_r);
-    g_bloom.GetIntegerv(GL_BLEND_DST_RGB,&prev_bdst_r);
-    g_bloom.GetIntegerv(GL_BLEND_SRC_ALPHA,&prev_bsrc_a);
-    g_bloom.GetIntegerv(GL_BLEND_DST_ALPHA,&prev_bdst_a);
-    prev_sc_en=g_bloom.IsEnabled(GL_SCISSOR_TEST);
-    prev_bl_en=g_bloom.IsEnabled(GL_BLEND);
-    g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&prev_tex2);
-    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&prev_tex1);
-    g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&prev_tex0);
+    /* SDL has flushed its solid draw to the window framebuffer. Its fixed-function arrays
+       use no VBO. Cache the solid program once per context and preserve the matrix-free GL state. */
+    const SDL_GLContext context=SDL_GL_GetCurrentContext();
+    if(g_bloom.sdl_program_context!=context) {
+        g_bloom.GetIntegerv(GL_CURRENT_PROGRAM,&g_bloom.sdl_solid_program);
+        g_bloom.sdl_program_context=context;
+    }
+    g_bloom.PushAttrib(GL_ENABLE_BIT|GL_VIEWPORT_BIT|GL_SCISSOR_BIT|GL_COLOR_BUFFER_BIT|GL_TEXTURE_BIT);
+    g_bloom.PushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
 
     g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_bloom.vbo);
     g_bloom.EnableVertexAttribArray(0);
@@ -11535,6 +11644,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
             bt=now; snprintf(bank,sizeof bank,"%s",v->terrain_mesh.b32_name); pt_biome(v); }
         if(g_t3.ready && g_pt_biome>=0 && g_pt_biome!=g_t3.biome) tl_biome(g_pt_biome);
     }
+    if(g_terrain_3d && v && v->valid && v->in_mission && v->canvas_valid) atm_update(g_t3.biome);
     gm_passes(v && v->valid && v->in_mission && v->canvas_valid);   /* GPU map composition: packing and soft shadows of a new game frame */
 
     if(bloom_on) {
@@ -11603,7 +11713,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
         g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_ao);
         g_bloom.Viewport(0,0,g_present_w,480);
         g_bloom.Disable(GL_SCISSOR_TEST);
-        g_bloom.ClearColor(1.0f,1.0f,1.0f,1.0f); g_bloom.Clear(GL_COLOR_BUFFER_BIT);
+        bloom_fill_buffer(1.0f,1.0f);
         g_bloom.Enable(GL_SCISSOR_TEST); g_bloom.Scissor(128,0,g_present_w-128,480);
         g_bloom.UseProgram(g_bloom.prog_ao);
         g_bloom.Uniform1i(g_bloom.u_ao_idx,0);
@@ -11628,7 +11738,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
         g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_wt);
         g_bloom.Viewport(0,0,g_bloom.wt_w,g_bloom.wt_h);
         g_bloom.Disable(GL_SCISSOR_TEST);
-        g_bloom.ClearColor(0.0f,0.0f,0.0f,0.0f); g_bloom.Clear(GL_COLOR_BUFFER_BIT);
+        bloom_fill_buffer(0.0f,0.0f);
         g_bloom.Enable(GL_SCISSOR_TEST); g_bloom.Scissor((int)(128.0*g_bloom.wt_w/vw),0,g_bloom.wt_w,g_bloom.wt_h);
         g_bloom.UseProgram(g_bloom.prog_wt);
         g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_bloom.u_wt_lut,1);
@@ -11683,28 +11793,19 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     };
     g_bloom.BufferData(GL_ARRAY_BUFFER,sizeof verts,verts,GL_STREAM_DRAW);
     g_bloom.DrawArrays(GL_TRIANGLE_STRIP,0,4);
-    (void)SDL_GL_UnbindTexture(scale_target);
     /* hd2d_particles: native-resolution particles over the composed map, same viewport (logical view = this frame) */
     if(part_on) { pt_update(v); pt_draw(v,interp_a); }
 
-    /* Restore all GL state for SDL2 */
     g_bloom.DisableVertexAttribArray(2);
     g_bloom.DisableVertexAttribArray(1);
     g_bloom.DisableVertexAttribArray(0);
-    g_bloom.BindBuffer(GL_ARRAY_BUFFER,(GLuint)prev_vbo);
-    g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex2);
-    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex1);
-    g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)prev_tex0);
-    g_bloom.ActiveTexture((GLenum)prev_act);
-    g_bloom.UseProgram((GLuint)prev_prog);
-    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,(GLuint)prev_fbo);
-    g_bloom.Viewport(prev_vp[0],prev_vp[1],prev_vp[2],prev_vp[3]);
-    g_bloom.Scissor(prev_sc[0],prev_sc[1],prev_sc[2],prev_sc[3]);
-    if(prev_sc_en) g_bloom.Enable(GL_SCISSOR_TEST); else g_bloom.Disable(GL_SCISSOR_TEST);
-    if(prev_bl_en) g_bloom.Enable(GL_BLEND); else g_bloom.Disable(GL_BLEND);
-    g_bloom.BlendFuncSeparate((GLenum)prev_bsrc_r,(GLenum)prev_bdst_r,(GLenum)prev_bsrc_a,(GLenum)prev_bdst_a);
-    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,prev_align);
-    g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,prev_rl);
+    g_bloom.BindBuffer(GL_ARRAY_BUFFER,0);
+    g_bloom.UseProgram((GLuint)g_bloom.sdl_solid_program);
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,0);
+    g_bloom.PopClientAttrib();
+    g_bloom.PopAttrib();
+    /* Unbind after the attribute pop so SDL's texture cache matches the final GL state. */
+    (void)SDL_GL_UnbindTexture(scale_target);
     /* SDL caches its clear colour (the presentation clears with black): leave black, without querying the GPU */
     g_bloom.ClearColor(0.0f,0.0f,0.0f,1.0f);
     return 1;
@@ -11742,6 +11843,7 @@ static int curtain_frame(const gw_interactive_visual_snapshot *v) {
     if(ifc==0x0035FE9Au && prev!=0x0035FE9Au) {
         const int back_from_options=prev==0x00360034u && !g_curtain_load;
         if(!back_from_options) { g_curtain_state=1; g_curtain_t0=SDL_GetPerformanceCounter(); seamless=0;
+            g_atmosphere.start=0; g_atmosphere.weather=0.0f; g_atmosphere.flash=0.0f;
             gw_flag_trace("TRACE entry_curtain on from_ifc=%08X load=%d%c",prev,g_curtain_load,10); }
         else { seamless=1; ts=SDL_GetPerformanceCounter(); }
         g_curtain_load=0;
@@ -12469,6 +12571,8 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
         if(SDL_RenderClear(g_ifclevel_demo_renderer)!=0) {
             fprintf(stderr,"SDL demo present: %s\n",SDL_GetError()); return 0;
         }
+        /* Prime SDL's solid program on the already black backbuffer before mixing SDL and raw GL. */
+        SDL_RenderDrawPoint(g_ifclevel_demo_renderer,0,0);
         SDL_RenderFlush(g_ifclevel_demo_renderer);
         const uint64_t hp_bl0=SDL_GetPerformanceCounter();
         const int bloom_done=bloom_render_and_composite(visual,scale_target,&geo,bloom_a);
