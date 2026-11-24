@@ -50,9 +50,7 @@ terrain_3d_water = 1
 ; 1 = dynamic point lights on the 3D slopes: the cyan Ethereal beam, warm shots / explosions / sparks, building and
 ;     Gene Pod lights, a soft green glow around GOOP (only on explored terrain). Ctrl+F11 toggles them live.
 terrain_3d_lights = 1
-; Presentation-only atmosphere. Ctrl+F7 cycles day/night and Ctrl+F8 cycles weather.
-terrain_3d_day_night = 1
-terrain_3d_day_night_period = 360
+; Presentation-only biome weather. Ctrl+F8 cycles weather.
 terrain_3d_weather = 1
 terrain_3d_water_reflections = 1
 ; 1 = HD terrain tiles, if you made some: hd_textures\<BANK>\atlas.png (or tile_000.png ...) next to gwrecomp.exe,

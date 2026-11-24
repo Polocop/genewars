@@ -53,9 +53,8 @@ The launcher (double-click `gwrecomp.exe`) saves everything at once in `gwrecomp
 - In a mission: mouse wheel = zoom of the map (0.87x-2x, the HUD stays fixed), `Home` = back to 1x, hold the middle
   button and drag = scroll, WASD/arrows = scroll, `F7` filter, `F8` turbo, `TAB` hold for turbo 4x, `F10` release the
   mouse, `Ctrl+F9` 2D/3D terrain, `Ctrl+F11` 3D point lights, `Ctrl+F12` HD terrain tiles.
-- In 3D, `Ctrl+F7` cycles Auto → Noon → Sunset → Night → Off. Auto starts at noon and
-  completes a cycle every 360 seconds by default. `Ctrl+F8` cycles Auto → Clear → Moderate
-  → Storm → Off. Organic storms use lightning and Brown uses warm embers. Set the
+- In 3D, `Ctrl+F8` cycles weather Auto → Clear → Moderate → Storm → Off. Brown uses
+  warm embers. Set the
   atmosphere defaults and water reflections in `gwrecomp.ini`
   using the keys in `gwrecomp.ini.example`.
 - HD terrain tiles: `python tools\export_b32_tiles.py --out <folder of gwrecomp.exe>\hd_textures` exports the terrain

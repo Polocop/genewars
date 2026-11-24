@@ -8498,10 +8498,9 @@ static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launch
 static int g_terrain_3d=1;  /* host presentation thread only */
 static int g_ini_terrain_3d_shadows=1;   /* terrain_3d_shadows: directional shadow map of hills and craters (3D terrain) */
 static int g_ini_terrain_3d_water=1;     /* terrain_3d_water: coastal depth colour, foam, waves, Fresnel and glints (3D terrain) */
-static int g_ini_terrain_3d_day_night=1, g_ini_terrain_3d_day_night_period=360;
 static int g_ini_terrain_3d_weather=1, g_ini_terrain_3d_water_reflections=1;
 enum { ATM_AUTO, ATM_FIRST, ATM_SECOND, ATM_THIRD, ATM_OFF, ATM_MODES };
-static int g_day_mode=ATM_AUTO,g_weather_mode=ATM_AUTO;
+static int g_weather_mode=ATM_AUTO;
 static int g_ini_terrain_3d_lights=1;    /* terrain_3d_lights: dynamic point lights (beam, shots, beacons, GOOP) on the 3D slopes */
 static int g_ini_terrain_3d_hd_tiles=1;  /* terrain_3d_hd_tiles: optional HD B32 tile overrides from hd_textures/ (3D terrain) */
 static char g_ini_terrain_3d_hd_dir[600];/* terrain_3d_hd_dir: folder holding <BANK>/atlas.png or tile_NNN.png (default: hd_textures next to the exe) */
@@ -8613,12 +8612,6 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"terrain_3d")) g_terrain_3d=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_shadows")) g_ini_terrain_3d_shadows=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_water")) g_ini_terrain_3d_water=atoi(val)!=0;
-        else if(!strcmp(key,"terrain_3d_day_night")) g_ini_terrain_3d_day_night=atoi(val)!=0;
-        else if(!strcmp(key,"terrain_3d_day_night_period")) {
-            char *end;
-            long seconds=strtol(val,&end,10);
-            if(end!=val && !*end && seconds>=1 && seconds<=86400) g_ini_terrain_3d_day_night_period=(int)seconds;
-        }
         else if(!strcmp(key,"terrain_3d_weather")) g_ini_terrain_3d_weather=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_water_reflections")) g_ini_terrain_3d_water_reflections=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_lights")) g_ini_terrain_3d_lights=atoi(val)!=0;
@@ -8861,10 +8854,10 @@ static LONG host_pan_bit(SDL_Keycode k) {
 }
 /* Host controls in play mode. Returns 1 when the event is consumed (never reaches the game). */
 static int host_controls_event(const SDL_Event *ev) {
-    static int mesh_shortcut_down,day_shortcut_down,weather_shortcut_down;
+    static int mesh_shortcut_down,weather_shortcut_down;
     const int map=(int)InterlockedCompareExchange(&g_live_ifc_map,0,0);
     if(ev->type==SDL_WINDOWEVENT && ev->window.event==SDL_WINDOWEVENT_FOCUS_LOST) {
-        mesh_shortcut_down=day_shortcut_down=weather_shortcut_down=0;
+        mesh_shortcut_down=weather_shortcut_down=0;
         InterlockedExchange(&g_pan_hold,0); InterlockedExchange(&g_turbo_tab,0); g_mid_drag=0; return 0;
     }
     if(ev->type==SDL_KEYDOWN || ev->type==SDL_KEYUP) {
@@ -8888,25 +8881,20 @@ static int host_controls_event(const SDL_Event *ev) {
                 *held=down; return 1;
             }
         }
-        if(k==SDLK_F7 || k==SDLK_F8) {
-            int *held=k==SDLK_F7?&day_shortcut_down:&weather_shortcut_down;
+        if(k==SDLK_F8) {
+            int *held=&weather_shortcut_down;
             if(*held || (down && (ev->key.keysym.mod&KMOD_CTRL))) {
                 if(map && down && !*held && !ev->key.repeat) {
-                    int *mode=k==SDLK_F7?&g_day_mode:&g_weather_mode;
-                    static const char *const modes[2][ATM_MODES]={
-                        {"auto","noon","sunset","night","off"},
-                        {"auto","clear","moderate","storm","off"}
-                    };
-                    const int weather=k==SDLK_F8;
-                    *mode=(*mode+1)%ATM_MODES;
+                    static const char *const modes[ATM_MODES]={"auto","clear","moderate","storm","off"};
+                    g_weather_mode=(g_weather_mode+1)%ATM_MODES;
                     gw_flag_trace("TRACE host_controls terrain_3d_%s=%s%c",
-                        weather?"weather":"day_night",modes[weather][*mode],10);
+                        "weather",modes[g_weather_mode],10);
                 }
                 *held=down;
                 return 1;
             }
         }
-        if(ev->key.repeat) return k==SDLK_F7 || k==SDLK_F8 || k==SDLK_F10 || (map && (k==SDLK_TAB || k==SDLK_HOME || bit));
+        if(ev->key.repeat) return k==SDLK_F8 || k==SDLK_F10 || (map && (k==SDLK_TAB || k==SDLK_HOME || bit));
         if(k==SDLK_F7) {
             if(down) { display_filter_load(); g_filter_mode=(g_filter_mode+1)%3; display_filter_save();
                 gw_flag_trace("TRACE host_controls display_filter=%d (%s)%c",g_filter_mode,
@@ -10642,11 +10630,6 @@ static int gm_init(void) {
         "      float seen=smoothstep(0.42+0.22*(en-0.5),0.98,a.a);\n"
         "      if(c>0.0 && seen>0.0 && max(col.r,max(col.g,col.b))>0.0){\n"
         "        float biome=u_weather.z;\n"
-        "        if(u_weather.w>0.0){\n"
-        "          vec3 n=normalize(texture2D(u_normals,(W+0.5)/128.0).xyz*2.0-1.0);\n"
-        "          float strike=0.24+0.76*max(dot(n,vec3(-0.39,-0.50,0.77)),0.0);\n"
-        "          col+=col*vec3(0.78,0.88,1.14)*(u_weather.w*strike);\n"
-        "        }\n"
         "        if(biome!=0.0 && u_weather.x>0.015){\n"
         "          vec2 parallax=u_weather_camera*0.25;\n"
         "          float mist=weather_layer(W,u_weather.y,biome,0.0)*0.31\n"
@@ -11548,7 +11531,7 @@ static int gm_map(const gw_present_geo *geo,double interp_a) {
         g_layers_wave_time=(float)fmod((double)t/(double)f,per);
         g_bloom.Uniform1f(g_gm.mp_time,g_layers_wave_time);
         g_t3.Uniform4f(g_gm.mp_weather,g_atmosphere.weather,g_atmosphere.weather_time,
-            (float)g_t3.biome,g_atmosphere.flash);
+            (float)g_t3.biome,0.0f);
     }
     const float a=(float)interp_a;
     const int prev=g_t3.lhave[0] && g_bloom.canvas_ready>=2 && (g_interp_dx||g_interp_dy);
@@ -11843,7 +11826,7 @@ static int curtain_frame(const gw_interactive_visual_snapshot *v) {
     if(ifc==0x0035FE9Au && prev!=0x0035FE9Au) {
         const int back_from_options=prev==0x00360034u && !g_curtain_load;
         if(!back_from_options) { g_curtain_state=1; g_curtain_t0=SDL_GetPerformanceCounter(); seamless=0;
-            g_atmosphere.start=0; g_atmosphere.weather=0.0f; g_atmosphere.flash=0.0f;
+            g_atmosphere.start=0; g_atmosphere.weather=0.0f;
             gw_flag_trace("TRACE entry_curtain on from_ifc=%08X load=%d%c",prev,g_curtain_load,10); }
         else { seamless=1; ts=SDL_GetPerformanceCounter(); }
         g_curtain_load=0;

@@ -1,10 +1,10 @@
 #ifndef GW_TERRAIN_ATMOSPHERE_H
 #define GW_TERRAIN_ATMOSPHERE_H
 
-/* Host presentation clock and weather. No simulation clock, guest writes or shared PRNG. */
+/* Host presentation weather. No simulation clock, guest writes or shared PRNG. */
 static struct {
     uint64_t start,last;
-    float time_of_day,weather,weather_time,flash;
+    float weather,weather_time;
 } g_atmosphere;
 
 static float atm_smooth(float lo,float hi,float x) {
@@ -18,10 +18,6 @@ static void atm_update(int biome) {
     const double elapsed=(double)(now-g_atmosphere.start)/(double)freq;
     const float dt=(float)((double)(now-g_atmosphere.last)/(double)freq);
     g_atmosphere.last=now;
-    static const float phase[ATM_MODES]={0.0f,0.0f,0.25f,0.5f,0.0f};
-    g_atmosphere.time_of_day=g_day_mode==ATM_AUTO && g_ini_terrain_3d_day_night
-        ?(float)fmod(elapsed/g_ini_terrain_3d_day_night_period,1.0):phase[g_day_mode];
-
     static const float intensity[ATM_MODES]={0.0f,0.0f,0.48f,1.0f,0.0f};
     float weather=intensity[g_weather_mode];
     if(g_weather_mode==ATM_AUTO && g_ini_terrain_3d_weather) {
@@ -32,13 +28,6 @@ static void atm_update(int biome) {
         g_atmosphere.weather=0.0f;
     else g_atmosphere.weather+=(weather-g_atmosphere.weather)*(1.0f-expf(-dt*2.5f));
     g_atmosphere.weather_time=(float)elapsed;
-    /* Two irregularly spaced strikes per pattern, each with a 120 ms envelope. */
-    const float slot=(float)fmod(elapsed,17.0);
-    const float pulse=fmaxf(0.0f,1.0f-fabsf(slot-3.26f)/0.06f)
-                     +fmaxf(0.0f,1.0f-fabsf(slot-10.31f)/0.06f);
-    const float flash=biome==0?pulse*atm_smooth(0.70f,0.95f,g_atmosphere.weather):0.0f;
-    if(flash>0.0f && g_atmosphere.flash<=0.0f) gw_flag_trace("TRACE terrain_3d lightning%c",10);
-    g_atmosphere.flash=flash;
 }
 
 /* Three world-space layers at different heights. x/y are canvas pixels; the layer's height is projected
