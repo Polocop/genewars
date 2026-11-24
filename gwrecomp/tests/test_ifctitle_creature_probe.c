@@ -8227,7 +8227,9 @@ static int terrain_window_to_guest_hud(int wx,int wy,int *gx,int *gy) {
 /* True widescreen (GW_WIDESCREEN=1 / --widescreen): presented width and source pitch of the current frame.
    640/640 by default; 854/864 while the game IFC runs on the widened surface. */
 static int g_ws_requested;
-static volatile int g_ws_save_opened;   /* the game opened a .sav since the canvas was last switched on (see ws_live_update) */
+static volatile int g_curtain_load;     /* a save was really loaded: the next entry into the mission view gets the curtain */
+static volatile uint32_t g_entry_ifc;   /* current IFC as published by the simulation thread (presentation curtain) */
+static volatile int g_ws_save_opened;   /* the game loaded a save since the canvas was last switched on (see ws_live_update) */
 static int g_ws_live_active;            /* tentative definition; the live widescreen state is defined with ws_live_update */
 /* --zoomout (GW_ZOOMOUT=1, implies --widescreen): the game draws a 1152x640 canvas (36 strips x 20 cell rows); the
    host shows its HUD (x<128, y<480) at 1x and the map as a zoomable window on the canvas. At zoom 1.0 the window is
@@ -11454,6 +11456,25 @@ static int gm_map(const gw_present_geo *geo,double interp_a) {
 
 static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SDL_Texture *scale_target,
                                       const gw_present_geo *geo,double interp_a) {
+    {   /* warm-up, once: compile the GPU map, mesh and lit 3D terrain programs and allocate their targets now (title or
+           planet screen), so the first mission frame never waits for them (state saved and restored around it) */
+        static int warmed;
+        if(!warmed && g_cli_play_mode && g_ws_requested && g_ws_canvas && !g_terrain_modern_backend && !g_bloom.failed) {
+            warmed=1;
+            const uint64_t w0=SDL_GetPerformanceCounter();
+            GLint pf=0,pp=0,pa=0,pt=0,pv=0;
+            if(g_bloom.loaded || bloom_load_gl()) {
+                g_bloom.GetIntegerv(GL_FRAMEBUFFER_BINDING,&pf); g_bloom.GetIntegerv(GL_CURRENT_PROGRAM,&pp);
+                g_bloom.GetIntegerv(GL_ACTIVE_TEXTURE,&pa); g_bloom.GetIntegerv(GL_ARRAY_BUFFER_BINDING,&pv);
+                g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&pt);
+                const int ok=bloom_ensure_init(854) && gm_init() && terrain_gl_init() && tl_init();
+                g_bloom.BindFramebuffer(GL_FRAMEBUFFER,(GLuint)pf); g_bloom.UseProgram((GLuint)pp);
+                g_bloom.BindBuffer(GL_ARRAY_BUFFER,(GLuint)pv); g_bloom.BindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
+                g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)pt); g_bloom.ActiveTexture((GLenum)pa);
+                gw_flag_trace("TRACE gpu warm-up %s in %.1f ms%c",ok?"done":"partial",ph_ms(w0),10);
+            }
+        }
+    }
     const int bloom_on=bloom_active(v),ao_on0=ao_gpu_active(v),part_on=part_active(v),wt_on0=fx_active(v) && !g_bloom.wt_failed;
     const int active=(bloom_on || ao_on0 || part_on || wt_on0 || g_gm_frame || g_gm.pending) && bloom_ensure_init(g_present_w) && g_bloom.view_tex[1];
     const int ao_on=active && ao_on0 && g_bloom.fbo_ao;
@@ -11508,8 +11529,11 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
         if(env_s>0) sc=env_s>4?4:env_s;
         g_tl_scale=sc;
         static uint64_t bt; const uint64_t now=SDL_GetPerformanceCounter(),fq=SDL_GetPerformanceFrequency();
-        if(g_terrain_3d && v && v->in_mission && v->fx_ring_valid && (!bt || now-bt>2u*fq)) {
-            bt=now; pt_biome(v); if(g_t3.ready && g_pt_biome!=g_t3.biome) tl_biome(g_pt_biome); }
+        static char bank[8];
+        const int new_bank=v && strcmp(bank,v->terrain_mesh.b32_name);
+        if(g_terrain_3d && v && v->in_mission && v->fx_ring_valid && (!bt || now-bt>2u*fq || new_bank)) {
+            bt=now; snprintf(bank,sizeof bank,"%s",v->terrain_mesh.b32_name); pt_biome(v); }
+        if(g_t3.ready && g_pt_biome>=0 && g_pt_biome!=g_t3.biome) tl_biome(g_pt_biome);
     }
     gm_passes(v && v->valid && v->in_mission && v->canvas_valid);   /* GPU map composition: packing and soft shadows of a new game frame */
 
@@ -11686,6 +11710,62 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     return 1;
 }
 
+/* ---- entry curtain (play mode): each time the game enters the mission view from a new mission or a save load (not when
+   OPTIONS closes without loading), the window stays pure black until the presented frame has every enhancement the user
+   turned on: the widened view, the GPU map composition, the lit 3D mesh with the level's biome and, when a pack exists
+   for the level's bank, the HD tiles; then a 100 ms fade-in. The game keeps running underneath (nothing is held back
+   from the simulation); a 3 s limit guarantees the view always opens. Host presentation only. */
+static int g_curtain_state;      /* 0 open, 1 black, 2 fading in */
+static uint64_t g_curtain_t0,g_curtain_tf;
+static int curtain_ready(const gw_interactive_visual_snapshot *v) {
+    if(!v || !v->valid || !v->in_mission) return 0;
+    if(g_ws_requested && g_present_w!=854) return 0;
+    if(g_ws_requested && g_ws_canvas && !v->canvas_valid) return 0;
+    const int want_gm=g_ws_requested && g_ws_canvas && !g_gm.failed && !g_bloom.failed && g_zoom<=2.0001 &&
+        ((g_terrain_3d && v->terrain_mesh.count) || bloom_active(v) || ao_gpu_active(v) || part_active(v) || fx_active(v) || depth_active(v));
+    if(want_gm && !g_gm_frame) return 0;
+    if(want_gm && g_terrain_3d && v->terrain_mesh.count && !g_gl_mesh.failed) {
+        if(!g_gm.mesh_applied || (!g_t3.failed && !g_gm.lit_applied)) return 0;
+        if(g_ini_terrain_3d_biome_presets && v->terrain_mesh.b32_name[0] && !g_t3.failed && g_t3.biome!=g_pt_biome) return 0;
+        if(g_ini_terrain_3d_hd_tiles && g_hd_on && v->terrain_mesh.b32_name[0] && !g_t3.failed &&
+           (strcmp(g_hd.bank,v->terrain_mesh.b32_name) || g_hd.state==1 || g_hd.state==2)) return 0;
+    }
+    return 1;
+}
+/* returns 0 when this frame must not be presented: back from OPTIONS without a load there is no curtain, and a
+   mission frame that is not complete yet (the first tick can come without the sprite mask the 3D map needs) is simply
+   not shown, so the window keeps the menu for that tick and goes straight to the full view (at most 0.5 s) */
+static int curtain_frame(const gw_interactive_visual_snapshot *v) {
+    if(!g_cli_play_mode || !g_interactive_demo_mode) return 1;
+    static uint32_t prev; static int seamless; static uint64_t ts;
+    const uint32_t ifc=g_entry_ifc;
+    if(ifc==0x0035FE9Au && prev!=0x0035FE9Au) {
+        const int back_from_options=prev==0x00360034u && !g_curtain_load;
+        if(!back_from_options) { g_curtain_state=1; g_curtain_t0=SDL_GetPerformanceCounter(); seamless=0;
+            gw_flag_trace("TRACE entry_curtain on from_ifc=%08X load=%d%c",prev,g_curtain_load,10); }
+        else { seamless=1; ts=SDL_GetPerformanceCounter(); }
+        g_curtain_load=0;
+    }
+    prev=ifc;
+    if(seamless) {
+        if(ifc!=0x0035FE9Au || curtain_ready(v) || SDL_GetPerformanceCounter()-ts>SDL_GetPerformanceFrequency()/2u) seamless=0;
+        else if(v && v->valid && v->in_mission) return 0;
+    }
+    if(!g_curtain_state) return 1;
+    const uint64_t now=SDL_GetPerformanceCounter(),fq=SDL_GetPerformanceFrequency();
+    if(g_curtain_state==1) {
+        const int ready=curtain_ready(v),late=now-g_curtain_t0>3u*fq;
+        if(ready || late) { g_curtain_state=2; g_curtain_tf=now;
+            gw_flag_trace("TRACE entry_curtain open after %.0f ms (%s)%c",(double)(now-g_curtain_t0)*1000.0/(double)fq,ready?"ready":"3 s limit",10); }
+    }
+    double a=1.0;
+    if(g_curtain_state==2) { a=1.0-(double)(now-g_curtain_tf)/(0.10*(double)fq); if(a<=0.0) { g_curtain_state=0; return 1; } }
+    SDL_SetRenderDrawBlendMode(g_ifclevel_demo_renderer,a>=1.0?SDL_BLENDMODE_NONE:SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(g_ifclevel_demo_renderer,0,0,0,(Uint8)(a*255.0+0.5));
+    SDL_RenderFillRect(g_ifclevel_demo_renderer,NULL);
+    SDL_SetRenderDrawBlendMode(g_ifclevel_demo_renderer,SDL_BLENDMODE_NONE);
+    return 1;
+}
 static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *palette,
                                        const char *capture_path,int upload_texture,
                                        const gw_interactive_visual_snapshot *visual) {
@@ -12582,7 +12662,9 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
     }
     const uint64_t render_present_start=SDL_GetPerformanceCounter(); if(g_interactive_perf_frequency) g_hostprof_copy_ms+=(double)(render_present_start-hp_copy0)*1000.0/(double)g_interactive_perf_frequency;
     present_wait_until(g_present_deadline);
-    SDL_RenderPresent(g_ifclevel_demo_renderer);
+    if(curtain_frame(visual)) {
+        SDL_RenderPresent(g_ifclevel_demo_renderer);
+    }
     if(g_interactive_demo_mode) { enhanced_audio_tick(); gw_cdda_pump(); }
     if(g_interactive_demo_mode) {
         const uint64_t render_present_end=SDL_GetPerformanceCounter();
@@ -15038,7 +15120,6 @@ static uint16_t host_open(void *user,const char *path,uint8_t access,void **out)
         const size_t pl=strlen(path);
         if(access==0u && pl>4u && !_stricmp(path+pl-4u,".smk"))
             snprintf(g_smka_open_path,sizeof g_smka_open_path,"%s",save_overlay_exists?save_overlay:source);
-        if(access==0u && pl>4u && !_stricmp(path+pl-4u,".sav")) g_ws_save_opened=1;   /* a load: the canvas waits 8 ticks */
     }
     if (!s->first_path[0]) strncpy(s->first_path,path,sizeof s->first_path-1u);
     strncpy(s->last_path,path,sizeof s->last_path-1u); *out=h;
@@ -15074,6 +15155,12 @@ static uint16_t host_read(void *user,void *file,uint8_t *buffer,uint16_t request
     uint64_t io_t=smk_path?gw_smk_profile_begin(GW_SMPH_VFS_READ_IO):0u;
     *done=(uint16_t)fread(buffer,1,requested,h->fp);
     if(smk_path) gw_smk_profile_end(GW_SMPH_VFS_READ_IO,io_t);
+    {   /* a save read past its first 128 KB is a real load (OPTIONS only reads the headers to list the slots): the next
+           entry into the mission view gets the entry curtain */
+        const size_t pl=strlen(h->path);
+        if(pl>4u && !_stricmp(h->path+pl-4u,".sav") && file_pos>=0 && (unsigned long)file_pos+*done>0x20000ul) {
+            g_curtain_load=1; g_ws_save_opened=1; }   /* a load: the canvas also waits 8 ticks (see ws_live_update) */
+    }
     s->reads++; h->reads++;
     if(*done) {
         uintptr_t host=(uintptr_t)buffer,base=(uintptr_t)guest_memory;
@@ -20727,6 +20814,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         *(const uint32_t *)(memory+0x00376A7Cu)==GW_CANVAS_H;
     if(canvas) { pitch=GW_CANVAS_W; wscreen_guest=*(const uint32_t *)(memory+0x00376A5Cu); }
     const uint32_t frame_bytes=pitch*(canvas?GW_CANVAS_H:480u);
+    if(memory) { g_entry_ifc=*(const uint32_t *)(memory+0x002EF7E8u); }
     {   /* the mission (IFCMain) is current but the widened surface is not on yet: keep showing the previous frame
            instead of a 4:3 mission frame, so the view goes straight to 16:9 (at most 40 ticks, never frozen) */
         static unsigned held;
