@@ -27,3 +27,15 @@ El lector const de runtime/gw_entity_3d.h no asigna fotogramas ni altera la simu
 ## Alcance
 
 Forman parte de este escalón el lector y el inventario. La escena con billboards, el atlas, las sombras, las luces desde entidades, la separación de todos los indicadores de interfaz y la ampliación del zoom siguen pendientes. Suprimir píxeles de WScreen antes de identificar los blits por entidad dejaría huecos y mezclaría efectos con indicadores de interfaz.
+
+## Asociación de dibujo en el escalón 2
+
+La instrumentación abre un ámbito de propietario alrededor de las llamadas de dibujo 0x79178, 0x7925B, 0x793BD y 0x793EC. Captura EAX antes de que lo reutilice el método virtual y restaura el propietario anterior al salir. La traza es opcional en modo interactivo con GW_ENTITY_DRAW_PROBE=<ruta CSV>.
+
+| Subrutina de fotograma | Llamadas al blit | Blit | Registro del fotograma |
+| --- | --- | --- | --- |
+| 0x919C0 | 0x91A39, 0x91AB7 | 0x904E0 | EBP |
+| 0x91AE0 | 0x91B60, 0x91BE4 | 0x90F90 | EBP |
+| 0x965F0 | 0x96670, 0x966F2 | 0x99A20 | [SS:ESP] |
+
+Se registra el descriptor del sprite que recibe EBX y su puntero de datos en +0x00, además de las dimensiones en +0x04/+0x05 y el ancla de cada componente (EAX/EDX y origen de clip 0x376A80/84). El bit 0 del estado 0x376AB8 es el flip horizontal del blit normal. Se conservan la palabra completa, ECX, la huella de la paleta VGA activa y, en 0x90F90, el argumento adicional de pila que prepara el llamador. El significado visual de todos los selectores y efectos de blit sigue requiriendo validación. Un registro con entity_type=0 indica un objeto sin enlace confirmado al censo. El punto de observación está antes de que el blit recorte la imagen y no significa que haya escrito píxeles.

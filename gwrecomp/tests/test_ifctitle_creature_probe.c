@@ -20729,6 +20729,82 @@ static struct { int n,x0,y0,x1,y1; } g_ev[2];   /* [0] ship shadow, [1] teleport
 static volatile int g_draw_caller;
 static struct { uint32_t frame; int16_t x,y,wx,wy; uint8_t caller,fn,pad[2]; } g_fr[768];
 static unsigned g_fr_n; static int g_fr_on;
+
+/* Guest registers are copied at the original call boundary. The diagnostic
+   records arguments rather than inferring sprite identity from WScreen. */
+static uint32_t g_entity_draw_owner;
+static FILE *g_entity_draw_log;
+static int g_entity_draw_probe_checked;
+static unsigned g_entity_draw_rows;
+static uint32_t g_entity_draw_turn;
+static gw_entity_3d_snapshot g_entity_draw_snapshot;
+static uint32_t g_entity_draw_palette;
+
+unsigned int gw_entity_draw_enter(unsigned int object) {
+    if(!g_cli_play_mode) return 0;
+    if(!g_entity_draw_probe_checked) {
+        g_entity_draw_probe_checked=1;
+        const char *path=gw_cached_getenv("GW_ENTITY_DRAW_PROBE");
+        if(path && *path) g_entity_draw_log=fopen(path,"wb");
+        if(g_entity_draw_log) {
+            g_entity_draw_turn=UINT32_MAX;
+            fputs("turn,owner,entity_type,team,world_x_q8,world_y_q8,world_z_q6,z_valid,"
+                  "ground_q6,callsite,blit,frame,sprite,data,w,h,x,y,clip_x,clip_y,"
+                  "flags,flip_x,selector,extra_arg,palette_fnv32\n",g_entity_draw_log);
+        }
+    }
+    if(!g_entity_draw_log) return 0;
+    const uint32_t previous=g_entity_draw_owner;
+    g_entity_draw_owner=object;
+    return previous;
+}
+
+void gw_entity_draw_leave(unsigned int previous) {
+    g_entity_draw_owner=previous;
+}
+
+void gw_entity_draw_sprite(unsigned int site,unsigned int blit,unsigned int ds,
+                           unsigned int frame,unsigned int x,unsigned int y,
+                           unsigned int sprite,unsigned int selector,unsigned int extra) {
+    if(!g_entity_draw_log || !g_entity_draw_owner || !guest_memory ||
+       g_entity_draw_rows>=100000u) return;
+    if(gw_entity_read_u32(guest_memory+0x002EF7E8u)!=0x0035FE9Au ||
+       gw_entity_read_u32(guest_memory+0x002EF7ECu)) return;
+    const uint64_t fa=(uint64_t)ds+frame,sa=(uint64_t)ds+sprite;
+    if(!sprite || !frame || fa>GUEST_LIMIT-12u || sa>GUEST_LIMIT-6u) return;
+    const uint32_t turn=gw_entity_read_u32(guest_memory+0x002F1472u);
+    if(turn!=g_entity_draw_turn) {
+        fflush(g_entity_draw_log);
+        g_entity_draw_turn=turn;
+        gw_entity_3d_read(guest_memory,GUEST_LIMIT,&g_entity_draw_snapshot);
+        g_entity_draw_palette=2166136261u;
+        for(size_t i=0;i<sizeof vga_dac;i++)
+            g_entity_draw_palette=(g_entity_draw_palette^vga_dac[i])*16777619u;
+    }
+    const gw_entity_3d_t *entity=NULL;
+    for(size_t i=0;i<g_entity_draw_snapshot.count;i++) {
+        if(g_entity_draw_snapshot.entities[i].guest_address==g_entity_draw_owner) {
+            entity=&g_entity_draw_snapshot.entities[i];
+            break;
+        }
+    }
+    const uint8_t *sp=guest_memory+sa;
+    if(!sp[4] || !sp[5]) return;
+    const uint8_t *flags_address=guest_memory+0x00376AB8u;
+    const unsigned flags=(unsigned)flags_address[0]+((unsigned)flags_address[1]<<8);
+    fprintf(g_entity_draw_log,
+            "%u,%08x,%u,%u,%d,%d,%d,%u,%d,%05x,%05x,%08x,%08x,%08x,"
+            "%u,%u,%d,%d,%d,%d,%04x,%u,%08x,%08x,%08x\n",
+            turn,g_entity_draw_owner,entity?(unsigned)entity->type:0u,entity?(unsigned)entity->owner:0u,
+            entity?entity->world_x_q8:0,entity?entity->world_y_q8:0,entity?entity->world_z_q6:0,
+            entity?(unsigned)entity->z_valid:0u,entity?entity->ground_q6:0,site,blit,
+            (uint32_t)fa,(uint32_t)sa,gw_entity_read_u32(sp),(unsigned)sp[4],(unsigned)sp[5],
+            gw_entity_read_s32((const uint8_t *)&x),gw_entity_read_s32((const uint8_t *)&y),
+            gw_entity_read_s32(guest_memory+0x00376A80u),gw_entity_read_s32(guest_memory+0x00376A84u),
+            flags,flags&1u,selector,extra,g_entity_draw_palette);
+    g_entity_draw_rows++;
+}
+
 void gw_draw_caller(int k) { g_draw_caller=k; }
 void gw_frame_drawn(unsigned int fn,unsigned int x,unsigned int y,unsigned int frame) {
     {   /* QA (GW_FRAME_LOG=<file>, also headless): every frame drawn, with its caller site, the game turn and the frame's
