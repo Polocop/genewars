@@ -4713,8 +4713,6 @@ def main()->None:
     lifted_text=("void gw_terrain_vertex_height(unsigned int,unsigned int,unsigned int);\n"
                  "void gw_terrain_record_node(unsigned int,unsigned int);\n"
                  "void gw_terrain_record_world(unsigned int,unsigned int,unsigned int);\n"+lifted_text)
-    from entity_draw_instrumentation import instrument_entity_draws
-    lifted_text=instrument_entity_draws(lifted_text)
     terrain_entry_marker="RECOMP_ENTER(0x00065F20u);"
     if lifted_text.count(terrain_entry_marker)!=1:
         raise SystemExit("hybrid terrain producer entry marker 0x65F20 missing or ambiguous")
@@ -6590,6 +6588,8 @@ def main()->None:
         raise SystemExit("RAD BIOS-clock RET marker 0xD726C missing")
     lifted_text=lifted_text.replace(fc_marker,fc_marker+"    eax = gw_smk_fine_clock(eax);\n")
     lifted_text="unsigned int gw_smk_fine_clock(unsigned int);\n"+lifted_text
+    from entity_draw_instrumentation import instrument_entity_draws
+    lifted_text=instrument_entity_draws(lifted_text)
     generated.write_text(lifted_text,encoding="utf-8")
 
     obj=image.objects[0]
