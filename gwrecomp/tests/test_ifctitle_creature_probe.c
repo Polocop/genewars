@@ -7907,6 +7907,8 @@ static uint32_t *g_ifclevel_demo_rgba;
 #define GW_INTERACTIVE_WORLD_BYTES (128u*128u*14u)
 #define GW_MODERN_HUD_WIDTH 176u /* measured right edge of the original panel in the 640x480 frame */
 #define GW_INTERACTIVE_KEY_QUEUE 512u
+#define GW_CANVAS_W 1152u
+#define GW_CANVAS_H 640u
 #define GW_INFO_WIDTH 640u
 #define GW_INFO_HEIGHT 480u
 typedef struct gw_info_overlay {
@@ -7923,7 +7925,6 @@ typedef struct gw_atlas_probe_frame {
 
 typedef struct gw_interactive_visual_snapshot {
     gw_atlas_probe_frame atlas_probe;
-    uint8_t entity_coverage[GW_CANVAS_W*GW_CANVAS_H];
     unsigned entity_coverage_bytes;
     uint8_t wscreen[GW_INTERACTIVE_WSCREEN_BYTES];
     uint8_t palette[768u];
@@ -7970,6 +7971,7 @@ typedef struct gw_interactive_visual_snapshot {
     int32_t mouse_hot_x,mouse_hot_y;
     uint8_t mouse_w,mouse_h;
     int mouse_valid;
+    uint8_t entity_coverage[GW_CANVAS_W*GW_CANVAS_H];
 } gw_interactive_visual_snapshot;
 typedef struct gw_interactive_key_event {
     uint8_t scan,down,index; /* index = _lbKeyOn slot (scan|0x80 for E0-prefixed keys) */
@@ -8258,8 +8260,6 @@ static int g_ws_canvas;
 static uint8_t g_hud_written[480u*48u],g_hud_val[480u*48u],g_hud_have[480u*48u];   /* panel art on x=128..175 */
 static uint32_t g_hud_ws;
 static void hud_sentinel_collect(uint8_t *memory);
-#define GW_CANVAS_W 1152u
-#define GW_CANVAS_H 640u
 #define GW_CANVAS_VX0 128
 #define GW_CANVAS_VY0 0
 #define GW_CANVAS_MAPX0 128
@@ -20812,7 +20812,7 @@ static int g_atlas_probe_enabled;
 static gw_atlas_probe_frame g_atlas_probe_producer;
 static uint8_t g_entity_coverage_pixels[GW_CANVAS_W*GW_CANVAS_H];
 static gw_entity_coverage g_entity_coverage_state;
-static unsigned g_entity_atlas_slot;
+static unsigned g_entity_atlas_slot,g_entity_coverage_attempts,g_entity_coverage_decodes;
 static int g_entity_coverage_suspend;
 
 static unsigned atlas_probe_capture(unsigned ds,const uint8_t *sp,unsigned selector,
@@ -20881,7 +20881,9 @@ unsigned int gw_entity_draw_sprite(unsigned int site,unsigned int blit,unsigned 
     const uint8_t *flags_address=guest_memory+0x00376AB8u;
     const unsigned flags=(unsigned)flags_address[0]+((unsigned)flags_address[1]<<8);
     if(g_atlas_probe_enabled && blit==0x90F90u) {
+        g_entity_coverage_attempts++;
         const unsigned slot=atlas_probe_capture(ds,sp,selector,extra,flags);
+        g_entity_coverage_decodes+=slot!=0;
         if(gw_sprite_90f90_kind(flags)==GW_SPRITE_BLIT_SOURCE)
             g_entity_atlas_slot=slot;
     }
@@ -20982,6 +20984,17 @@ static void write_probe_observer(uint32_t va,recomp_segment_id seg,uint16_t sel,
    the initial mission sequence before the full canvas is installed. */
 void gw_entity_coverage_begin_frame(void) {
     if(!g_cli_play_mode || !guest_memory || !gw_cached_getenv("GW_ENTITY_ATLAS_PROBE")) return;
+    static unsigned reports;
+    if(g_entity_coverage_state.bytes && g_entity_coverage_attempts && reports<12u) {
+        unsigned covered=0;
+        for(unsigned i=0;i<g_entity_coverage_state.bytes;i++)
+            covered+=g_entity_coverage_pixels[i]!=0;
+        reports++;
+        gw_flag_trace("TRACE entity coverage turn=%u pitch=%u captured=%u/%u pixels=%u%c",
+            gw_entity_read_u32(guest_memory+0x002F1472u),g_entity_coverage_state.pitch,
+            g_entity_coverage_decodes,g_entity_coverage_attempts,covered,10);
+    }
+    g_entity_coverage_attempts=g_entity_coverage_decodes=0;
     const uint8_t *memory=guest_memory;
     const uint32_t ws=gw_entity_read_u32(memory+0x00376A5Cu);
     const unsigned w=gw_entity_read_u32(memory+0x00376A78u);
@@ -22327,7 +22340,8 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
             const unsigned next_index=present_current->valid?
                 1u-g_interactive_present_current_index:g_interactive_present_current_index;
             memcpy(&g_interactive_present_snapshots[next_index],&g_interactive_published_snapshot,
-                sizeof g_interactive_published_snapshot);
+                offsetof(gw_interactive_visual_snapshot,entity_coverage)+
+                    g_interactive_published_snapshot.entity_coverage_bytes);
             g_interactive_present_current_index=next_index;
             g_interactive_snapshot_consumer_copies++;
             published_new_snapshot=1;
