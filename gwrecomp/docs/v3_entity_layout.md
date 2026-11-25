@@ -39,3 +39,22 @@ La instrumentación abre un ámbito de propietario alrededor de las llamadas de 
 | 0x965F0 | 0x96670, 0x966F2 | 0x99A20 | [SS:ESP] |
 
 Se registra el descriptor del sprite que recibe EBX y su puntero de datos en +0x00, además de las dimensiones en +0x04/+0x05 y el ancla de cada componente (EAX/EDX y origen de clip 0x376A80/84). El bit 0 del estado 0x376AB8 es el flip horizontal del blit normal. Se conservan la palabra completa, ECX, la huella de la paleta VGA activa y, en 0x90F90, el argumento adicional de pila que prepara el llamador. El significado visual de todos los selectores y efectos de blit sigue requiriendo validación. Un registro con entity_type=0 indica un objeto sin enlace confirmado al censo. El punto de observación está antes de que el blit recorte la imagen y no significa que haya escrito píxeles.
+
+## Clasificación de 0x90F90
+
+El remapeo adicional apuntó a seis tablas de 256 bytes en el tramo de Exceland, siempre con CL=0xC0 y con los flags 0x0000 o 0x0001. Las huellas de paleta de la traza son iguales a las del DAC de los cuatro snapshots y a la paleta MAIN.PAL de la instalación. Las tablas conservan los mismos bytes en los cuatro snapshots. La traza contiene el puntero y los flags en vivo. Los bytes de las tablas proceden de los snapshots, no de un volcado del mismo tick.
+
+| Tabla guest | Flags 0 | Flags 1 | Modo observado |
+| --- | ---: | ---: | --- |
+| 0x00364254 | 4 | 0 | Opaco con remapeo |
+| 0x00364354 | 6 | 0 | Opaco con remapeo |
+| 0x00364454 | 6 | 0 | Opaco con remapeo |
+| 0x00364554 | 190 | 0 | Opaco con remapeo |
+| 0x00364654 | 57 | 136 | Opaco con remapeo |
+| 0x00364754 | 1 | 5 | Opaco con remapeo |
+
+En 0x90FDB y 0x90FF2, los flags 0/2 llevan a la ruta de copiado directo. Con el flip horizontal, 0x91056 salta a 0x91566 cuando no están activos los bits 0x04/0x08. En 0x915CA–0x915F5 se reemplaza C0–CF por el selector CL más el nibble bajo. El byte resultante indexa la tabla adicional y 0x915BC escribe ese color sin leer el destino. El camino normal hace la misma sustitución cerca de 0x917BF y escribe en 0x917D4. Estos casos corresponden al subpase opaco con profundidad y descarte de transparencia.
+
+Con los bits 0x04/0x08 se permite leer el destino. Por ejemplo, 0x910C9–0x910CE y 0x91136–0x91141 consultan 0x366A54, con un orden distinto de los dos índices. La dirección de la tabla adicional no basta para asignar una mezcla. La ruta de destino requiere su propio clasificador y datos de una llamada efectiva antes de asignar multiplicación, suma o alfa. No hubo ninguna llamada a 0x90F90 en el tramo observado de Brown tras cargar. La prueba de Brown no permite afirmar que esa misión nunca ejecute la rutina.
+
+El decodificador de host gw_sprite_90f90.h aplica el selector y el remapeo antes de convertir a RGBA. Rechaza los casos dependientes del destino y los flags fuera del conjunto estudiado. Aún no está conectado a un atlas OpenGL.
