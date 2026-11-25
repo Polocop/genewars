@@ -170,7 +170,7 @@ static unsigned native_validate(const gw_interactive_visual_snapshot *v,uint8_t 
                                 uint8_t *accepted) {
     const gw_atlas_probe_frame *f=&v->atlas_probe;
     uint32_t hits[GW_NATIVE_DRAWS]={0};
-    for(unsigned i=0;i<f->draw_count;i++) accepted[i]=g_native_uploaded[f->draws[i].slot-1u];
+    for(unsigned i=0;i<f->draw_count;i++) accepted[i]=(uint8_t)(!f->draws[i].extra && g_native_uploaded[f->draws[i].slot-1u]);
     for(size_t p=0;p<v->entity_coverage_bytes;p++) {
         const unsigned ref=v->entity_coverage[p];
         if(!ref || ref>f->draw_count || !accepted[ref-1u]) continue;

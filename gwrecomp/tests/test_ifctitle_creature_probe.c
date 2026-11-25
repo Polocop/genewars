@@ -7916,12 +7916,24 @@ typedef struct gw_info_overlay {
     uint16_t pixels[GW_INFO_WIDTH*GW_INFO_HEIGHT]; /* palette index + 1, or transparent */
 } gw_info_overlay;
 static gw_info_overlay g_info_overlay;
-enum { GW_ATLAS_PROBE_ITEMS=96, GW_ATLAS_PROBE_BYTES=262144, GW_NATIVE_DRAWS=192 };
+enum { GW_ATLAS_PROBE_ITEMS=192, GW_ATLAS_PROBE_BYTES=524288, GW_NATIVE_DRAWS=320 };
 typedef struct gw_native_draw {
     unsigned slot;
     int x,y;
+    uint8_t extra;
     gw_entity_3d_t entity;
 } gw_native_draw;
+static struct {
+    uint32_t b32_base,version;
+    uint32_t tile_addr[259];
+    uint8_t tiles[259][1024];
+    float uv[8][8];
+    int valid;
+} g_fc_bank;
+static volatile LONG g_fc_want_expanded;
+static uint32_t g_fc_owner_remap[8][8];
+static int g_qa_fc_stage;
+static char g_qa_fc_base[768];
 typedef struct gw_atlas_probe_frame {
     uint32_t turn,mission,count,bytes,draw_count;
     gw_native_draw draws[GW_NATIVE_DRAWS];
@@ -8523,6 +8535,7 @@ static int g_ini_terrain_3d_hd_tiles=1;  /* terrain_3d_hd_tiles: optional HD B32
 static char g_ini_terrain_3d_hd_dir[600];/* terrain_3d_hd_dir: folder holding <BANK>/atlas.png or tile_NNN.png (default: hd_textures next to the exe) */
 static int g_ini_terrain_3d_biome_presets=1; /* terrain_3d_biome_presets: light / particle preset from the level's B32 bank */
 static int g_ini_terrain_3d_smooth_zoom=1;   /* terrain_3d_smooth_zoom: eased wheel zoom (0 = immediate steps) */
+static int g_ini_terrain_3d_freecam=1,g_ini_terrain_3d_planet_curve=1;
 static int g_ini_cursor_120hz=1;
 static int g_ini_music_volume=100,g_ini_sfx_volume=100;   /* music_volume / sfx_volume: host output gain 0..100 */             /* cursor_120hz: pointer at the host mouse every presented frame (0 = per game tick) */
 static int g_pl_on=1,g_hd_on=1;          /* live toggles: Ctrl+F11 point lights, Ctrl+F12 HD tiles (host presentation thread) */
@@ -8633,6 +8646,8 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"terrain_3d_lights")) g_ini_terrain_3d_lights=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_biome_presets")) g_ini_terrain_3d_biome_presets=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_smooth_zoom")) g_ini_terrain_3d_smooth_zoom=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_freecam")) g_ini_terrain_3d_freecam=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_planet_curve")) g_ini_terrain_3d_planet_curve=atoi(val)!=0;
         else if(!strcmp(key,"cursor_120hz")) g_ini_cursor_120hz=atoi(val)!=0;
         else if(!strcmp(key,"music_volume")) { const int v=atoi(val); g_ini_music_volume=v<0?0:v>100?100:v; }
         else if(!strcmp(key,"sfx_volume")) { const int v=atoi(val); g_ini_sfx_volume=v<0?0:v>100?100:v; }
@@ -8728,6 +8743,16 @@ static void present_window_to_output(int wx,int wy,int ow,int oh,double *ox,doub
     *ox=((double)wx+0.5)*ow/ww; *oy=((double)wy+0.5)*oh/wh;
 }
 
+static int freecam_active(void);
+static int freecam_active_angle(void);
+static int freecam_is_alt_drag(void);
+static double freecam_yaw_deg(void);
+static void freecam_snap_now(double yaw,double pitch);
+static void freecam_reset(void);
+static int freecam_controls_event(const SDL_Event *ev,int map);
+static void freecam_tick(void);
+static int freecam_raycast(double lx,double ly,int vw,double *out_cx,double *out_cy);
+
 static int map_interactive_window_to_game(int wx,int wy,int *gx,int *gy) {
     if(!g_ifclevel_demo_window || !gx || !gy) return 0;
     if(g_terrain_modern_backend) return terrain_window_to_guest_hud(wx,wy,gx,gy);
@@ -8750,8 +8775,18 @@ static int map_interactive_window_to_game(int wx,int wy,int *gx,int *gy) {
         const int edge_r=ox>=g.dst.x+g.dst.w-3,edge_t=oy<=g.dst.y+2,edge_b=oy>=g.dst.y+g.dst.h-3;
         lw=(int)GW_CANVAS_W; lh=(int)GW_CANVAS_H;
         if(!panel && !g_info_up) {
-            lx=edge_r?(double)(GW_CANVAS_W-1u):GW_CANVAS_VX0+g_zoom_x+(lx-128.0)/g_zoom;
-            ly=edge_t?0.0:edge_b?(double)(GW_CANVAS_H-1u):GW_CANVAS_VY0+g_zoom_y+ly/g_zoom;
+            if(!edge_r && !edge_t && !edge_b && freecam_active()) {
+                double rx=512.0,ry=240.0;
+                if(!freecam_raycast(lx,ly,g_present_w,&rx,&ry)) { rx=512.0; ry=240.0; }
+                else {
+                    if(rx<132.0) rx=132.0; if(rx>(double)(GW_CANVAS_W-5u)) rx=(double)(GW_CANVAS_W-5u);
+                    if(ry<4.0) ry=4.0; if(ry>(double)(GW_CANVAS_H-5u)) ry=(double)(GW_CANVAS_H-5u);
+                }
+                lx=rx; ly=ry;
+            } else {
+                lx=edge_r?(double)(GW_CANVAS_W-1u):GW_CANVAS_VX0+g_zoom_x+(lx-128.0)/g_zoom;
+                ly=edge_t?0.0:edge_b?(double)(GW_CANVAS_H-1u):GW_CANVAS_VY0+g_zoom_y+ly/g_zoom;
+            }
         }
     } else if(g_canvas_live) {
         lw=(int)GW_CANVAS_W; lh=(int)GW_CANVAS_H;   /* the HUD keeps its coordinates */
@@ -8874,7 +8909,8 @@ static int host_controls_event(const SDL_Event *ev) {
     const int map=(int)InterlockedCompareExchange(&g_live_ifc_map,0,0);
     if(ev->type==SDL_WINDOWEVENT && ev->window.event==SDL_WINDOWEVENT_FOCUS_LOST) {
         mesh_shortcut_down=native_shortcut_down=0;
-        InterlockedExchange(&g_pan_hold,0); InterlockedExchange(&g_turbo_tab,0); g_mid_drag=0; return 0;
+        InterlockedExchange(&g_pan_hold,0); InterlockedExchange(&g_turbo_tab,0); g_mid_drag=0;
+        (void)freecam_controls_event(ev,map); return 0;
     }
     if(ev->type==SDL_KEYDOWN || ev->type==SDL_KEYUP) {
         const SDL_Keycode k=ev->key.keysym.sym; const int down=ev->type==SDL_KEYDOWN;
@@ -8905,6 +8941,7 @@ static int host_controls_event(const SDL_Event *ev) {
             native_shortcut_down=down;
             return 1;
         }
+        if(freecam_controls_event(ev,map)) return 1;
         if(ev->key.repeat) return k==SDLK_F7 || k==SDLK_F8 || k==SDLK_F10 || (map && (k==SDLK_TAB || k==SDLK_HOME || bit));
         if(k==SDLK_F7) {
             if(down) { display_filter_load(); g_filter_mode=(g_filter_mode+1)%3; display_filter_save();
@@ -8939,6 +8976,7 @@ static int host_controls_event(const SDL_Event *ev) {
         }
         return 0;
     }
+    if(freecam_controls_event(ev,map)) return 1;
     if(g_ini_middle_drag && (ev->type==SDL_MOUSEBUTTONDOWN || ev->type==SDL_MOUSEBUTTONUP) && ev->button.button==SDL_BUTTON_MIDDLE) {
         g_mid_drag=ev->type==SDL_MOUSEBUTTONDOWN && map;
         g_mid_last_x=ev->button.x; g_mid_last_y=ev->button.y;
@@ -11549,8 +11587,9 @@ static void gm_passes(const gw_interactive_visual_snapshot *v) {
     g_bloom.ActiveTexture(GL_TEXTURE0);
     g_gm.pending=0; g_gm.have=g_gm.have<3?g_gm.have+1:3; g_gm_npass++;
 }
+#include "gw_freecam_gl.h"
 /* every presented frame: the map colour of both layers into a buffer the size of the scaled frame */
-static int gm_map(const gw_present_geo *geo,double interp_a) {
+static int gm_map(const gw_interactive_visual_snapshot *v,const gw_present_geo *geo,double interp_a) {
     if(g_gm.map_w!=geo->tw || g_gm.map_h!=geo->th || !g_gm.map_fbo) {
         if(g_gm.map_fbo) { g_bloom.DeleteFramebuffers(1,&g_gm.map_fbo); g_bloom.DeleteTextures(1,&g_gm.map_tex); g_gm.map_fbo=g_gm.map_tex=0; }
         if(!bloom_make_fbo(&g_gm.map_fbo,&g_gm.map_tex,geo->tw,geo->th,GL_RGBA8)) { g_gm.failed=1; return 0; }
@@ -11579,10 +11618,14 @@ static int gm_map(const gw_present_geo *geo,double interp_a) {
         g_t3.Uniform3f(g_gm.mp_sky,g_t3.sky[0],g_t3.sky[1],g_t3.sky[2]);
     }
     g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.Uniform1i(g_gm.mp_pk,0);
-    GLint dummy=-1;
-    g_layers_view_loc=g_gm.mp_view;
-    g_layers_aux=1; bloom_draw_map_layers(interp_a,dummy); g_layers_aux=0;
-    g_layers_view_loc=-1;
+    if(freecam_active()) {
+        (void)freecam_render(v,geo,interp_a);
+    } else {
+        GLint dummy=-1;
+        g_layers_view_loc=g_gm.mp_view;
+        g_layers_aux=1; bloom_draw_map_layers(interp_a,dummy); g_layers_aux=0;
+        g_layers_view_loc=-1;
+    }
     g_bloom.Disable(GL_SCISSOR_TEST);
     /* the HUD: the canvas' own x < 128 at 1x on the left of the logical view (the composite takes it there) */
     g_bloom.UseProgram(g_gm.p_hud);
@@ -11606,7 +11649,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
                 g_bloom.GetIntegerv(GL_FRAMEBUFFER_BINDING,&pf); g_bloom.GetIntegerv(GL_CURRENT_PROGRAM,&pp);
                 g_bloom.GetIntegerv(GL_ACTIVE_TEXTURE,&pa); g_bloom.GetIntegerv(GL_ARRAY_BUFFER_BINDING,&pv);
                 g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&pt);
-                const int ok=bloom_ensure_init(854) && gm_init() && terrain_gl_init() && tl_init();
+                const int ok=bloom_ensure_init(854) && gm_init() && terrain_gl_init() && tl_init() && (freecam_init_gl() || 1);
                 g_bloom.BindFramebuffer(GL_FRAMEBUFFER,(GLuint)pf); g_bloom.UseProgram((GLuint)pp);
                 g_bloom.BindBuffer(GL_ARRAY_BUFFER,(GLuint)pv); g_bloom.BindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
                 g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)pt); g_bloom.ActiveTexture((GLenum)pa);
@@ -11614,7 +11657,9 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
             }
         }
     }
-    const int bloom_on=bloom_active(v),ao_on0=ao_gpu_active(v),part_on=part_active(v),wt_on0=fx_active(v) && !g_bloom.wt_failed;
+    freecam_tick();
+    const int fc_on=freecam_active();
+    const int bloom_on=fc_on?0:bloom_active(v),ao_on0=fc_on?0:ao_gpu_active(v),part_on=fc_on?0:part_active(v),wt_on0=fc_on?0:(fx_active(v) && !g_bloom.wt_failed);
     const int active=(bloom_on || ao_on0 || part_on || wt_on0 || g_gm_frame || g_gm.pending) && bloom_ensure_init(g_present_w) && g_bloom.view_tex[1];
     const int ao_on=active && ao_on0 && g_bloom.fbo_ao;
     {   static int last_ao=-1; if(ao_on!=last_ao) { last_ao=ao_on; gw_flag_trace("TRACE terrain_ao gpu=%d strength=%.2f%c",ao_on,(double)g_ini_terrain_ao_strength,10); } }
@@ -11780,7 +11825,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
         g_layers_cur_only=1; bloom_draw_map_layers(interp_a,g_bloom.u_wt_texel); g_layers_cur_only=0;
         g_bloom.Disable(GL_SCISSOR_TEST);
     }
-    const int map_on=g_gm_frame && gm_map(geo,interp_a);
+    const int map_on=g_gm_frame && gm_map(v,geo,interp_a);
     /* Pass 3: Soft-Shoulder Additive Composition onto FBO 0 */
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,0);
     g_bloom.Viewport(geo->dst.x,geo->oh-geo->dst.y-geo->dst.h,geo->dst.w,geo->dst.h);
@@ -12357,6 +12402,20 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 char out[900]; snprintf(out,sizeof out,"%s/%s.bmp",dump_dir,stem);
                 /* stems starting with pres_ capture the composed window output (after interpolation and pointer) */
                 /* stem burst_<N>: the next N composed window frames go to <dir>/burst_000.bmp.. (QA, scroll artefacts) */
+                if(!strncmp(stem,"fc_reset_",9)) {
+                    freecam_reset();
+                    freecam_snap_now(0.0,30.0);
+                    snprintf(g_qa_fc_base,sizeof g_qa_fc_base,"%s/%s.bmp",dump_dir,stem+9);
+                    g_qa_fc_stage=1;
+                } else
+                if(!strncmp(stem,"fc_",3)) {
+                    double qy=0.0,qp=30.0; char qname[96]={0};
+                    if(sscanf(stem+3,"%lf_%lf_%95s",&qy,&qp,qname)>=3) {
+                        freecam_snap_now(qy,qp);
+                        snprintf(g_qa_fc_base,sizeof g_qa_fc_base,"%s/%s.bmp",dump_dir,qname);
+                        g_qa_fc_stage=1;
+                    }
+                } else
                 if(!strncmp(stem,"pair_",5)) {
                     g_qa_pair_native=!strncmp(stem+5,"native_",7);
                     snprintf(g_qa_pair_base,sizeof g_qa_pair_base,"%s/%s",dump_dir,stem+5);
@@ -12783,6 +12842,12 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 (int)(64*sx+0.5),(int)(64*sy+0.5)};
             SDL_RenderCopy(g_ifclevel_demo_renderer,pointer_texture,NULL,&pointer_dst);
             }
+        }
+    }
+    if(g_qa_fc_stage) {
+        if(++g_qa_fc_stage>=4) {
+            snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s",g_qa_fc_base);
+            g_qa_fc_stage=0;
         }
     }
     if(g_qa_pair_stage) {   /* frames 1-6: hold and settle; 6: first capture + toggle; 12: second capture + restore */
@@ -20233,7 +20298,8 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
     }
     if(g_ifclevel_demo_mode && g_interactive_demo_mode && g_ifclevel_demo_window) {
         int hx=0,hy=0;
-        const Uint32 buttons=SDL_GetMouseState(&hx,&hy);
+        const Uint32 raw_buttons=SDL_GetMouseState(&hx,&hy);
+        const Uint32 buttons=freecam_is_alt_drag()?(raw_buttons&~(Uint32)SDL_BUTTON(SDL_BUTTON_LEFT)):raw_buttons;
         int x=hx,y=hy;
         const int mapped=map_interactive_window_to_game(hx,hy,&x,&y);
         if(mapped) {
@@ -21005,7 +21071,9 @@ unsigned int gw_entity_draw_sprite(unsigned int site,unsigned int blit,unsigned 
                                                     blit==0x99A20u?selector:extra,flags);
             if(slot) {
                 g_entity_coverage_decodes++;
-                capture->draws[capture->draw_count++]=(gw_native_draw){slot,(int)sx,(int)sy,*owner};
+                if(blit==0x90F90u && extra && owner->type<8u && owner->owner<8u)
+                    g_fc_owner_remap[owner->type][owner->owner]=extra;
+                capture->draws[capture->draw_count++]=(gw_native_draw){.slot=slot,.x=(int)sx,.y=(int)sy,.extra=0,.entity=*owner};
                 g_entity_atlas_slot=capture->draw_count;
             }
         }
@@ -21229,7 +21297,83 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
     SDL_LockMutex(g_interactive_snapshot_mutex);
     g_interactive_published_snapshot.entity_coverage_bytes=0;
     g_interactive_published_snapshot.atlas_active=0;
+    const int in_ifc_main_fc=g_cli_play_mode && canvas &&
+        *(const uint32_t *)(memory+0x002EF7E8u)==0x0035FE9Au && !*(const uint32_t *)(memory+0x002EF7ECu) &&
+        *(const uint16_t *)(memory+map_guest+0x1Du)==128u;
+    if(in_ifc_main_fc) {
+        const uint32_t b32_base=gw_entity_read_u32(memory+0x002EEC8Cu);
+        const uint32_t t0=gw_entity_read_u32(memory+GW_TERRAIN_B32_TABLE);
+        if(!g_fc_bank.valid || g_fc_bank.b32_base!=b32_base || g_fc_bank.tile_addr[0]!=t0) {
+            g_fc_bank.b32_base=b32_base;
+            for(unsigned i=0;i<259u;i++) {
+                const uint32_t ta=i<256u?gw_entity_read_u32(memory+GW_TERRAIN_B32_TABLE+4u*i):
+                    gw_entity_read_u32(memory+GW_TERRAIN_COMPLEMENT_TABLE+4u*(i-256u));
+                g_fc_bank.tile_addr[i]=ta;
+                if(ta && ta<=GUEST_LIMIT-(31u*256u+32u)) {
+                    for(unsigned r=0;r<32u;r++)
+                        memcpy(g_fc_bank.tiles[i]+32u*r,memory+ta+256u*r,32u);
+                } else memset(g_fc_bank.tiles[i],0,1024u);
+            }
+            for(unsigned ori=0;ori<8u;ori++) {
+                const uint8_t *uvp=memory+GW_TERRAIN_UV_TABLE+ori*32u;
+                for(unsigned k=0;k<8u;k++)
+                    g_fc_bank.uv[ori][k]=(float)(int32_t)gw_entity_read_u32(uvp+k*4u)/65536.0f;
+            }
+            g_fc_bank.version++;
+            g_fc_bank.valid=1;
+        }
+    }
     if(g_atlas_probe_enabled) {
+        if(in_ifc_main_fc && InterlockedCompareExchange(&g_fc_want_expanded,0,0)) {
+            static gw_entity_3d_snapshot fc_scan;
+            if(gw_entity_3d_read(memory,GUEST_LIMIT,&fc_scan)) {
+                const int vc=gw_terrain_read_i16(memory+GW_TERRAIN_MAP_DISPLAY);
+                const int vr=gw_terrain_read_i16(memory+GW_TERRAIN_MAP_DISPLAY+2);
+                const int cc=vc+15,cr=vr;
+                const uint32_t scale=gw_entity_read_u32(memory+GW_TERRAIN_HEIGHT_SCALE);
+                const uint8_t *wmap=memory+GW_TERRAIN_MAP;
+                for(size_t i=0;i<fc_scan.count && g_atlas_probe_producer.draw_count<GW_NATIVE_DRAWS;i++) {
+                    const gw_entity_3d_t *e=&fc_scan.entities[i];
+                    if(!e->z_valid || e->type==GW_ENTITY_EFFECT) continue;
+                    unsigned seen=0;
+                    for(unsigned d=0;d<g_atlas_probe_producer.draw_count;d++) {
+                        if(g_atlas_probe_producer.draws[d].entity.guest_address==e->guest_address) { seen=1; break; }
+                    }
+                    if(seen) continue;
+                    const int dc=((int)(uint16_t)e->world_x_q8/256)-cc;
+                    const int dr=((int)(uint16_t)e->world_y_q8/256)-cr;
+                    const int wdc=((dc+64)&127)-64,wdr=((dr+64)&127)-64;
+                    if(wdc*wdc+wdr*wdr>32*32) continue;
+                    const unsigned wc=((unsigned)e->world_x_q8>>8)&127u,wr=((unsigned)e->world_y_q8>>8)&127u;
+                    if(!wmap[14u*(wr*128u+wc)+12u]) continue;
+                    if(e->guest_address>GUEST_LIMIT-0x23u) continue;
+                    const uint32_t fp=gw_entity_read_u32(memory+e->guest_address+0x1Fu);
+                    if(fp<0x10000u || fp>GUEST_LIMIT-16u) continue;
+                    const uint32_t elems=gw_entity_read_u32(memory+fp);
+                    const unsigned cnt=memory[fp+0x0Bu];
+                    if(cnt==0u || cnt>8u || elems<0x10000u || elems>GUEST_LIMIT-(uint64_t)cnt*10u) continue;
+                    const uint32_t sp=gw_entity_read_u32(memory+elems);
+                    if(sp<0x10000u || sp>GUEST_LIMIT-6u) continue;
+                    const unsigned sw=memory[sp+4u],sh=memory[sp+5u];
+                    if(!sw || !sh || sw>128u || sh>128u) continue;
+                    const int16_t xo=(int16_t)gw_entity_read_s16(memory+elems+4u);
+                    const int16_t yo=(int16_t)gw_entity_read_s16(memory+elems+6u);
+                    const unsigned ef=memory[elems+8u];
+                    uint32_t remap=(e->type<8u && e->owner<8u)?g_fc_owner_remap[e->type][e->owner]:0u;
+                    if(!remap) remap=0x00364554u;
+                    const unsigned slot=atlas_probe_capture(0x90F90u,0u,memory+sp,0xC0u,remap,ef&(scale?3u:3u));
+                    if(slot) {
+                        const float rx=(((unsigned)((int)e->world_x_q8-(vc&127)*256+16384)&32767u)-16384)/256.0f;
+                        const float ry=(((unsigned)((int)e->world_y_q8-(vr&127)*256+16384)&32767u)-16384)/256.0f;
+                        const int px=(int)lroundf(32.0f*(rx-ry))+xo;
+                        const int py=(int)lroundf(16.0f*(rx+ry)-e->world_z_q6/64.0f)+yo;
+                        g_atlas_probe_producer.draws[g_atlas_probe_producer.draw_count++]=(gw_native_draw){
+                            .slot=slot,.x=px,.y=py,.extra=1,.entity=*e
+                        };
+                    }
+                }
+            }
+        }
         const unsigned player=memory[0x002F1431u];
         g_atlas_probe_producer.turn=gw_entity_read_u32(memory+0x002F1472u);
         g_atlas_probe_producer.mission=player<4u?memory[0x002F2123u+player*0x70Du]:UINT32_MAX;
@@ -21922,6 +22066,17 @@ static int SDLCALL interactive_simulation_worker(void *opaque) {
             InterlockedExchange(&g_live_ifc_game,g_cli_play_mode && ifc==0x0035FE9Au && !pend);
             if(map) {
                 LONG dirs=InterlockedCompareExchange(&g_pan_hold,0,0);
+                if(dirs && freecam_active_angle()) {
+                    double vx=(double)((dirs&8)!=0)-(double)((dirs&4)!=0);
+                    double vy=(double)((dirs&2)!=0)-(double)((dirs&1)!=0);
+                    const double rad=-freecam_yaw_deg()*(3.14159265358979/180.0);
+                    const double rvx=vx*cos(rad)-vy*sin(rad);
+                    const double rvy=vx*sin(rad)+vy*cos(rad);
+                    LONG rdirs=0;
+                    if(rvy<-0.38) rdirs|=1; if(rvy>0.38) rdirs|=2;
+                    if(rvx<-0.38) rdirs|=4; if(rvx>0.38) rdirs|=8;
+                    dirs=rdirs;
+                }
                 /* middle drag: one 32-px step of the original scroller per tick, opposite to the drag (the map
                    follows the hand); at most 4 steps stay pending */
                 const LONG step=32*16;
