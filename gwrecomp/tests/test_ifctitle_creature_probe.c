@@ -17,6 +17,7 @@
 #include <SDL.h>
 #include <windows.h>
 #include <SDL_opengl.h>
+#include "gw_sprite_atlas_gl.h"
 #include <mmsystem.h>
 #include <bcrypt.h>
 #include <errno.h>
@@ -7912,7 +7913,15 @@ typedef struct gw_info_overlay {
     uint16_t pixels[GW_INFO_WIDTH*GW_INFO_HEIGHT]; /* palette index + 1, or transparent */
 } gw_info_overlay;
 static gw_info_overlay g_info_overlay;
+enum { GW_ATLAS_PROBE_ITEMS=24, GW_ATLAS_PROBE_BYTES=32768 };
+typedef struct gw_atlas_probe_frame {
+    uint32_t turn,mission,count,bytes;
+    struct { gw_sprite_atlas_key key; uint32_t offset; } items[GW_ATLAS_PROBE_ITEMS];
+    uint8_t pixels[GW_ATLAS_PROBE_BYTES];
+} gw_atlas_probe_frame;
+
 typedef struct gw_interactive_visual_snapshot {
+    gw_atlas_probe_frame atlas_probe;
     uint8_t wscreen[GW_INTERACTIVE_WSCREEN_BYTES];
     uint8_t palette[768u];
     uint8_t world[GW_INTERACTIVE_WORLD_BYTES];
@@ -10413,6 +10422,56 @@ static GLuint gm_tex(int w,int h,GLenum ifmt,GLenum fmt) {
 }
 #include "gw_terrain_mesh_gl.h"
 #include "gw_terrain_lit_gl.h"
+
+static gw_sprite_atlas_gl_api g_atlas_probe_api;
+static gw_sprite_atlas_gl g_atlas_probe_gl;
+static const gw_atlas_probe_frame *g_atlas_probe_pending;
+static uint32_t g_atlas_probe_previous_turn;
+static uint32_t g_atlas_probe_mission;
+static uint64_t g_atlas_probe_generation;
+
+static void atlas_probe_present(int active) {
+    if(!active) {
+        g_atlas_probe_pending=NULL;
+        if(g_atlas_probe_gl.texture) gw_sprite_atlas_gl_release(&g_atlas_probe_gl);
+        return;
+    }
+    const gw_atlas_probe_frame *frame=g_atlas_probe_pending;
+    g_atlas_probe_pending=NULL;
+    if(!frame) return;
+    if(!g_atlas_probe_gl.api && frame->count) {
+        g_atlas_probe_api=(gw_sprite_atlas_gl_api){g_bloom.GenTextures,g_bloom.DeleteTextures,
+            g_bloom.BindTexture,g_bloom.TexParameteri,g_bloom.PixelStorei,
+            g_bloom.TexImage2D,g_bloom.TexSubImage2D};
+        g_atlas_probe_gl.api=&g_atlas_probe_api;
+    }
+    if(frame->turn<g_atlas_probe_previous_turn || frame->mission!=g_atlas_probe_mission) {
+        g_atlas_probe_generation++;
+        g_atlas_probe_mission=frame->mission;
+    }
+    g_atlas_probe_previous_turn=frame->turn;
+    if(!frame->count) {
+        if(g_atlas_probe_gl.texture)
+            gw_sprite_atlas_gl_begin(&g_atlas_probe_gl,g_atlas_probe_generation,0);
+        return;
+    }
+    gw_sprite_atlas_gl_begin(&g_atlas_probe_gl,g_atlas_probe_generation,GW_ATLAS_PROBE_BYTES);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
+    unsigned accepted=0;
+    for(unsigned i=0;i<frame->count;i++) {
+        const gw_sprite_atlas_key key=frame->items[i].key;
+        const size_t size=(size_t)key.width*key.height*4u;
+        const unsigned offset=frame->items[i].offset;
+        if(offset>frame->bytes || size>frame->bytes-offset) continue;
+        gw_sprite_atlas_rect rect;
+        accepted+=gw_sprite_atlas_gl_get(&g_atlas_probe_gl,key,frame->pixels+offset,size,&rect)!=0;
+    }
+    static unsigned samples;
+    if(samples++<12u || (samples%120u)==0)
+        gw_flag_trace("TRACE native sprite atlas turn=%u mission=%u accepted=%u/%u uploaded_bytes=%u%c",
+                      frame->turn,frame->mission,accepted,frame->count,
+                      (unsigned)(GW_ATLAS_PROBE_BYTES-g_atlas_probe_gl.upload_remaining),10);
+}
 #define GM_GLSL_COMMON \
     "#version 120\n" \
     "float rd(sampler2D t,vec2 p,vec2 sz){ return floor(texture2D(t,(p+0.5)/sz).r*255.0+0.5); }\n" \
@@ -10822,6 +10881,7 @@ static void gm_upload(const gw_interactive_visual_snapshot *v) {
     }
     g_gm.shadows=g_ini_soft_shadows && v->spr_valid;
     g_gm.mesh=(v->spr_valid && v->terrain_mesh.count)?&v->terrain_mesh:NULL;
+    g_atlas_probe_pending=&v->atlas_probe;
     {   static int last=-1; const int now=g_gm.mesh!=NULL;
         if(now!=last) { gw_flag_trace("TRACE terrain_3d mesh %s (triangles=%u spr_valid=%d th_valid=%d fx_ring_valid=%d turn=%u)%c",now?"on":"OFF",
             v->terrain_mesh.count/3u,v->spr_valid,v->th_valid,v->fx_ring_valid,v->turn,10); last=now; } }
@@ -11372,6 +11432,7 @@ static void gm_bind(int unit,GLuint tex,GLint loc) {
 }
 /* inside the composite (state saved, quad buffer bound, scissor and blend off): the per-game-frame passes */
 static void gm_passes(int in_mission) {
+    atlas_probe_present(in_mission && g_terrain_3d);
     if(!in_mission) return;
     const int desired=g_terrain_3d && g_gm.mesh && !g_gl_mesh.failed;
     if(!g_gm.pending && desired==g_gm.mesh_enabled) return;
@@ -20739,11 +20800,39 @@ static unsigned g_entity_draw_rows;
 static uint32_t g_entity_draw_turn;
 static gw_entity_3d_snapshot g_entity_draw_snapshot;
 static uint32_t g_entity_draw_palette;
+static int g_atlas_probe_enabled;
+static gw_atlas_probe_frame g_atlas_probe_producer;
+
+static void atlas_probe_capture(unsigned ds,const uint8_t *sp,unsigned selector,
+                                unsigned extra,unsigned flags) {
+    const unsigned w=sp[4],h=sp[5];
+    const size_t bytes=(size_t)w*h*4u;
+    const uint64_t data=(uint64_t)ds+gw_entity_read_u32(sp);
+    const uint64_t remap=(uint64_t)ds+extra;
+    gw_atlas_probe_frame *frame=&g_atlas_probe_producer;
+    if(!extra || data<=ds || data>=GUEST_LIMIT || remap>GUEST_LIMIT-256u ||
+       frame->count>=GW_ATLAS_PROBE_ITEMS || bytes>GW_ATLAS_PROBE_BYTES-frame->bytes) return;
+    uint8_t palette[768];
+    for(size_t i=0;i<sizeof palette;i++) palette[i]=(uint8_t)(vga_dac[i]*255u/63u);
+    if(!gw_decode_sprite_90f90(guest_memory+data,GUEST_LIMIT-(size_t)data,w,h,palette,
+                               guest_memory+remap,flags,selector,
+                               frame->pixels+frame->bytes,bytes)) return;
+    gw_sprite_atlas_key key={.sprite=(uint32_t)(sp-guest_memory),.remap=(uint32_t)remap,
+        .width=(uint16_t)w,.height=(uint16_t)h,.flip=(uint8_t)(flags&3u),
+        .blend=(uint8_t)gw_sprite_90f90_kind(flags),
+        .image=gw_sprite_atlas_image(frame->pixels+frame->bytes,bytes)};
+    for(unsigned i=0;i<frame->count;i++)
+        if(gw_sprite_atlas_key_equal(&key,&frame->items[i].key)) return;
+    frame->items[frame->count].key=key;
+    frame->items[frame->count++].offset=frame->bytes;
+    frame->bytes+=(uint32_t)bytes;
+}
 
 unsigned int gw_entity_draw_enter(unsigned int object) {
     if(!g_cli_play_mode) return 0;
     if(!g_entity_draw_probe_checked) {
         g_entity_draw_probe_checked=1;
+        g_atlas_probe_enabled=gw_cached_getenv("GW_ENTITY_ATLAS_PROBE")!=NULL;
         const char *path=gw_cached_getenv("GW_ENTITY_DRAW_PROBE");
         if(path && *path) g_entity_draw_log=fopen(path,"wb");
         if(g_entity_draw_log) {
@@ -20753,7 +20842,7 @@ unsigned int gw_entity_draw_enter(unsigned int object) {
                   "flags,flip_x,selector,extra_arg,palette_fnv32\n",g_entity_draw_log);
         }
     }
-    if(!g_entity_draw_log) return 0;
+    if(!g_entity_draw_log && !g_atlas_probe_enabled) return 0;
     const uint32_t previous=g_entity_draw_owner;
     g_entity_draw_owner=object;
     return previous;
@@ -20766,12 +20855,18 @@ void gw_entity_draw_leave(unsigned int previous) {
 void gw_entity_draw_sprite(unsigned int site,unsigned int blit,unsigned int ds,
                            unsigned int frame,unsigned int x,unsigned int y,
                            unsigned int sprite,unsigned int selector,unsigned int extra) {
-    if(!g_entity_draw_log || !g_entity_draw_owner || !guest_memory ||
-       g_entity_draw_rows>=100000u) return;
+    if((!g_entity_draw_log && !g_atlas_probe_enabled) ||
+       !g_entity_draw_owner || !guest_memory) return;
     if(gw_entity_read_u32(guest_memory+0x002EF7E8u)!=0x0035FE9Au ||
        gw_entity_read_u32(guest_memory+0x002EF7ECu)) return;
     const uint64_t fa=(uint64_t)ds+frame,sa=(uint64_t)ds+sprite;
     if(!sprite || !frame || fa>GUEST_LIMIT-12u || sa>GUEST_LIMIT-6u) return;
+    const uint8_t *sp=guest_memory+sa;
+    if(!sp[4] || !sp[5]) return;
+    const uint8_t *flags_address=guest_memory+0x00376AB8u;
+    const unsigned flags=(unsigned)flags_address[0]+((unsigned)flags_address[1]<<8);
+    if(g_atlas_probe_enabled && blit==0x90F90u) atlas_probe_capture(ds,sp,selector,extra,flags);
+    if(!g_entity_draw_log || g_entity_draw_rows>=100000u) return;
     const uint32_t turn=gw_entity_read_u32(guest_memory+0x002F1472u);
     if(turn!=g_entity_draw_turn) {
         fflush(g_entity_draw_log);
@@ -20788,10 +20883,6 @@ void gw_entity_draw_sprite(unsigned int site,unsigned int blit,unsigned int ds,
             break;
         }
     }
-    const uint8_t *sp=guest_memory+sa;
-    if(!sp[4] || !sp[5]) return;
-    const uint8_t *flags_address=guest_memory+0x00376AB8u;
-    const unsigned flags=(unsigned)flags_address[0]+((unsigned)flags_address[1]<<8);
     fprintf(g_entity_draw_log,
             "%u,%08x,%u,%u,%d,%d,%d,%u,%d,%05x,%05x,%08x,%08x,%08x,"
             "%u,%u,%d,%d,%d,%d,%04x,%u,%08x,%08x,%08x\n",
@@ -20931,6 +21022,13 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
        world_guest+GW_INTERACTIVE_WORLD_BYTES>GUEST_LIMIT ||
        map_guest+0x14u>GUEST_LIMIT) return;
     SDL_LockMutex(g_interactive_snapshot_mutex);
+    if(g_atlas_probe_enabled) {
+        const unsigned player=memory[0x002F1431u];
+        g_atlas_probe_producer.turn=gw_entity_read_u32(memory+0x002F1472u);
+        g_atlas_probe_producer.mission=player<4u?memory[0x002F2123u+player*0x70Du]:UINT32_MAX;
+        g_interactive_published_snapshot.atlas_probe=g_atlas_probe_producer;
+        g_atlas_probe_producer.count=g_atlas_probe_producer.bytes=0;
+    }
     g_interactive_published_snapshot.canvas_valid=0;
     if(g_info_overlay.width) g_interactive_published_snapshot.info=g_info_overlay;
     else g_interactive_published_snapshot.info.width=0;
@@ -25576,7 +25674,10 @@ int main(int argc,char **argv) {
             if(title_result==2) {
                 if(g_ifclevel_demo_rgba) free(g_ifclevel_demo_rgba);
                 if(g_ifclevel_demo_texture) SDL_DestroyTexture(g_ifclevel_demo_texture);
-                if(g_ifclevel_demo_renderer) SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+                if(g_ifclevel_demo_renderer) {
+                    atlas_probe_present(0);
+                    SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+                }
                 if(g_ifclevel_demo_window) SDL_DestroyWindow(g_ifclevel_demo_window);
                 gw_cdda_shutdown(); SDL_Quit();
                 gw_dos_descriptor_clear(&vfs.dos);
@@ -25598,7 +25699,10 @@ int main(int argc,char **argv) {
                     validate_dos_mcb_chain(memory,vfs.dos.dos_segment_end));
                 if(g_ifclevel_demo_rgba) free(g_ifclevel_demo_rgba);
                 if(g_ifclevel_demo_texture) SDL_DestroyTexture(g_ifclevel_demo_texture);
-                if(g_ifclevel_demo_renderer) SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+                if(g_ifclevel_demo_renderer) {
+                    atlas_probe_present(0);
+                    SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+                }
                 if(g_ifclevel_demo_window) SDL_DestroyWindow(g_ifclevel_demo_window);
                 gw_cdda_shutdown(); SDL_Quit();
                 gw_dos_descriptor_clear(&vfs.dos);
@@ -27619,7 +27723,10 @@ int main(int argc,char **argv) {
                             if(interaction) fclose(interaction);
                             if(g_ifclevel_demo_rgba) free(g_ifclevel_demo_rgba);
                             if(g_ifclevel_demo_texture) SDL_DestroyTexture(g_ifclevel_demo_texture);
-                            if(g_ifclevel_demo_renderer) SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+                            if(g_ifclevel_demo_renderer) {
+                                atlas_probe_present(0);
+                                SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+                            }
                             if(g_ifclevel_demo_window) SDL_DestroyWindow(g_ifclevel_demo_window);
                             gw_cdda_shutdown(); SDL_Quit();
                             gw_dos_descriptor_clear(&vfs.dos);
@@ -27641,7 +27748,10 @@ int main(int argc,char **argv) {
                         if(interaction) fclose(interaction);
                         if(g_ifclevel_demo_rgba) free(g_ifclevel_demo_rgba);
                         if(g_ifclevel_demo_texture) SDL_DestroyTexture(g_ifclevel_demo_texture);
-                        if(g_ifclevel_demo_renderer) SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+                        if(g_ifclevel_demo_renderer) {
+                            atlas_probe_present(0);
+                            SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+                        }
                         if(g_ifclevel_demo_window) SDL_DestroyWindow(g_ifclevel_demo_window);
                         gw_cdda_shutdown(); SDL_Quit();
                         gw_dos_descriptor_clear(&vfs.dos);
@@ -28945,7 +29055,10 @@ int main(int argc,char **argv) {
         fclose(interaction);
         if(g_ifclevel_demo_rgba) free(g_ifclevel_demo_rgba);
         if(g_ifclevel_demo_texture) SDL_DestroyTexture(g_ifclevel_demo_texture);
-        if(g_ifclevel_demo_renderer) SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+        if(g_ifclevel_demo_renderer) {
+            atlas_probe_present(0);
+            SDL_DestroyRenderer(g_ifclevel_demo_renderer);
+        }
         if(g_ifclevel_demo_window) SDL_DestroyWindow(g_ifclevel_demo_window);
         gw_cdda_shutdown(); SDL_Quit();
         const int snapshot_checkpoint_ok=g_snapshot_save_path &&
