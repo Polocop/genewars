@@ -1,4 +1,4 @@
-﻿"""Lift full entry roots or a fail-closed verified GeneWars 1.1 subgraph."""
+"""Lift full entry roots or a fail-closed verified GeneWars 1.1 subgraph."""
 import argparse
 import hashlib
 import json
@@ -3266,7 +3266,7 @@ if partial:
     #  * 0x7C6B0 derives the camera centre from the surface width; it must stay at the 640 centre (x=384).
     widescreen_rules = []
     ws_site_rules = []   # (site, old, new): replace inside every lifted copy of that instruction
-    ws_every_copy = {0x22F58, 0x234A5}   # IFCMain draw is lifted twice
+    ws_every_copy = {0x22F40, 0x22F58, 0x234A5}   # IFCMain draw is lifted twice
     def ws_rule(original: str, replacement: str, optional: bool = False) -> None:
         widescreen_rules.append((original, replacement, optional))
     ws_width = "MEM32(DS_BASE + (0x376A78))"
