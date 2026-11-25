@@ -1,0 +1,29 @@
+# v3.0: lectura de entidades de Gene Wars 1.1
+
+Base de código: 8a2b2d0c80b4f92de7abc3077dc0033f7f96bb09.
+LE 1.1 identificado por SHA-256 2a0a51a5a8170cb7555cc0a745c08ed371c1500503d5cec08d77190d39822a3f.
+Las direcciones de datos son lineales guest de este entorno. Los EIP citados son direcciones de enlace.
+
+| Tabla | Base | Registros | Paso | Thing +0x06 |
+| --- | ---: | ---: | ---: | ---: |
+| Criaturas | 0x0032CF86 | 300 | 0x7C | 1 |
+| Plantas | 0x003360D6 | 512 | 0x31 | 2 |
+| Especialistas | 0x0033C2D6 | 20 | 0xC8 | 3 |
+| Edificios | 0x0033D276 | 256 | 0x43 | 4 |
+| Efectos | 0x00341576 | 200 | 0x51 | 5 |
+
+Los primeros cuatro límites coinciden con el inicio de la tabla siguiente. Para edificios, el código de 0x11D50/0x11D57 usa la base y el paso 0x43. El grupo de 0x10C0 bytes que figura en un inventario histórico contiene 64 registros. 0x29610–0x29618 indexa los efectos con paso 0x51. El tipo coincidente indica un objeto residente, no prueba que se deba dibujar.
+
+- 0x78B66 y 0x78B6A leen Y de +0x09 y X de +0x07 como palabras con signo y llaman a 0x65630. +0x18 es el byte de propietario en el censo previo, no un identificador de paleta.
+- 0x65630 usa el mapa de 0x002F4F86, celdas de 14 bytes, altura con signo en +0x02 y coordenadas con ocho bits fraccionarios. Envuelve ambos ejes módulo 128. En 0x65707–0x65795 interpola por los dos triángulos de cada celda. El lector guarda altura q6 en unidades de mapa antes de la escala de pantalla. 0x78BA1 invoca la ranura virtual +4 de la tabla +0x23 y 0x78BA8–0x78BAB resta su contribución vertical tras desplazarla seis bits. Las cinco tablas contienen dos implementaciones en los snapshots inspeccionados. 0x6A2E0 (VA rebased 0x2552E0) devuelve dword +0x27 menos dword +0x11, observado en criaturas, especialistas y efectos. 0x6EE40 (VA rebased 0x259E40) devuelve cero, observado en plantas y edificios. El lector combina esa contribución con el suelo interpolado y escalado para obtener la elevación de dibujo en q6. Solo se aceptan escalas 1 y 2 y contratos de vtable identificados. No se invocan métodos guest.
+- 0x919C0 / 0x91AE0 reciben el ancla de pantalla en EAX/EDX y el fotograma en EBX. El fotograma contiene el puntero a elementos en +0x00 y el conteo de elementos en +0x0B. Cada elemento mide 10 bytes: puntero de sprite +0x00, desplazamientos firmados X/Y +0x04/+0x06 y flags +0x08. La anchura/altura del descriptor de sprite están en +0x04/+0x05. 0x91A56 y 0x91B7D combinan los flags del elemento con el estado de 0x376AB8. En 0x91A64–0x91A78 se ve el ajuste de X por flip y anchura. 0x919CF y 0x91AEF conservan CL y lo pasan al blit. Falta demostrar qué variantes de ese argumento son equipo, tinte o modo de blit y ligar cada llamada a la entidad propietaria.
+- La tabla de efectos sí contiene objetos con geometría propia. El inventario no demuestra que cada haz, explosión o destello tenga una entrada. En particular, falta ligar la nave y el haz a sus emisores con posición verificable.
+- El terreno lit de la base pasa a gl_Position.z el valor a_pos.z de su orden de rasterización. Esa profundidad no se puede compartir con billboards hasta definir una profundidad común a partir de las posiciones de mundo y validar el signo respecto de la proyección. La textura del terreno y la niebla tampoco son una prueba de visibilidad de una entidad en la tabla.
+
+## Uso
+
+El lector const de runtime/gw_entity_3d.h no asigna fotogramas ni altera la simulación. GW_ENTITY_LAYOUT_PROBE=<ruta CSV> permite inspeccionar los candidatos del primer IFCMain con datos desde el punto de publicación del runtime interactivo. El diagnóstico fuera del juego tests/test_gw_entity_3d_snapshot.c permite comprobar el mismo lector contra los snapshots GWSNAP2 existentes.
+
+## Alcance
+
+Forman parte de este escalón el lector y el inventario. La escena con billboards, el atlas, las sombras, las luces desde entidades, la separación de todos los indicadores de interfaz y la ampliación del zoom siguen pendientes. Suprimir píxeles de WScreen antes de identificar los blits por entidad dejaría huecos y mezclaría efectos con indicadores de interfaz.

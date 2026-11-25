@@ -11,6 +11,7 @@
 #include "gw_terrain_mesh_projection.h"
 #include "gw_terrain_gpu_fixture.h"
 #include "gw_terrain_visible_mesh.h"
+#include "gw_entity_3d.h"
 #include "../tools/terrain_renderer/gw_terrain_renderer.h"
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
@@ -20801,6 +20802,29 @@ static void write_probe_frame(uint8_t *memory,int in_mission) {
         state=9;
     }
 }
+/* Opt-in CSV from the live simulation publication point. Keep this research
+   snapshot outside the buffers copied by the presentation thread. */
+static void entity_layout_probe(const uint8_t *memory) {
+    static int done;
+    if(done) return;
+    const char *path=gw_cached_getenv("GW_ENTITY_LAYOUT_PROBE");
+    if(!path || !*path) { done=1; return; }
+    gw_entity_3d_snapshot scan;
+    if(!gw_entity_3d_read(memory,GUEST_LIMIT,&scan) || !scan.count) return;
+    done=1;
+    FILE *f=fopen(path,"wb");
+    if(!f) return;
+    uint32_t turn=0;
+    memcpy(&turn,memory+0x002F1472u,sizeof turn);
+    fprintf(f,"turn,guest_address,type,owner,world_x_q8,world_y_q8,ground_q6,world_z_q6,z_valid\n");
+    for(size_t i=0;i<scan.count;i++) {
+        const gw_entity_3d_t *e=&scan.entities[i];
+        fprintf(f,"%u,%08x,%u,%u,%d,%d,%d,%d,%u\n",turn,e->guest_address,
+                (unsigned)e->type,(unsigned)e->owner,e->world_x_q8,e->world_y_q8,e->ground_q6,e->world_z_q6,(unsigned)e->z_valid);
+    }
+    fclose(f);
+}
+
 static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen_guest,
                                                 uint64_t generation) {
     const uint32_t world_guest=0x002F4F86u,map_guest=0x00346D70u;
@@ -20904,6 +20928,7 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         g_interactive_published_snapshot.terrain_mesh.count=0;
         if(canvas && in_ifc_main && g_cli_play_mode)
             gw_terrain_prepare_draw(memory,GUEST_LIMIT,GW_CANVAS_W,GW_CANVAS_H,&g_interactive_published_snapshot.terrain_mesh);
+        if(in_ifc_main && g_cli_play_mode) entity_layout_probe(memory);
         if(g_cli_play_mode) write_probe_frame(memory,in_ifc_main);
         g_interactive_published_snapshot.spr_valid=0;
         g_interactive_published_snapshot.ev_ship_n=g_interactive_published_snapshot.ev_beam_n=0;
