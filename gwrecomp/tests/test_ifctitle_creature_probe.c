@@ -7916,16 +7916,21 @@ typedef struct gw_info_overlay {
     uint16_t pixels[GW_INFO_WIDTH*GW_INFO_HEIGHT]; /* palette index + 1, or transparent */
 } gw_info_overlay;
 static gw_info_overlay g_info_overlay;
-enum { GW_ATLAS_PROBE_ITEMS=24, GW_ATLAS_PROBE_BYTES=32768 };
+enum { GW_ATLAS_PROBE_ITEMS=96, GW_ATLAS_PROBE_BYTES=262144, GW_NATIVE_DRAWS=192 };
+typedef struct gw_native_draw {
+    unsigned slot;
+    int x,y;
+    gw_entity_3d_t entity;
+} gw_native_draw;
 typedef struct gw_atlas_probe_frame {
-    uint32_t turn,mission,count,bytes;
+    uint32_t turn,mission,count,bytes,draw_count;
+    gw_native_draw draws[GW_NATIVE_DRAWS];
     struct { gw_sprite_atlas_key key; uint32_t offset; } items[GW_ATLAS_PROBE_ITEMS];
     uint8_t pixels[GW_ATLAS_PROBE_BYTES];
 } gw_atlas_probe_frame;
 
 typedef struct gw_interactive_visual_snapshot {
-    gw_atlas_probe_frame atlas_probe;
-    unsigned entity_coverage_bytes;
+    unsigned entity_coverage_bytes,atlas_active;
     uint8_t wscreen[GW_INTERACTIVE_WSCREEN_BYTES];
     uint8_t palette[768u];
     uint8_t world[GW_INTERACTIVE_WORLD_BYTES];
@@ -7971,6 +7976,7 @@ typedef struct gw_interactive_visual_snapshot {
     int32_t mouse_hot_x,mouse_hot_y;
     uint8_t mouse_w,mouse_h;
     int mouse_valid;
+    gw_atlas_probe_frame atlas_probe;
     uint8_t entity_coverage[GW_CANVAS_W*GW_CANVAS_H];
 } gw_interactive_visual_snapshot;
 typedef struct gw_interactive_key_event {
@@ -8340,7 +8346,7 @@ static char g_present_dump_path[900];
 /* QA (GW_FRAME_DUMP_DIR, stem pair_<name>): the presentation holds its current snapshot, captures the composed window,
    toggles the 2D/3D terrain (Ctrl+F9's switch), captures the same game frame again and restores both: <name>_3d.bmp and
    <name>_2d.bmp of one tick. Presentation only; the simulation keeps running. */
-static int g_qa_hold,g_qa_pair_stage; static char g_qa_pair_base[900];
+static int g_qa_hold,g_qa_pair_stage,g_qa_pair_native; static char g_qa_pair_base[900];
 static char g_present_burst_dir[700]; static unsigned g_present_burst_left,g_present_burst_index;   /* QA: stem burst_N */
 static uint8_t *g_interp_idx[2];      /* indexed map copies: [0] previous, [1] current, pitch 864 */
 static int g_interp_have_prev,g_interp_dx,g_interp_dy,g_interp_last_dx,g_interp_last_dy;
@@ -8509,6 +8515,7 @@ static unsigned g_ini_fps;   /* gwrecomp.ini fps = N (play mode) */
 static char g_ini_path_used[MAX_PATH];
 static int g_ini_camera_keys=1,g_ini_middle_drag=1,g_ini_skip_intro,g_ini_launcher=1,g_ini_last_mission=1;
 static int g_terrain_3d=1;  /* host presentation thread only */
+static int g_native_entities=1;
 static int g_ini_terrain_3d_shadows=1;   /* terrain_3d_shadows: directional shadow map of hills and craters (3D terrain) */
 static int g_ini_terrain_3d_water=1;     /* terrain_3d_water: coastal depth colour, foam, waves, Fresnel and glints (3D terrain) */
 static int g_ini_terrain_3d_lights=1;    /* terrain_3d_lights: dynamic point lights (beam, shots, beacons, GOOP) on the 3D slopes */
@@ -8620,6 +8627,7 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"last_mission")) { const int v=atoi(val); if(v>=1 && v<=24) g_ini_last_mission=v; }
         else if(!strcmp(key,"cd_cue")) snprintf(g_ini_cd_cue,sizeof g_ini_cd_cue,"%s",val);
         else if(!strcmp(key,"terrain_3d")) g_terrain_3d=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_native_entities")) g_native_entities=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_shadows")) g_ini_terrain_3d_shadows=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_water")) g_ini_terrain_3d_water=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_lights")) g_ini_terrain_3d_lights=atoi(val)!=0;
@@ -8862,10 +8870,10 @@ static LONG host_pan_bit(SDL_Keycode k) {
 }
 /* Host controls in play mode. Returns 1 when the event is consumed (never reaches the game). */
 static int host_controls_event(const SDL_Event *ev) {
-    static int mesh_shortcut_down;
+    static int mesh_shortcut_down,native_shortcut_down;
     const int map=(int)InterlockedCompareExchange(&g_live_ifc_map,0,0);
     if(ev->type==SDL_WINDOWEVENT && ev->window.event==SDL_WINDOWEVENT_FOCUS_LOST) {
-        mesh_shortcut_down=0;
+        mesh_shortcut_down=native_shortcut_down=0;
         InterlockedExchange(&g_pan_hold,0); InterlockedExchange(&g_turbo_tab,0); g_mid_drag=0; return 0;
     }
     if(ev->type==SDL_KEYDOWN || ev->type==SDL_KEYUP) {
@@ -8888,6 +8896,14 @@ static int host_controls_event(const SDL_Event *ev) {
                 }
                 *held=down; return 1;
             }
+        }
+        if(k==SDLK_F10 && (native_shortcut_down || (map && down && (ev->key.keysym.mod&KMOD_CTRL)))) {
+            if(down && !native_shortcut_down && !ev->key.repeat) {
+                g_native_entities=!g_native_entities;
+                gw_flag_trace("TRACE host_controls terrain_3d_native_entities=%d%c",g_native_entities,10);
+            }
+            native_shortcut_down=down;
+            return 1;
         }
         if(ev->key.repeat) return k==SDLK_F7 || k==SDLK_F8 || k==SDLK_F10 || (map && (k==SDLK_TAB || k==SDLK_HOME || bit));
         if(k==SDLK_F7) {
@@ -9943,7 +9959,7 @@ static GLuint bloom_link_program(const char *vs_src,const char *fs_src) {
     /* bind attribs 0=a_pos, 1=a_uv, 2=a_suv */
     typedef void (APIENTRYP PFN_BAL)(GLuint,GLuint,const GLchar *);
     PFN_BAL bal=(PFN_BAL)SDL_GL_GetProcAddress("glBindAttribLocation");
-    if(bal) { bal(p,0,"a_pos"); bal(p,1,"a_uv"); bal(p,2,"a_suv"); }
+    if(bal) { bal(p,0,"a_pos"); bal(p,1,"a_uv"); bal(p,2,"a_suv"); bal(p,3,"a_world"); }
     g_bloom.LinkProgram(p);
     g_bloom.DeleteShader(vs); g_bloom.DeleteShader(fs);
     GLint ok=0; g_bloom.GetProgramiv(p,GL_LINK_STATUS,&ok);
@@ -10399,6 +10415,8 @@ static struct {
     const gw_terrain_mesh_draw *mesh;
     GLuint t_idx,t_ring,t_hgt,t_msk,t_shade,t_kind,tmp1,tmp2,fbo,map_fbo,map_tex;
     GLuint aux[3];
+    int native_selected;
+    GLint pk_owned,pk_native,cd_owned,cd_native,mp_entity,mp_native;
     int map_w,map_h,ring_x,ring_y,kind_ok;
     GLuint p_pack,p_cand,p_blurh,p_blurv,p_map,p_hud;
     GLint hu_idx,hu_lut;
@@ -10428,7 +10446,9 @@ static GLuint gm_tex(int w,int h,GLenum ifmt,GLenum fmt) {
 
 static gw_sprite_atlas_gl_api g_atlas_probe_api;
 static gw_sprite_atlas_gl g_atlas_probe_gl;
-static const gw_atlas_probe_frame *g_atlas_probe_pending;
+static const gw_interactive_visual_snapshot *g_atlas_probe_pending;
+static gw_sprite_atlas_rect g_native_rects[GW_ATLAS_PROBE_ITEMS];
+static uint8_t g_native_uploaded[GW_ATLAS_PROBE_ITEMS];
 static uint32_t g_atlas_probe_previous_turn;
 static uint32_t g_atlas_probe_mission;
 static uint64_t g_atlas_probe_generation;
@@ -10439,7 +10459,8 @@ static void atlas_probe_present(int active) {
         if(g_atlas_probe_gl.texture) gw_sprite_atlas_gl_release(&g_atlas_probe_gl);
         return;
     }
-    const gw_atlas_probe_frame *frame=g_atlas_probe_pending;
+    const gw_atlas_probe_frame *frame=g_atlas_probe_pending && g_atlas_probe_pending->atlas_active?
+        &g_atlas_probe_pending->atlas_probe:NULL;
     g_atlas_probe_pending=NULL;
     if(!frame) return;
     if(!g_atlas_probe_gl.api && frame->count) {
@@ -10461,20 +10482,23 @@ static void atlas_probe_present(int active) {
     gw_sprite_atlas_gl_begin(&g_atlas_probe_gl,g_atlas_probe_generation,GW_ATLAS_PROBE_BYTES);
     g_bloom.ActiveTexture(GL_TEXTURE0);
     unsigned accepted=0;
+    memset(g_native_uploaded,0,sizeof g_native_uploaded);
     for(unsigned i=0;i<frame->count;i++) {
         const gw_sprite_atlas_key key=frame->items[i].key;
         const size_t size=(size_t)key.width*key.height*4u;
         const unsigned offset=frame->items[i].offset;
         if(offset>frame->bytes || size>frame->bytes-offset) continue;
-        gw_sprite_atlas_rect rect;
-        accepted+=gw_sprite_atlas_gl_get(&g_atlas_probe_gl,key,frame->pixels+offset,size,&rect)!=0;
+        g_native_uploaded[i]=(uint8_t)gw_sprite_atlas_gl_get(&g_atlas_probe_gl,key,
+            frame->pixels+offset,size,&g_native_rects[i]);
+        accepted+=g_native_uploaded[i];
     }
     static unsigned samples;
-    if(samples++<12u || (samples%120u)==0)
+    if(samples++<12u)
         gw_flag_trace("TRACE native sprite atlas turn=%u mission=%u accepted=%u/%u uploaded_bytes=%u%c",
                       frame->turn,frame->mission,accepted,frame->count,
                       (unsigned)(GW_ATLAS_PROBE_BYTES-g_atlas_probe_gl.upload_remaining),10);
 }
+#include "gw_native_entities_gl.h"
 #define GM_GLSL_COMMON \
     "#version 120\n" \
     "float rd(sampler2D t,vec2 p,vec2 sz){ return floor(texture2D(t,(p+0.5)/sz).r*255.0+0.5); }\n" \
@@ -10490,7 +10514,7 @@ static int gm_init(void) {
     /* packing: one texel per canvas pixel at canvas x = 128 + texel x (the layer texture's own layout) */
     static const char *fs_pack= GM_GLSL_COMMON
         "uniform sampler2D u_idx; uniform sampler2D u_ring; uniform sampler2D u_hgt; uniform sampler2D u_kind;\n"
-        "uniform vec2 u_off; uniform float u_th; uniform sampler2D u_mesh, u_mask, u_plut; uniform float u_mesh_on, u_lit_on;\n"
+        "uniform vec2 u_off; uniform float u_th; uniform sampler2D u_mesh, u_mask, u_plut, u_owned; uniform float u_mesh_on, u_lit_on, u_native;\n"
         "void main(){\n"
         "  vec2 S=vec2(1152.0,640.0); vec2 tp=floor(gl_FragCoord.xy); float cx=tp.x+128.0, y=tp.y;\n"
         "  float c=rd(u_idx,vec2(cx,y),S);\n"
@@ -10517,6 +10541,7 @@ static int gm_init(void) {
         "  float mU=floor(texture2D(u_mesh,(vec2(cx,y-1.0)+0.5)/S).r*255.0+0.5), mD=floor(texture2D(u_mesh,(vec2(cx,y+1.0)+0.5)/S).r*255.0+0.5);\n"
         "  bool tmatch=m.g>0.5 && (c==mi || c==mL || c==mR || c==mU || c==mD);\n"
         "  bool ui=u_mesh_on>0.5 && m.g>0.5 && msk>0.5 && msk<1.5 && !tmatch;\n"
+        "  if(u_native>0.5 && rd(u_owned,vec2(cx,y),S)>0.5){ c=g; gnd=1.0; ui=false; }\n"
         "  if(u_mesh_on>0.5 && gnd>0.5 && drawn>0.5 && m.g>0.5 && !ui){ c=mi; lt=u_lit_on; }\n"
         "  else if(ui){\n"
         "    gnd=0.0;\n"
@@ -10531,8 +10556,8 @@ static int gm_init(void) {
         "}\n";
     /* soft-shadow candidates: exactly the CPU rule (dp_rows / dp_is_shadow_of) */
     static const char *fs_cand= GM_GLSL_COMMON
-        "uniform sampler2D u_idx; uniform sampler2D u_ring; uniform sampler2D u_msk; uniform sampler2D u_shade; uniform sampler2D u_lut; uniform sampler2D u_kind;\n"
-        "uniform vec2 u_off;\n"
+        "uniform sampler2D u_idx; uniform sampler2D u_ring; uniform sampler2D u_msk; uniform sampler2D u_shade; uniform sampler2D u_lut; uniform sampler2D u_kind; uniform sampler2D u_owned;\n"
+        "uniform vec2 u_off; uniform float u_native;\n"
         "float lum(float k){ vec3 p=floor(texture2D(u_lut,vec2((k+0.5)/256.0,0.25)).rgb*255.0+0.5); return dot(p,vec3(77.0,150.0,29.0)); }\n"
         "void main(){\n"
         "  vec2 S=vec2(1152.0,640.0); vec2 tp=floor(gl_FragCoord.xy); float cx=tp.x+128.0, y=tp.y;\n"
@@ -10543,6 +10568,7 @@ static int gm_init(void) {
         "  float s1=k256(u_shade,g), s2=k256(u_shade,s1), s3=k256(u_shade,s2);\n"
         "  bool ok=m>=2.0 && c!=g && (c==s1 || c==s2 || c==s3) && lum(c)<lum(g) && k256(u_kind,g)!=1.0 &&\n"
         "          y>0.5 && y<638.5 && cx>128.5 && cx<1150.5;\n"
+        "  if(u_native>0.5 && rd(u_owned,vec2(cx,y),S)>0.5) ok=false;\n"
         "  gl_FragColor=vec4(ok?1.0:0.0);\n"
         "}\n";
     /* tent blur (two box passes of radius 1 = weights 1 2 3 2 1 / 9 per axis), horizontal then vertical */
@@ -10576,6 +10602,7 @@ static int gm_init(void) {
         "#version 120\n"
         "uniform sampler2D u_pk; uniform sampler2D u_aux; uniform sampler2D u_lut; uniform sampler2D u_lit; uniform sampler2D u_kind;\n"
         "uniform vec3 u_view; uniform vec2 u_lsz; uniform float u_time; uniform vec3 u_sun,u_sunc,u_sky;\n"
+        "uniform sampler2D u_entity; uniform float u_native;\n"
         "varying vec2 v_uv;\n"
         "vec3 lut(float k){ return texture2D(u_lut,vec2((k+0.5)/256.0,0.25)).rgb; }\n"
         "float hh(vec2 q){ vec3 p3=fract(vec3(q.xyx)*0.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }\n"
@@ -10648,6 +10675,7 @@ static int gm_init(void) {
         "    }\n"
         "  }\n"
         "  if(m>0.0 && (a.b>0.5 || gnd>0.5)) col=under*(1.0-m*0.68);\n"
+        "  if(u_native>0.5 && gnd>0.5){ vec4 e=texture2D(u_entity,vec2((128.0+v_uv.x*1024.0)/1152.0,v_uv.y)); col=col*e.a+e.rgb; }\n"
         "  gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);\n"
         "}\n";
     /* HUD (canvas x < 128, rows < 480) from the same raw canvas: palette only */
@@ -10670,6 +10698,9 @@ static int gm_init(void) {
     g_gm.bh_src=GMU(p_blurh,"u_src");
     g_gm.bv_src=GMU(p_blurv,"u_src"); g_gm.bv_cand=GMU(p_blurv,"u_cand"); g_gm.bv_ring=GMU(p_blurv,"u_ring"); g_gm.bv_off=GMU(p_blurv,"u_off"); g_gm.bv_on=GMU(p_blurv,"u_on");
     g_gm.bv_mesh=GMU(p_blurv,"u_mesh"); g_gm.bv_mesh_on=GMU(p_blurv,"u_mesh_on");
+    g_gm.pk_owned=GMU(p_pack,"u_owned"); g_gm.pk_native=GMU(p_pack,"u_native");
+    g_gm.cd_owned=GMU(p_cand,"u_owned"); g_gm.cd_native=GMU(p_cand,"u_native");
+    g_gm.mp_entity=GMU(p_map,"u_entity"); g_gm.mp_native=GMU(p_map,"u_native");
     g_gm.mp_pk=GMU(p_map,"u_pk"); g_gm.mp_aux=GMU(p_map,"u_aux"); g_gm.mp_lut=GMU(p_map,"u_lut");
     g_gm.mp_lit=GMU(p_map,"u_lit"); g_gm.mp_view=GMU(p_map,"u_view"); g_gm.mp_lsz=GMU(p_map,"u_lsz"); g_gm.mp_time=GMU(p_map,"u_time");
     g_gm.mp_sun=GMU(p_map,"u_sun"); g_gm.mp_sunc=GMU(p_map,"u_sunc"); g_gm.mp_sky=GMU(p_map,"u_sky"); g_gm.mp_kind=GMU(p_map,"u_kind");
@@ -10735,6 +10766,30 @@ static int pl_on_line(const uint8_t *cv,int x,int y,uint8_t k) {
     if(a+b+1>=24 && x>=130 && x<1150 && cv[(size_t)y*1152u+(size_t)(x-2)]!=k && cv[(size_t)y*1152u+(size_t)(x+2)]!=k) return 1;
     return 0;
 }
+static int pl_entity_source(const gw_interactive_visual_snapshot *v,const gw_terrain_mesh_draw *mesh,
+                            const pl_cand *light,float *x,float *y,float *z) {
+    if(!g_native_entities || !v->atlas_active || light->cls>=PL_BEACON) return 0;
+    const gw_atlas_probe_frame *f=&v->atlas_probe;
+    const gw_native_draw *source=NULL;
+    float closest=1024.0f;
+    for(unsigned i=0;i<f->draw_count;i++) {
+        const gw_native_draw *d=&f->draws[i];
+        if(d->entity.type!=GW_ENTITY_EFFECT &&
+           !(light->cls==PL_FX && d->entity.type==GW_ENTITY_BUILDING)) continue;
+        const gw_sprite_atlas_key *k=&f->items[d->slot-1u].key;
+        if(light->sx<d->x || light->sy<d->y ||
+           light->sx>=d->x+k->width || light->sy>=d->y+k->height) continue;
+        const float dx=light->sx-(d->x+k->width*0.5f),dy=light->sy-(d->y+k->height*0.5f);
+        const float dist=dx*dx+dy*dy;
+        if(dist<closest) { closest=dist; source=d; }
+    }
+    if(!source) return 0;
+    *x=native_relative(source->entity.world_x_q8,mesh->view_col);
+    *y=native_relative(source->entity.world_y_q8,mesh->view_row);
+    *z=source->entity.world_z_q6/64.0f;
+    return 1;
+}
+
 static void pl_extract(const gw_interactive_visual_snapshot *v,const gw_terrain_mesh_draw *d) {
     const uint64_t t0=SDL_GetPerformanceCounter();
     pl_cand cand[PL_CANDS]; int nc=0;
@@ -10813,9 +10868,11 @@ static void pl_extract(const gw_interactive_visual_snapshot *v,const gw_terrain_
         const float sep=q->cls==PL_GOOP?72.0f:q->cls==PL_BEACON?56.0f:40.0f;
         for(int j=0;j<i && !dup;j++) if(used[j] && cand[j].cls==q->cls) { const float dx=cand[j].sx-q->sx,dy=cand[j].sy-q->sy; dup=dx*dx+dy*dy<sep*sep; }
         float wx,wy,wz;
-        if(dup || !pl_world(d,q->sx,q->sy,&wx,&wy,&wz)) continue;
+        if(dup) continue;
+        const int entity_source=pl_entity_source(v,d,q,&wx,&wy,&wz);
+        if(!entity_source && !pl_world(d,q->sx,q->sy,&wx,&wy,&wz)) continue;
         used[i]=1; kept++;
-        const float ax=fmodf(wx+(float)d->view_col+1280.0f,128.0f),ay=fmodf(wy+(float)d->view_row+1280.0f,128.0f),z=wz*TL_ZS+q->zo;
+        const float ax=fmodf(wx+(float)d->view_col+1280.0f,128.0f),ay=fmodf(wy+(float)d->view_row+1280.0f,128.0f),z=wz*TL_ZS+(entity_source?0.0f:q->zo);
         int best=-1; float bd=q->cls==PL_BEAM?3.0f:1.6f; bd*=bd;
         for(int s=0;s<TL_LIGHTS;s++) if(g_pl_slot[s].alive && g_pl_slot[s].cls==q->cls && g_pl_slot[s].target==0.0f) {
             const float dx=pl_wrap(g_pl_slot[s].ax-ax),dy=pl_wrap(g_pl_slot[s].ay-ay),dd=dx*dx+dy*dy; if(dd<bd) { bd=dd; best=s; } }
@@ -10863,6 +10920,7 @@ static void gm_upload(const gw_interactive_visual_snapshot *v) {
     {   GLuint t=g_bloom.canvas_tex[0]; g_bloom.canvas_tex[0]=g_bloom.canvas_tex[1]; g_bloom.canvas_tex[1]=g_bloom.canvas_tex[2]; g_bloom.canvas_tex[2]=t;
         t=g_gm.aux[0]; g_gm.aux[0]=g_gm.aux[1]; g_gm.aux[1]=g_gm.aux[2]; g_gm.aux[2]=t; }
     if(g_t3.ready) tl_rotate();
+    native_gl_rotate();
     gm_rows(g_gm.t_idx,0,639,GL_RED,v->canvas,1u);
     if(v->panel_bg_valid) {   /* panel art on x = 128..175: the map under it, as the CPU conversion does */
         static uint8_t patch[48u*480u];
@@ -10884,7 +10942,6 @@ static void gm_upload(const gw_interactive_visual_snapshot *v) {
     }
     g_gm.shadows=g_ini_soft_shadows && v->spr_valid;
     g_gm.mesh=(v->spr_valid && v->terrain_mesh.count)?&v->terrain_mesh:NULL;
-    g_atlas_probe_pending=&v->atlas_probe;
     {   static int last=-1; const int now=g_gm.mesh!=NULL;
         if(now!=last) { gw_flag_trace("TRACE terrain_3d mesh %s (triangles=%u spr_valid=%d th_valid=%d fx_ring_valid=%d turn=%u)%c",now?"on":"OFF",
             v->terrain_mesh.count/3u,v->spr_valid,v->th_valid,v->fx_ring_valid,v->turn,10); last=now; } }
@@ -11301,6 +11358,9 @@ static int g_layers_cur_only;   /* 1: bloom_draw_map_layers draws only the curre
 static GLint g_layers_view_loc=-1;   /* map pass: per layer, its lit 3D texture on unit 7 and (origin col, row, present) */
 static void gm_layer_lit(int k) {
     if(g_layers_view_loc<0) return;
+    const int native=g_gm.native_selected && g_native_gl.valid[k];
+    native_bind(6,native?g_native_gl.layers[k]:g_gm.t_kind,g_gm.mp_entity);
+    g_bloom.Uniform1f(g_gm.mp_native,native?1.0f:0.0f);
     const int on=g_t3.ready && g_gm.lit_applied && g_t3.lhave[k] && g_t3.lit[k];
     g_bloom.ActiveTexture(GL_TEXTURE7); g_bloom.BindTexture(GL_TEXTURE_2D,on?g_t3.lit[k]:0u); g_bloom.ActiveTexture(GL_TEXTURE0);
     if(g_t3.Uniform3f) g_t3.Uniform3f(g_layers_view_loc,(float)g_t3.lview[k][0],(float)g_t3.lview[k][1],on?1.0f:0.0f);
@@ -11434,14 +11494,24 @@ static void gm_bind(int unit,GLuint tex,GLint loc) {
     g_bloom.ActiveTexture(GL_TEXTURE0+(GLenum)unit); g_bloom.BindTexture(GL_TEXTURE_2D,tex); g_bloom.Uniform1i(loc,unit);
 }
 /* inside the composite (state saved, quad buffer bound, scissor and blend off): the per-game-frame passes */
-static void gm_passes(int in_mission) {
-    atlas_probe_present(in_mission && g_terrain_3d);
-    if(!in_mission) return;
+static void gm_passes(const gw_interactive_visual_snapshot *v) {
+    if(!v || !v->valid || !v->in_mission || !v->canvas_valid) {
+        atlas_probe_present(0);
+        return;
+    }
     const int desired=g_terrain_3d && g_gm.mesh && !g_gl_mesh.failed;
-    if(!g_gm.pending && desired==g_gm.mesh_enabled) return;
-    const int toggled=desired!=g_gm.mesh_enabled;
+    const int native=desired && g_native_entities;
+    const int toggled=desired!=g_gm.mesh_enabled || native!=g_gm.native_selected;
+    if(!g_gm.pending && !toggled) return;
     g_gm.mesh_enabled=desired;
-    g_gm.mesh_applied=desired && terrain_gl_render(g_gm.mesh);
+    g_gm.native_selected=native;
+    g_atlas_probe_pending=v;
+    atlas_probe_present(native);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
+    g_gm.mesh_applied=desired && terrain_gl_render(g_gm.mesh,native && v->atlas_active &&
+        v->atlas_probe.draw_count && v->entity_coverage_bytes);
+    g_native_gl.valid[1]=0;
+    const int entities=g_gm.mesh_applied && native && native_gl_render(v,g_gm.mesh);
     g_gm.lit_applied=g_gm.mesh_applied && tl_render(g_gm.mesh,g_tl_scale);
     if(toggled) g_bloom.canvas_ready=1; /* previous layer used the other renderer */
     const float ox=(float)g_gm.ring_x,oy=(float)g_gm.ring_y;
@@ -11452,6 +11522,8 @@ static void gm_passes(int in_mission) {
     g_bloom.Uniform1f(g_gm.pk_mesh_on,g_gm.mesh_applied?1.0f:0.0f);
     g_bloom.Uniform1f(g_gm.pk_lit_on,g_gm.lit_applied?1.0f:0.0f);
     gm_bind(6,g_bloom.lut_tex,g_gm.pk_plut);
+    gm_bind(7,entities?g_native_gl.mask:g_gm.t_msk,g_gm.pk_owned);
+    g_bloom.Uniform1f(g_gm.pk_native,entities?1.0f:0.0f);
     g_bloom.Uniform2f(g_gm.pk_off,ox,oy); g_bloom.Uniform1f(g_gm.pk_th,g_gm.th?1.0f:0.0f);
     bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
     if(g_gm.shadows) {
@@ -11459,6 +11531,8 @@ static void gm_passes(int in_mission) {
         g_bloom.UseProgram(g_gm.p_cand);
         gm_bind(0,g_gm.t_idx,g_gm.cd_idx); gm_bind(1,g_gm.t_ring,g_gm.cd_ring); gm_bind(2,g_gm.t_msk,g_gm.cd_msk);
         gm_bind(3,g_gm.t_shade,g_gm.cd_shade); gm_bind(4,g_bloom.lut_tex,g_gm.cd_lut); gm_bind(5,g_gm.t_kind,g_gm.cd_kind);
+        gm_bind(6,entities?g_native_gl.mask:g_gm.t_msk,g_gm.cd_owned);
+        g_bloom.Uniform1f(g_gm.cd_native,entities?1.0f:0.0f);
         g_bloom.Uniform2f(g_gm.cd_off,ox,oy);
         bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
         gm_target(g_gm.tmp2);
@@ -11600,7 +11674,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
             bt=now; snprintf(bank,sizeof bank,"%s",v->terrain_mesh.b32_name); pt_biome(v); }
         if(g_t3.ready && g_pt_biome>=0 && g_pt_biome!=g_t3.biome) tl_biome(g_pt_biome);
     }
-    gm_passes(v && v->valid && v->in_mission && v->canvas_valid);   /* GPU map composition: packing and soft shadows of a new game frame */
+    gm_passes(v);   /* GPU map composition: packing and soft shadows of a new game frame */
 
     if(bloom_on) {
     /* Pass 1: Emissive Extraction -> fbo_half_a */
@@ -12283,7 +12357,11 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 char out[900]; snprintf(out,sizeof out,"%s/%s.bmp",dump_dir,stem);
                 /* stems starting with pres_ capture the composed window output (after interpolation and pointer) */
                 /* stem burst_<N>: the next N composed window frames go to <dir>/burst_000.bmp.. (QA, scroll artefacts) */
-                if(!strncmp(stem,"pair_",5)) { snprintf(g_qa_pair_base,sizeof g_qa_pair_base,"%s/%s",dump_dir,stem+5); g_qa_pair_stage=1; } else
+                if(!strncmp(stem,"pair_",5)) {
+                    g_qa_pair_native=!strncmp(stem+5,"native_",7);
+                    snprintf(g_qa_pair_base,sizeof g_qa_pair_base,"%s/%s",dump_dir,stem+5);
+                    g_qa_pair_stage=1;
+                } else
                 if(!strncmp(stem,"burst_",6)) { const int nb=atoi(stem+6); snprintf(g_present_burst_dir,sizeof g_present_burst_dir,"%s",dump_dir);
                     g_present_burst_left=(unsigned)(nb>0&&nb<=400?nb:60); g_present_burst_index=0u; } else
                 if(!strncmp(stem,"pres_",5)) { snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s",out);
@@ -12710,8 +12788,20 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
     if(g_qa_pair_stage) {   /* frames 1-6: hold and settle; 6: first capture + toggle; 12: second capture + restore */
         const int st=g_qa_pair_stage++;
         g_qa_hold=1;
-        if(st==6 || st==12) snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s_%s.bmp",g_qa_pair_base,g_terrain_3d?"3d":"2d");
-        if(st==7 || st==13) { g_terrain_3d=!g_terrain_3d; gw_flag_trace("TRACE qa_pair terrain_3d=%d%c",g_terrain_3d,10); }
+        int *option=g_qa_pair_native?&g_native_entities:&g_terrain_3d;
+        if(st==6 || st==12) snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s_%s.bmp",
+            g_qa_pair_base,g_qa_pair_native?(*option?"on":"off"):(*option?"3d":"2d"));
+        if(st==7 || st==13) {
+            if(g_qa_pair_native) {
+                SDL_Event key={0};
+                key.type=SDL_KEYDOWN;
+                key.key.keysym.sym=SDLK_F10;
+                key.key.keysym.mod=KMOD_LCTRL;
+                host_controls_event(&key);
+                key.type=SDL_KEYUP;
+                host_controls_event(&key);
+            } else *option=!*option;
+        }
         if(st==13) { g_qa_pair_stage=0; g_qa_hold=0; }
     }
     if(!g_present_dump_path[0] && g_present_burst_left) {
@@ -20808,27 +20898,36 @@ static unsigned g_entity_draw_rows;
 static uint32_t g_entity_draw_turn;
 static gw_entity_3d_snapshot g_entity_draw_snapshot;
 static uint32_t g_entity_draw_palette;
-static int g_atlas_probe_enabled;
+static int g_atlas_probe_enabled,g_atlas_log_enabled;
+static uint32_t g_native_census_turn=UINT32_MAX;
 static gw_atlas_probe_frame g_atlas_probe_producer;
 static uint8_t g_entity_coverage_pixels[GW_CANVAS_W*GW_CANVAS_H];
 static gw_entity_coverage g_entity_coverage_state;
 static unsigned g_entity_atlas_slot,g_entity_coverage_attempts,g_entity_coverage_decodes;
 static int g_entity_coverage_suspend;
 
-static unsigned atlas_probe_capture(unsigned ds,const uint8_t *sp,unsigned selector,
+static unsigned atlas_probe_capture(unsigned blit,unsigned ds,const uint8_t *sp,unsigned selector,
                                 unsigned extra,unsigned flags) {
     const unsigned w=sp[4],h=sp[5];
     const size_t bytes=(size_t)w*h*4u;
     const uint64_t data=(uint64_t)ds+gw_entity_read_u32(sp);
     const uint64_t remap=(uint64_t)ds+extra;
     gw_atlas_probe_frame *frame=&g_atlas_probe_producer;
-    if(!extra || data<=ds || data>=GUEST_LIMIT || remap>GUEST_LIMIT-256u ||
+    if(data<=ds || data>=GUEST_LIMIT ||
+       (blit==0x90F90u && !extra) ||
+       (blit!=0x904E0u && remap>GUEST_LIMIT-256u) ||
        frame->count>=GW_ATLAS_PROBE_ITEMS || bytes>GW_ATLAS_PROBE_BYTES-frame->bytes) return 0;
     uint8_t palette[768];
     for(size_t i=0;i<sizeof palette;i++) palette[i]=(uint8_t)(vga_dac[i]*255u/63u);
-    if(!gw_decode_sprite_90f90(guest_memory+data,GUEST_LIMIT-(size_t)data,w,h,palette,
-                               guest_memory+remap,flags,selector,
-                               frame->pixels+frame->bytes,bytes)) return 0;
+    uint8_t *pixels=frame->pixels+frame->bytes;
+    int decoded;
+    if(blit==0x90F90u)
+        decoded=gw_decode_sprite_90f90(guest_memory+data,GUEST_LIMIT-(size_t)data,w,h,palette,
+                                      guest_memory+remap,flags,selector,pixels,bytes);
+    else
+        decoded=gw_decode_indexed_sprite(guest_memory+data,GUEST_LIMIT-(size_t)data,w,h,palette,
+            blit==0x99A20u?guest_memory+remap:NULL,flags&1u,flags&2u,pixels,bytes);
+    if(!decoded) return 0;
     gw_sprite_atlas_key key={.sprite=(uint32_t)(sp-guest_memory),.remap=(uint32_t)remap,
         .width=(uint16_t)w,.height=(uint16_t)h,.flip=(uint8_t)(flags&3u),
         .blend=(uint8_t)gw_sprite_90f90_kind(flags),
@@ -20845,7 +20944,8 @@ unsigned int gw_entity_draw_enter(unsigned int object) {
     if(!g_cli_play_mode) return 0;
     if(!g_entity_draw_probe_checked) {
         g_entity_draw_probe_checked=1;
-        g_atlas_probe_enabled=gw_cached_getenv("GW_ENTITY_ATLAS_PROBE")!=NULL;
+        g_atlas_log_enabled=gw_cached_getenv("GW_ENTITY_ATLAS_PROBE")!=NULL;
+        g_atlas_probe_enabled=g_ws_canvas || g_atlas_log_enabled;
         const char *path=gw_cached_getenv("GW_ENTITY_DRAW_PROBE");
         if(path && *path) g_entity_draw_log=fopen(path,"wb");
         if(g_entity_draw_log) {
@@ -20880,12 +20980,44 @@ unsigned int gw_entity_draw_sprite(unsigned int site,unsigned int blit,unsigned 
     if(!sp[4] || !sp[5]) return previous;
     const uint8_t *flags_address=guest_memory+0x00376AB8u;
     const unsigned flags=(unsigned)flags_address[0]+((unsigned)flags_address[1]<<8);
-    if(g_atlas_probe_enabled && blit==0x90F90u) {
-        g_entity_coverage_attempts++;
-        const unsigned slot=atlas_probe_capture(ds,sp,selector,extra,flags);
-        g_entity_coverage_decodes+=slot!=0;
-        if(gw_sprite_90f90_kind(flags)==GW_SPRITE_BLIT_SOURCE)
-            g_entity_atlas_slot=slot;
+    const int supported=blit==0x90F90u?gw_sprite_90f90_kind(flags)!=GW_SPRITE_BLIT_UNSUPPORTED:
+        !(flags&~3u) && (blit==0x99A20u || (blit==0x904E0u && (selector&255u)==0xc0u));
+    gw_atlas_probe_frame *capture=&g_atlas_probe_producer;
+    if(g_atlas_probe_enabled && supported && capture->draw_count<GW_NATIVE_DRAWS) {
+        const uint32_t turn=gw_entity_read_u32(guest_memory+0x002F1472u);
+        if(g_native_census_turn!=turn) {
+            gw_entity_3d_read(guest_memory,GUEST_LIMIT,&g_entity_draw_snapshot);
+            g_native_census_turn=turn;
+        }
+        const gw_entity_3d_t *owner=NULL;
+        for(size_t i=0;i<g_entity_draw_snapshot.count;i++) {
+            const gw_entity_3d_t *candidate=&g_entity_draw_snapshot.entities[i];
+            if(candidate->guest_address==g_entity_draw_owner && candidate->z_valid) {
+                owner=candidate;
+                break;
+            }
+        }
+        const int64_t sx=(int64_t)(int32_t)x+gw_entity_read_s32(guest_memory+0x00376A80u);
+        const int64_t sy=(int64_t)(int32_t)y+gw_entity_read_s32(guest_memory+0x00376A84u);
+        if(owner && sx>=-255 && sx<GW_CANVAS_W && sy>=-255 && sy<GW_CANVAS_H) {
+            g_entity_coverage_attempts++;
+            const unsigned slot=atlas_probe_capture(blit,ds,sp,selector,
+                                                    blit==0x99A20u?selector:extra,flags);
+            if(slot) {
+                g_entity_coverage_decodes++;
+                capture->draws[capture->draw_count++]=(gw_native_draw){slot,(int)sx,(int)sy,*owner};
+                g_entity_atlas_slot=capture->draw_count;
+            }
+        }
+    } else if(g_atlas_probe_enabled && !supported && (flags&12u) &&
+              g_native_census_turn==gw_entity_read_u32(guest_memory+0x002F1472u)) {
+        for(size_t i=0;i<g_entity_draw_snapshot.count;i++) {
+            const gw_entity_3d_t *candidate=&g_entity_draw_snapshot.entities[i];
+            if(candidate->guest_address==g_entity_draw_owner && candidate->type!=GW_ENTITY_EFFECT) {
+                g_entity_atlas_slot=250u;
+                break;
+            }
+        }
     }
     if(!g_entity_draw_log || g_entity_draw_rows>=100000u) return previous;
     const uint32_t turn=gw_entity_read_u32(guest_memory+0x002F1472u);
@@ -20959,8 +21091,21 @@ void gw_shade_caller(int k) { g_shade_caller=k; }
 static void write_probe_observer(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
     (void)seg; (void)sel; (void)base; (void)user;
     if(g_entity_coverage_state.bytes && !g_entity_coverage_suspend) {
-        const unsigned slot=va>=0x90F90u && va<0x919C0u?g_entity_atlas_slot:0;
-        gw_entity_coverage_write(&g_entity_coverage_state,lin,width,slot);
+        if(va==0x0008E4A1u) {
+            const int k=g_shade_caller>=0 && g_shade_caller<=9?g_shade_caller:0;
+            if((g_shadow_callers>>k)&1u) {
+                const uint32_t off=lin-g_entity_coverage_state.base;
+                if(lin>=g_entity_coverage_state.base && off<g_entity_coverage_state.bytes) {
+                    uint32_t cnt=width?width:1u;
+                    if(cnt>g_entity_coverage_state.bytes-off) cnt=g_entity_coverage_state.bytes-off;
+                    for(uint32_t i=0;i<cnt;i++)
+                        if(!g_entity_coverage_state.pixels[off+i])
+                            g_entity_coverage_state.pixels[off+i]=(uint8_t)(240u+(unsigned)k);
+                }
+            }
+        } else {
+            gw_entity_coverage_write(&g_entity_coverage_state,lin,width,g_entity_atlas_slot);
+        }
     }
     if(g_spr_on && lin>=g_spr_lo && lin<g_spr_hi) {
         uint32_t n=width?width:1u; if(lin+n>g_spr_hi) n=g_spr_hi-lin;
@@ -20983,9 +21128,9 @@ static void write_probe_observer(uint32_t va,recomp_segment_id seg,uint16_t sel,
 /* IFCMain::Draw entry. The legacy 640x480 surface can be observed during
    the initial mission sequence before the full canvas is installed. */
 void gw_entity_coverage_begin_frame(void) {
-    if(!g_cli_play_mode || !guest_memory || !gw_cached_getenv("GW_ENTITY_ATLAS_PROBE")) return;
+    if(!g_cli_play_mode || !guest_memory || (!g_ws_canvas && !g_atlas_log_enabled)) return;
     static unsigned reports;
-    if(g_entity_coverage_state.bytes && g_entity_coverage_attempts && reports<12u) {
+    if(g_atlas_log_enabled && g_entity_coverage_state.bytes && g_entity_coverage_attempts && reports<12u) {
         unsigned covered=0;
         for(unsigned i=0;i<g_entity_coverage_state.bytes;i++)
             covered+=g_entity_coverage_pixels[i]!=0;
@@ -20999,7 +21144,8 @@ void gw_entity_coverage_begin_frame(void) {
     const uint32_t ws=gw_entity_read_u32(memory+0x00376A5Cu);
     const unsigned w=gw_entity_read_u32(memory+0x00376A78u);
     const unsigned h=gw_entity_read_u32(memory+0x00376A7Cu);
-    g_atlas_probe_producer.count=g_atlas_probe_producer.bytes=0;
+    g_atlas_probe_producer.count=g_atlas_probe_producer.bytes=g_atlas_probe_producer.draw_count=0;
+    g_native_census_turn=UINT32_MAX;
     g_entity_atlas_slot=0;
     g_entity_coverage_suspend=0;
     g_entity_coverage_state.bytes=0;
@@ -21082,10 +21228,12 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
        map_guest+0x14u>GUEST_LIMIT) return;
     SDL_LockMutex(g_interactive_snapshot_mutex);
     g_interactive_published_snapshot.entity_coverage_bytes=0;
+    g_interactive_published_snapshot.atlas_active=0;
     if(g_atlas_probe_enabled) {
         const unsigned player=memory[0x002F1431u];
         g_atlas_probe_producer.turn=gw_entity_read_u32(memory+0x002F1472u);
         g_atlas_probe_producer.mission=player<4u?memory[0x002F2123u+player*0x70Du]:UINT32_MAX;
+        g_interactive_published_snapshot.atlas_active=1;
         g_interactive_published_snapshot.atlas_probe=g_atlas_probe_producer;
         if(g_entity_coverage_state.base==wscreen_guest &&
            g_entity_coverage_state.bytes==frame_bytes && g_atlas_probe_producer.count) {
@@ -22340,8 +22488,10 @@ static int run_interactive_game_loop(uint8_t *memory,uint32_t wscreen_guest,
             const unsigned next_index=present_current->valid?
                 1u-g_interactive_present_current_index:g_interactive_present_current_index;
             memcpy(&g_interactive_present_snapshots[next_index],&g_interactive_published_snapshot,
-                offsetof(gw_interactive_visual_snapshot,entity_coverage)+
-                    g_interactive_published_snapshot.entity_coverage_bytes);
+                (g_interactive_published_snapshot.atlas_active?
+                    offsetof(gw_interactive_visual_snapshot,entity_coverage)+
+                        g_interactive_published_snapshot.entity_coverage_bytes:
+                    offsetof(gw_interactive_visual_snapshot,atlas_probe)));
             g_interactive_present_current_index=next_index;
             g_interactive_snapshot_consumer_copies++;
             published_new_snapshot=1;
@@ -26561,7 +26711,8 @@ int main(int argc,char **argv) {
            and the original game() pre-update stage (0x64CB0 + clear) runs every frame. --load-save
            keeps the automated walk to mission 1 that its Options > Cargar driver starts from. */
         const int ifclevel_manual=g_cli_play_mode && g_interactive_demo_mode && !g_cli_load_save;
-        const unsigned max_ticks=ifclevel_manual?UINT32_MAX:512u;
+        const int qa_click=ifclevel_manual && getenv("GW_QA_IFCLEVEL_CLICK")!=NULL;
+        const unsigned max_ticks=ifclevel_manual && !qa_click?UINT32_MAX:512u;
         static const SDL_Keycode level_code[9]={SDLK_s,SDLK_a,SDLK_l,SDLK_m,SDLK_o,SDLK_n,SDLK_a,SDLK_x,SDLK_e};
         const unsigned level_keys=(ifclevel_manual && g_cli_level>1u)?9u+(g_cli_level-1u):0u;
         unsigned level_key_index=0u,level_key_phase=0u,level_done=0u;
@@ -26603,6 +26754,16 @@ int main(int argc,char **argv) {
                         memory[0x002F2123u+memory[0x002F1431u]*0x70Du]+1u,(memory[0x002F1661u]>>4)&1u,tick);
                 }
                 snprintf(tick_names[tick&511u],sizeof tick_names[tick&511u],"manual-%03u",tick&0x3FFu);
+                if(qa_click && mouse_button_down) {
+                    if(!push_sdl_button(SDL_MOUSEBUTTONUP,320,240)) continuation_ok=0;
+                    mouse_button_down=0;
+                } else if(qa_click && ((phase_for_event==7u && !phase7_click_sent) ||
+                                       (phase_for_event>=9u && !phase9_click_sent))) {
+                    if(!push_sdl_button(SDL_MOUSEBUTTONDOWN,320,240)) continuation_ok=0;
+                    mouse_button_down=1;
+                    if(phase_for_event==7u) phase7_click_sent=1;
+                    else phase9_click_sent=1;
+                }
             } else if(mouse_button_down) {
                 if(!push_sdl_button(SDL_MOUSEBUTTONUP,320,240)) continuation_ok=0;
                 else { mouse_button_down=0; event_code=2; snprintf(tick_names[tick&511u],sizeof tick_names[tick&511u],"mouse-up-phase%u",phase_for_event); }

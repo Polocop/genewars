@@ -5,7 +5,8 @@
    attribute locations. It outputs an indexed screen-space layer to pack. */
 static struct {
     GLuint fbo,depth,color,tiles,fade,program,vbo,ibo;
-    GLint u_tiles,u_fade;
+    GLint u_tiles,u_fade,u_geometric;
+    void (APIENTRYP ColorMask)(GLboolean,GLboolean,GLboolean,GLboolean);
     int failed,fade_ready;
     uint8_t last_fade[64u*256u];
     void (APIENTRYP DrawElements)(GLenum,GLsizei,GLenum,const void *);
@@ -14,6 +15,7 @@ static struct {
     void (APIENTRYP DepthFunc)(GLenum);
     void (APIENTRYP DepthMask)(GLboolean);
     void (APIENTRYP ClearDepth)(GLclampd);
+    void (APIENTRYP PolygonOffset)(GLfloat,GLfloat);
     PFNGLGENRENDERBUFFERSPROC GenRenderbuffers;
     PFNGLBINDRENDERBUFFERPROC BindRenderbuffer;
     PFNGLRENDERBUFFERSTORAGEPROC RenderbufferStorage;
@@ -27,10 +29,12 @@ static int terrain_gl_init(void) {
         "#version 120\n"
         "attribute vec3 a_pos; attribute vec3 a_uv; attribute vec2 a_suv;\n"
         "varying vec3 v_material; varying vec2 v_tile_mode;\n"
+        "attribute vec3 a_world; uniform float u_geometric;\n"
         "void main(){\n"
         /* E8963 stores destination minus pitch. The scanline loop adds that
            pitch back before the first write. GL samples at half pixels. */
         "  gl_Position=vec4((a_pos.xy+0.5)*2.0/vec2(1152.0,640.0)-1.0,a_pos.z,1.0);\n"
+        "  if(u_geometric>0.5) gl_Position.z=-dot(a_world,vec3(0.004,0.004,0.00025));\n"
         "  v_material=a_uv; v_tile_mode=a_suv;\n"
         "}\n";
     static const char *fs=
@@ -50,7 +54,7 @@ static int terrain_gl_init(void) {
         "}\n";
     #define GW_MESH_GL(n) do { *(void **)&g_gl_mesh.n=SDL_GL_GetProcAddress("gl" #n); if(!g_gl_mesh.n) goto fail; } while(0)
     GW_MESH_GL(DrawElements); GW_MESH_GL(PushAttrib); GW_MESH_GL(PopAttrib);
-    GW_MESH_GL(DepthFunc); GW_MESH_GL(DepthMask); GW_MESH_GL(ClearDepth);
+    GW_MESH_GL(DepthFunc); GW_MESH_GL(DepthMask); GW_MESH_GL(ClearDepth); GW_MESH_GL(ColorMask); GW_MESH_GL(PolygonOffset);
     GW_MESH_GL(GenRenderbuffers); GW_MESH_GL(BindRenderbuffer);
     GW_MESH_GL(RenderbufferStorage); GW_MESH_GL(FramebufferRenderbuffer);
     #undef GW_MESH_GL
@@ -58,6 +62,7 @@ static int terrain_gl_init(void) {
     if(!g_gl_mesh.program) goto fail;
     g_gl_mesh.u_tiles=g_bloom.GetUniformLocation(g_gl_mesh.program,"u_tiles");
     g_gl_mesh.u_fade=g_bloom.GetUniformLocation(g_gl_mesh.program,"u_fade");
+    g_gl_mesh.u_geometric=g_bloom.GetUniformLocation(g_gl_mesh.program,"u_geometric");
     g_gl_mesh.tiles=gm_tex(512,544,GL_R8,GL_RED);
     g_gl_mesh.fade=gm_tex(256,64,GL_R8,GL_RED);
     g_gl_mesh.color=gm_tex(1152,640,GL_RG8,GL_RG);
@@ -88,7 +93,7 @@ fail:
     return 0;
 }
 
-static int terrain_gl_render(const gw_terrain_mesh_draw *draw) {
+static int terrain_gl_render(const gw_terrain_mesh_draw *draw,int geometric_depth) {
     if(!draw || !draw->count || !terrain_gl_init()) return 0;
     enum { atlas_w=GW_MESH_ATLAS_W, atlas_cols=GW_MESH_ATLAS_COLS };
     static uint8_t atlas[atlas_w*544];
@@ -98,6 +103,7 @@ static int terrain_gl_render(const gw_terrain_mesh_draw *draw) {
             memcpy(slot+row*atlas_w,draw->texels[i]+row*32u,32u);
     }
     g_bloom.UseProgram(g_gl_mesh.program);
+    g_bloom.Uniform1f(g_gl_mesh.u_geometric,0.0f);
     g_bloom.ActiveTexture(GL_TEXTURE0);
     g_bloom.BindTexture(GL_TEXTURE_2D,g_gl_mesh.tiles);
     g_bloom.Uniform1i(g_gl_mesh.u_tiles,0);
@@ -113,7 +119,7 @@ static int terrain_gl_render(const gw_terrain_mesh_draw *draw) {
     }
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_gl_mesh.fbo);
     g_bloom.Viewport(0,0,1152,640);
-    g_gl_mesh.PushAttrib(GL_DEPTH_BUFFER_BIT|GL_ENABLE_BIT);
+    g_gl_mesh.PushAttrib(GL_DEPTH_BUFFER_BIT|GL_ENABLE_BIT|GL_COLOR_BUFFER_BIT);
     g_bloom.Enable(GL_DEPTH_TEST);
     g_bloom.Disable(GL_CULL_FACE);
     g_bloom.Disable(GL_DITHER);
@@ -130,6 +136,17 @@ static int terrain_gl_render(const gw_terrain_mesh_draw *draw) {
     g_bloom.VertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,stride,(const void *)offsetof(gw_terrain_mesh_vertex,u));
     g_bloom.VertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,stride,(const void *)offsetof(gw_terrain_mesh_vertex,tile));
     g_gl_mesh.DrawElements(GL_TRIANGLES,(GLsizei)draw->count,GL_UNSIGNED_SHORT,0);
+    if(geometric_depth) {
+        /* Keep indexed terrain material precedence from its original draw.
+           Build scene depth separately from the same world geometry. */
+        g_gl_mesh.ColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);
+        g_bloom.Clear(GL_DEPTH_BUFFER_BIT);
+        g_bloom.Uniform1f(g_gl_mesh.u_geometric,1.0f);
+        g_bloom.EnableVertexAttribArray(3);
+        g_bloom.VertexAttribPointer(3,3,GL_FLOAT,GL_FALSE,stride,(const void *)offsetof(gw_terrain_mesh_vertex,wx));
+        g_gl_mesh.DrawElements(GL_TRIANGLES,(GLsizei)draw->count,GL_UNSIGNED_SHORT,0);
+        g_bloom.DisableVertexAttribArray(3);
+    }
     g_bloom.BindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
     g_gl_mesh.PopAttrib();
     g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_bloom.vbo);

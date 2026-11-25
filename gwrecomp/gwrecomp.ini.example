@@ -43,6 +43,8 @@ last_mission = 1
 ; 1 = 3D terrain in zoomout missions (every wheel zoom, 0.87x to 2x): smooth lighting from the planet's heights,
 ;     sun and sky light of the biome, micro-relief, up to 4x the canvas resolution. Ctrl+F9 toggles 2D/3D live.
 terrain_3d = 1
+# Ctrl+F10 alterna las entidades nativas en el terreno 3D.
+terrain_3d_native_entities = 1
 ; 1 = directional shadow map of hills, ridges and crater rims on the 3D terrain (never darker than a tactical floor)
 terrain_3d_shadows = 1
 ; 1 = 3D water: coastal colour from the depth, shore foam, animated waves with Fresnel and sun glints, glowing GOOP
