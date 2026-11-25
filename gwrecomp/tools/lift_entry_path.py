@@ -3349,6 +3349,9 @@ if partial:
             "/* 0x00079E9B: right-edge scroll column (639 at 640) */\n    _flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(GW_WS_VIEW_W - 1u);")
     # IFCMain draw (0x22F40): MapDisplay::Draw returns at 0x22F58, everything after it in the same frame is drawn
     # over the map (the HUD pass); the zoom-out canvas records the HUD's pixels on the map's left edge from there
+    ws_rule("    if (!gw_recomp_guest_instruction(0x00022F40u)) return;",
+            "    if (!gw_recomp_guest_instruction(0x00022F40u)) return;\n"
+            "    gw_entity_coverage_begin_frame();")
     ws_rule("    if (!gw_recomp_guest_instruction(0x00022F58u)) return;",
             "    if (!gw_recomp_guest_instruction(0x00022F58u)) return;\n"
             "    if (g_gw_ws_after_map) g_gw_ws_after_map(); /* 0x00022F58: after MapDisplay::Draw (HUD pass follows) */")
@@ -3581,6 +3584,7 @@ if partial:
             "#define GW_WS_POOL(md) ((g_gw_ws_drawpool && (uint32_t)(md) == 0x00346D70u) ? g_gw_ws_drawpool : (uint32_t)((md) + 0x3Bu))\n"
             "#define GW_WS_POOL_CAP(md) ((g_gw_ws_drawpool && (uint32_t)(md) == 0x00346D70u) ? GW_WS_DRAWPOOL_ENTRIES : 0x100u)\n"
             "void (*g_gw_ws_band_copy)(void) = 0;\n"
+            "void gw_entity_coverage_begin_frame(void);\n"
             "void (*g_gw_ws_after_map)(void) = 0;\n"
             "void (*g_gw_ws_info_begin)(uint32_t) = 0;\n"
             "void (*g_gw_ws_info_end)(void) = 0;\n"

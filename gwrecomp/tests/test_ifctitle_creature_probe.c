@@ -18,6 +18,7 @@
 #include <windows.h>
 #include <SDL_opengl.h>
 #include "gw_sprite_atlas_gl.h"
+#include "gw_entity_coverage.h"
 #include <mmsystem.h>
 #include <bcrypt.h>
 #include <errno.h>
@@ -7922,6 +7923,8 @@ typedef struct gw_atlas_probe_frame {
 
 typedef struct gw_interactive_visual_snapshot {
     gw_atlas_probe_frame atlas_probe;
+    uint8_t entity_coverage[GW_CANVAS_W*GW_CANVAS_H];
+    unsigned entity_coverage_bytes;
     uint8_t wscreen[GW_INTERACTIVE_WSCREEN_BYTES];
     uint8_t palette[768u];
     uint8_t world[GW_INTERACTIVE_WORLD_BYTES];
@@ -12284,6 +12287,11 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
                 if(!strncmp(stem,"burst_",6)) { const int nb=atoi(stem+6); snprintf(g_present_burst_dir,sizeof g_present_burst_dir,"%s",dump_dir);
                     g_present_burst_left=(unsigned)(nb>0&&nb<=400?nb:60); g_present_burst_index=0u; } else
                 if(!strncmp(stem,"pres_",5)) { snprintf(g_present_dump_path,sizeof g_present_dump_path,"%s",out);
+                    if(visual && visual->entity_coverage_bytes) {
+                        char mp[900]; snprintf(mp,sizeof mp,"%s/%s.entitymask",dump_dir,stem);
+                        FILE *mask=fopen(mp,"wb");
+                        if(mask) { fwrite(visual->entity_coverage,1,visual->entity_coverage_bytes,mask); fclose(mask); }
+                    }
                     if(getenv("GW_SPR_MASK_DUMP") && visual && visual->spr_valid) {   /* QA: the soft_shadows mask (1 sprite, 2+caller shade) */
                         char mp[900]; snprintf(mp,sizeof mp,"%s/%s.sprmask",dump_dir,stem);
                         FILE *mf=fopen(mp,"wb"); if(mf) { fwrite(visual->spr_mask,1,sizeof visual->spr_mask,mf); fclose(mf); }
@@ -20802,8 +20810,12 @@ static gw_entity_3d_snapshot g_entity_draw_snapshot;
 static uint32_t g_entity_draw_palette;
 static int g_atlas_probe_enabled;
 static gw_atlas_probe_frame g_atlas_probe_producer;
+static uint8_t g_entity_coverage_pixels[GW_CANVAS_W*GW_CANVAS_H];
+static gw_entity_coverage g_entity_coverage_state;
+static unsigned g_entity_atlas_slot;
+static int g_entity_coverage_suspend;
 
-static void atlas_probe_capture(unsigned ds,const uint8_t *sp,unsigned selector,
+static unsigned atlas_probe_capture(unsigned ds,const uint8_t *sp,unsigned selector,
                                 unsigned extra,unsigned flags) {
     const unsigned w=sp[4],h=sp[5];
     const size_t bytes=(size_t)w*h*4u;
@@ -20811,21 +20823,22 @@ static void atlas_probe_capture(unsigned ds,const uint8_t *sp,unsigned selector,
     const uint64_t remap=(uint64_t)ds+extra;
     gw_atlas_probe_frame *frame=&g_atlas_probe_producer;
     if(!extra || data<=ds || data>=GUEST_LIMIT || remap>GUEST_LIMIT-256u ||
-       frame->count>=GW_ATLAS_PROBE_ITEMS || bytes>GW_ATLAS_PROBE_BYTES-frame->bytes) return;
+       frame->count>=GW_ATLAS_PROBE_ITEMS || bytes>GW_ATLAS_PROBE_BYTES-frame->bytes) return 0;
     uint8_t palette[768];
     for(size_t i=0;i<sizeof palette;i++) palette[i]=(uint8_t)(vga_dac[i]*255u/63u);
     if(!gw_decode_sprite_90f90(guest_memory+data,GUEST_LIMIT-(size_t)data,w,h,palette,
                                guest_memory+remap,flags,selector,
-                               frame->pixels+frame->bytes,bytes)) return;
+                               frame->pixels+frame->bytes,bytes)) return 0;
     gw_sprite_atlas_key key={.sprite=(uint32_t)(sp-guest_memory),.remap=(uint32_t)remap,
         .width=(uint16_t)w,.height=(uint16_t)h,.flip=(uint8_t)(flags&3u),
         .blend=(uint8_t)gw_sprite_90f90_kind(flags),
         .image=gw_sprite_atlas_image(frame->pixels+frame->bytes,bytes)};
     for(unsigned i=0;i<frame->count;i++)
-        if(gw_sprite_atlas_key_equal(&key,&frame->items[i].key)) return;
+        if(gw_sprite_atlas_key_equal(&key,&frame->items[i].key)) return i+1u;
     frame->items[frame->count].key=key;
     frame->items[frame->count++].offset=frame->bytes;
     frame->bytes+=(uint32_t)bytes;
+    return frame->count;
 }
 
 unsigned int gw_entity_draw_enter(unsigned int object) {
@@ -20852,21 +20865,27 @@ void gw_entity_draw_leave(unsigned int previous) {
     g_entity_draw_owner=previous;
 }
 
-void gw_entity_draw_sprite(unsigned int site,unsigned int blit,unsigned int ds,
+unsigned int gw_entity_draw_sprite(unsigned int site,unsigned int blit,unsigned int ds,
                            unsigned int frame,unsigned int x,unsigned int y,
                            unsigned int sprite,unsigned int selector,unsigned int extra) {
+    const unsigned previous=g_entity_atlas_slot;
+    g_entity_atlas_slot=0;
     if((!g_entity_draw_log && !g_atlas_probe_enabled) ||
-       !g_entity_draw_owner || !guest_memory) return;
+       !g_entity_draw_owner || !guest_memory) return previous;
     if(gw_entity_read_u32(guest_memory+0x002EF7E8u)!=0x0035FE9Au ||
-       gw_entity_read_u32(guest_memory+0x002EF7ECu)) return;
+       gw_entity_read_u32(guest_memory+0x002EF7ECu)) return previous;
     const uint64_t fa=(uint64_t)ds+frame,sa=(uint64_t)ds+sprite;
-    if(!sprite || !frame || fa>GUEST_LIMIT-12u || sa>GUEST_LIMIT-6u) return;
+    if(!sprite || !frame || fa>GUEST_LIMIT-12u || sa>GUEST_LIMIT-6u) return previous;
     const uint8_t *sp=guest_memory+sa;
-    if(!sp[4] || !sp[5]) return;
+    if(!sp[4] || !sp[5]) return previous;
     const uint8_t *flags_address=guest_memory+0x00376AB8u;
     const unsigned flags=(unsigned)flags_address[0]+((unsigned)flags_address[1]<<8);
-    if(g_atlas_probe_enabled && blit==0x90F90u) atlas_probe_capture(ds,sp,selector,extra,flags);
-    if(!g_entity_draw_log || g_entity_draw_rows>=100000u) return;
+    if(g_atlas_probe_enabled && blit==0x90F90u) {
+        const unsigned slot=atlas_probe_capture(ds,sp,selector,extra,flags);
+        if(gw_sprite_90f90_kind(flags)==GW_SPRITE_BLIT_SOURCE)
+            g_entity_atlas_slot=slot;
+    }
+    if(!g_entity_draw_log || g_entity_draw_rows>=100000u) return previous;
     const uint32_t turn=gw_entity_read_u32(guest_memory+0x002F1472u);
     if(turn!=g_entity_draw_turn) {
         fflush(g_entity_draw_log);
@@ -20894,6 +20913,11 @@ void gw_entity_draw_sprite(unsigned int site,unsigned int blit,unsigned int ds,
             gw_entity_read_s32(guest_memory+0x00376A80u),gw_entity_read_s32(guest_memory+0x00376A84u),
             flags,flags&1u,selector,extra,g_entity_draw_palette);
     g_entity_draw_rows++;
+    return previous;
+}
+
+void gw_entity_draw_sprite_end(unsigned int previous) {
+    g_entity_atlas_slot=previous;
 }
 
 void gw_draw_caller(int k) { g_draw_caller=k; }
@@ -20932,6 +20956,10 @@ static uint32_t g_shade_caller_n[10];
 void gw_shade_caller(int k) { g_shade_caller=k; }
 static void write_probe_observer(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
     (void)seg; (void)sel; (void)base; (void)user;
+    if(g_entity_coverage_state.bytes && !g_entity_coverage_suspend) {
+        const unsigned slot=va>=0x90F90u && va<0x919C0u?g_entity_atlas_slot:0;
+        gw_entity_coverage_write(&g_entity_coverage_state,lin,width,slot);
+    }
     if(g_spr_on && lin>=g_spr_lo && lin<g_spr_hi) {
         uint32_t n=width?width:1u; if(lin+n>g_spr_hi) n=g_spr_hi-lin;
         uint8_t *m=g_spr_mask+(lin-g_spr_lo);
@@ -20950,6 +20978,24 @@ static void write_probe_observer(uint32_t va,recomp_segment_id seg,uint16_t sel,
     for(;k<4096u;k++,h=(h+1u)&4095u) { if(g_wp_va[h]==va) break; if(!g_wp_va[h]) { g_wp_va[h]=va; g_wp_used++; break; } }
     if(k<4096u) g_wp_n[g_wp_phase][h]++;
 }
+/* IFCMain::Draw entry. The legacy 640x480 surface can be observed during
+   the initial mission sequence before the full canvas is installed. */
+void gw_entity_coverage_begin_frame(void) {
+    if(!g_cli_play_mode || !guest_memory || !gw_cached_getenv("GW_ENTITY_ATLAS_PROBE")) return;
+    const uint8_t *memory=guest_memory;
+    const uint32_t ws=gw_entity_read_u32(memory+0x00376A5Cu);
+    const unsigned w=gw_entity_read_u32(memory+0x00376A78u);
+    const unsigned h=gw_entity_read_u32(memory+0x00376A7Cu);
+    g_atlas_probe_producer.count=g_atlas_probe_producer.bytes=0;
+    g_entity_atlas_slot=0;
+    g_entity_coverage_suspend=0;
+    g_entity_coverage_state.bytes=0;
+    if(!ws || (w!=640u && w!=864u && w!=GW_CANVAS_W) ||
+       (h!=480u && h!=GW_CANVAS_H) || ws>GUEST_LIMIT-w*h) return;
+    gw_entity_coverage_begin(&g_entity_coverage_state,g_entity_coverage_pixels,ws,w,h,128u);
+    if(!g_spr_on) recomp_set_guest_write_observer(write_probe_observer,NULL);
+}
+
 static void write_probe_frame(uint8_t *memory,int in_mission) {
     static int state=-1; static uint32_t frames;
     if(state<0) { const char *e=getenv("GW_WRITE_PROBE"); state=e && e[0]=='1'?0:9; }
@@ -21022,11 +21068,17 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
        world_guest+GW_INTERACTIVE_WORLD_BYTES>GUEST_LIMIT ||
        map_guest+0x14u>GUEST_LIMIT) return;
     SDL_LockMutex(g_interactive_snapshot_mutex);
+    g_interactive_published_snapshot.entity_coverage_bytes=0;
     if(g_atlas_probe_enabled) {
         const unsigned player=memory[0x002F1431u];
         g_atlas_probe_producer.turn=gw_entity_read_u32(memory+0x002F1472u);
         g_atlas_probe_producer.mission=player<4u?memory[0x002F2123u+player*0x70Du]:UINT32_MAX;
         g_interactive_published_snapshot.atlas_probe=g_atlas_probe_producer;
+        if(g_entity_coverage_state.base==wscreen_guest &&
+           g_entity_coverage_state.bytes==frame_bytes && g_atlas_probe_producer.count) {
+            memcpy(g_interactive_published_snapshot.entity_coverage,g_entity_coverage_pixels,frame_bytes);
+            g_interactive_published_snapshot.entity_coverage_bytes=frame_bytes;
+        }
         g_atlas_probe_producer.count=g_atlas_probe_producer.bytes=0;
     }
     g_interactive_published_snapshot.canvas_valid=0;
@@ -21063,6 +21115,8 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
                 const int panel=g_hud_have[pi] && row[x]==g_hud_val[pi];
                 (void)bg_ok;
                 g_interactive_published_snapshot.canvas_panel[pi]=(uint8_t)panel;
+                if(panel && g_interactive_published_snapshot.entity_coverage_bytes)
+                    g_interactive_published_snapshot.entity_coverage[y*GW_CANVAS_W+x]=0;
                 orow[x]=panel?row[x]:win[x];
             }
             memcpy(orow+176u,win+176u,854u-176u);
@@ -21477,6 +21531,7 @@ static void info_before_draw(uint32_t sprite) {
     g_info_screen=screen; g_info_pitch=pitch;
     g_info_x=320u-w/2u; g_info_y=240u-h/2u;
     g_info_w=w; g_info_h=h;
+    g_entity_coverage_suspend=1;
     for(unsigned y=0;y<h;y++)
         memcpy(g_info_background+y*w,m+screen+(g_info_y+y)*pitch+g_info_x,w);
 }
@@ -21484,6 +21539,7 @@ static void info_before_draw(uint32_t sprite) {
 /* Remove the panel from the world frame before publication. Its opaque
    interior starts five pixels in (0x24CCD..0x24CD3 clears it to black). */
 static void info_after_draw(void) {
+    g_entity_coverage_suspend=0;
     if(!g_info_w) return;
     const unsigned w=g_info_w,h=g_info_h;
     g_info_w=0;

@@ -20,9 +20,9 @@ def instrument_entity_draws(source: str) -> str:
         )
     for site, target, frame, extra in blits:
         hooks[site] = (
-            f"gw_entity_draw_sprite(0x{site:08X}u,0x{target:08X}u,DS_BASE,{frame},"
+            f"{{ unsigned int gw_previous_sprite=gw_entity_draw_sprite(0x{site:08X}u,0x{target:08X}u,DS_BASE,{frame},"
             f"eax,edx,ebx,ecx,{extra});",
-            "",
+            "gw_entity_draw_sprite_end(gw_previous_sprite); }",
         )
 
     watched = "|".join(f"{site:08X}" for site in hooks)
@@ -51,7 +51,8 @@ def instrument_entity_draws(source: str) -> str:
     return (
         "unsigned int gw_entity_draw_enter(unsigned int);\n"
         "void gw_entity_draw_leave(unsigned int);\n"
-        "void gw_entity_draw_sprite(unsigned int,unsigned int,unsigned int,unsigned int,"
+        "void gw_entity_draw_sprite_end(unsigned int);\n"
+        "unsigned int gw_entity_draw_sprite(unsigned int,unsigned int,unsigned int,unsigned int,"
         "unsigned int,unsigned int,unsigned int,unsigned int,unsigned int);\n"
         + updated
     )
