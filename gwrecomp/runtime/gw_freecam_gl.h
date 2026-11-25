@@ -21,6 +21,7 @@ typedef struct gw_fc_pick_quad {
     float hw,hh;           /* half-width along cam_right, full height along +Z */
     float draw_cx,draw_cy; /* classic 1152x640 canvas pick coordinate */
     float u0,v0,u1,v1;     /* atlas UV for alpha hit-test if needed */
+    uint32_t entity_address;
 } gw_fc_pick_quad;
 
 typedef struct gw_fc_tvert {
@@ -169,12 +170,17 @@ static void freecam_tick(void) {
 }
 
 static int freecam_controls_event(const SDL_Event *ev,int map) {
-    if(!g_ini_terrain_3d_freecam || !g_terrain_3d || !g_native_entities) return 0;
     if(ev->type==SDL_WINDOWEVENT && ev->window.event==SDL_WINDOWEVENT_FOCUS_LOST) {
         InterlockedExchange(&g_fc.hold_mask,0);
         g_fc.dragging=g_fc.alt_drag=0;
         return 0;
     }
+    if(ev->type==SDL_MOUSEBUTTONUP && g_fc.dragging &&
+       ev->button.button==(g_fc.alt_drag?SDL_BUTTON_LEFT:SDL_BUTTON_MIDDLE)) {
+        g_fc.dragging=g_fc.alt_drag=0;
+        return 1;
+    }
+    if(!g_ini_terrain_3d_freecam || !g_terrain_3d || !g_native_entities) return 0;
     if(ev->type==SDL_KEYDOWN || ev->type==SDL_KEYUP) {
         const SDL_Keycode k=ev->key.keysym.sym;
         const int down=ev->type==SDL_KEYDOWN;
@@ -214,20 +220,13 @@ static int freecam_controls_event(const SDL_Event *ev,int map) {
         const SDL_Keymod mod=SDL_GetModState();
         const int mid=ev->button.button==SDL_BUTTON_MIDDLE && !(mod&KMOD_SHIFT);
         const int alt_left=ev->button.button==SDL_BUTTON_LEFT && (mod&KMOD_ALT)!=0;
-        if(down && map && (mid || alt_left)) {
+        if(down && map && !g_selection_pointer_held && !g_fc.dragging && (mid || alt_left)) {
             double lx=0.0,ly=0.0;
             if(!host_window_logical(ev->button.x,ev->button.y,&lx,&ly,NULL) || lx<128.0) return 0;
             g_fc.dragging=1;
             g_fc.alt_drag=alt_left;
             g_fc.last_x=ev->button.x;
             g_fc.last_y=ev->button.y;
-            return 1;
-        }
-        if(!down && g_fc.dragging &&
-           ((ev->button.button==SDL_BUTTON_MIDDLE && !g_fc.alt_drag) ||
-            (ev->button.button==SDL_BUTTON_LEFT && g_fc.alt_drag))) {
-            g_fc.dragging=0;
-            g_fc.alt_drag=0;
             return 1;
         }
     }
@@ -322,6 +321,23 @@ static int freecam_raycast(double lx,double ly,int vw,double *out_cx,double *out
         return 1;
     }
     return 0;
+}
+
+/* Use the center of the rendered billboard in the same curved world
+   coordinates and clip space as the entity vertex shader. */
+static int freecam_drag_contains(const gw_fc_pick_quad *q,double x0,double y0,double x1,double y1) {
+    const float *m=g_fc.mvp;
+    const float z=q->cz+0.5f*q->hh;
+    const float w=m[3]*q->cx+m[7]*q->cy+m[11]*z+m[15];
+    if(w<=0.0f) return 0;
+    const float depth=m[2]*q->cx+m[6]*q->cy+m[10]*z+m[14];
+    if(depth < -w || depth > w) return 0;
+    const float x=(m[0]*q->cx+m[4]*q->cy+m[8]*z+m[12])/w;
+    const float y=(m[1]*q->cx+m[5]*q->cy+m[9]*z+m[13])/w;
+    if(x < -1.0f || x > 1.0f || y < -1.0f || y > 1.0f) return 0;
+    const double lx=128.0+(x+1.0)*0.5*(g_fc.last_vw-128);
+    const double ly=(y+1.0)*240.0;
+    return lx>=x0 && lx<=x1 && ly>=y0 && ly<=y1;
 }
 
 static GLuint freecam_tex(int w,int h,GLenum ifmt,GLenum fmt,GLenum filter,GLenum wrap) {
@@ -783,7 +799,7 @@ static void freecam_add_billboard(gw_fc_evert **out,const gw_fc_evert *limit,
         const float cz_c=base_z-g_fc.curve_k*(dx*dx+dy*dy);
         const float cx_c=rx+g_fc.right[0]*x_off_world,cy_c=ry+g_fc.right[1]*x_off_world;
         g_fc.picks[g_fc.pick_n++]=(gw_fc_pick_quad){
-            cx_c,cy_c,cz_c,hw,h_world,(float)d->x+0.5f*(float)rect.w,(float)d->y+0.5f*(float)rect.h,u0,v0,u1,v1
+            cx_c,cy_c,cz_c,hw,h_world,(float)d->x+0.5f*(float)rect.w,(float)d->y+0.5f*(float)rect.h,u0,v0,u1,v1,d->entity.guest_address
         };
     }
 }

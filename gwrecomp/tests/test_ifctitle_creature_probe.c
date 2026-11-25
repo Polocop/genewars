@@ -7977,6 +7977,7 @@ typedef struct gw_interactive_visual_snapshot {
     unsigned frames_n;
     int spr_valid;
     int in_mission;
+    uint8_t selection_box_active, selection_box_color;
     gw_info_overlay info;
     uint64_t generation;
     uint64_t captured_at;
@@ -8746,6 +8747,8 @@ static void present_window_to_output(int wx,int wy,int ow,int oh,double *ox,doub
 static int freecam_active(void);
 static int freecam_active_angle(void);
 static int freecam_is_alt_drag(void);
+static int g_selection_pointer_held, g_selection_pointer_freecam;
+static double g_selection_x0,g_selection_y0,g_selection_x1,g_selection_y1;
 static double freecam_yaw_deg(void);
 static void freecam_snap_now(double yaw,double pitch);
 static void freecam_reset(void);
@@ -11588,6 +11591,46 @@ static void gm_passes(const gw_interactive_visual_snapshot *v) {
     g_gm.pending=0; g_gm.have=g_gm.have<3?g_gm.have+1:3; g_gm_npass++;
 }
 #include "gw_freecam_gl.h"
+
+/* The SDL producer owns the pending sample under the input mutex. The
+   game thread receives it with the corresponding mouse state, and only
+   the lifted selector reads the resulting thread-local-in-practice copy. */
+typedef struct gw_drag_sample {
+    int threshold, released;
+    unsigned count;
+    uint32_t entities[GW_FC_MAX_PICKS];
+} gw_drag_sample;
+static gw_drag_sample g_drag_pending,g_drag_game;
+
+int gw_freecam_drag_threshold(void) {
+    return g_drag_game.threshold-1;
+}
+int gw_freecam_entity_in_drag_rect(uint32_t address) {
+    if(!g_drag_game.released) return -1;
+    for(unsigned i=0;i<g_drag_game.count;i++)
+        if(g_drag_game.entities[i]==address) return 1;
+    return 0;
+}
+static gw_drag_sample freecam_drag_sample(int released) {
+    gw_drag_sample sample={0};
+    const int active=g_selection_pointer_freecam && freecam_active() && g_fc.has_cam && !g_info_up;
+    sample.threshold=active?(fabs(g_selection_x1-g_selection_x0)>4.0 ||
+                             fabs(g_selection_y1-g_selection_y0)>4.0?1:0):-1;
+    if(active && released && sample.threshold) {
+        sample.released=1;
+        const double x0=fmax(128.0,fmin(g_selection_x0,g_selection_x1));
+        const double x1=fmin(g_fc.last_vw,fmax(g_selection_x0,g_selection_x1));
+        const double y0=fmax(0.0,fmin(g_selection_y0,g_selection_y1));
+        const double y1=fmin(480.0,fmax(g_selection_y0,g_selection_y1));
+        for(int i=0;i<g_fc.pick_n;i++) {
+            const gw_fc_pick_quad *q=&g_fc.picks[i];
+            if(q->entity_address && freecam_drag_contains(q,x0,y0,x1,y1))
+                sample.entities[sample.count++]=q->entity_address;
+        }
+    }
+    sample.threshold=released?0:sample.threshold+1;
+    return sample;
+}
 /* every presented frame: the map colour of both layers into a buffer the size of the scaled frame */
 static int gm_map(const gw_interactive_visual_snapshot *v,const gw_present_geo *geo,double interp_a) {
     if(g_gm.map_w!=geo->tw || g_gm.map_h!=geo->th || !g_gm.map_fbo) {
@@ -11618,9 +11661,8 @@ static int gm_map(const gw_interactive_visual_snapshot *v,const gw_present_geo *
         g_t3.Uniform3f(g_gm.mp_sky,g_t3.sky[0],g_t3.sky[1],g_t3.sky[2]);
     }
     g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.Uniform1i(g_gm.mp_pk,0);
-    if(freecam_active()) {
-        (void)freecam_render(v,geo,interp_a);
-    } else {
+    if(!freecam_active() || !freecam_render(v,geo,interp_a)) {
+        g_fc.has_cam=0;
         GLint dummy=-1;
         g_layers_view_loc=g_gm.mp_view;
         g_layers_aux=1; bloom_draw_map_layers(interp_a,dummy); g_layers_aux=0;
@@ -12687,6 +12729,31 @@ static int present_ifclevel_demo_frame_ex(const uint8_t *pixels,const uint8_t *p
             }
         }
         dst=geo.dst;
+        /* Free camera replaces the whole world image, including the original
+           XOR rubber band. Present its screen-space counterpart after the
+           world, but before the help panel, CRT pass and cursor. */
+        if(bloom_done && g_fc.has_cam && visual && visual->selection_box_active &&
+           g_selection_pointer_held && !g_info_up) {
+            double x0,y0,x1,y1;
+            present_logical_to_output(&geo,fmin(g_selection_x0,g_selection_x1),
+                fmin(g_selection_y0,g_selection_y1),&x0,&y0);
+            present_logical_to_output(&geo,fmax(g_selection_x0,g_selection_x1),
+                fmax(g_selection_y0,g_selection_y1),&x1,&y1);
+            const int left=(int)ceil(dst.x+128.0*dst.w/g_present_w);
+            const SDL_Rect clip={left,dst.y,dst.x+dst.w-left,dst.h};
+            const SDL_Rect box={(int)lround(x0),(int)lround(y0),
+                (int)lround(x1)-(int)lround(x0)+1,(int)lround(y1)-(int)lround(y0)+1};
+            SDL_Rect previous_clip;
+            const SDL_bool clipped=SDL_RenderIsClipEnabled(g_ifclevel_demo_renderer);
+            SDL_RenderGetClipRect(g_ifclevel_demo_renderer,&previous_clip);
+            const unsigned color=visual->selection_box_color;
+            SDL_RenderSetClipRect(g_ifclevel_demo_renderer,&clip);
+            SDL_SetRenderDrawColor(g_ifclevel_demo_renderer,visual->palette[color*3u]*255u/63u,
+                visual->palette[color*3u+1u]*255u/63u,visual->palette[color*3u+2u]*255u/63u,255u);
+            SDL_RenderDrawRect(g_ifclevel_demo_renderer,&box);
+            SDL_SetRenderDrawColor(g_ifclevel_demo_renderer,0,0,0,255);
+            SDL_RenderSetClipRect(g_ifclevel_demo_renderer,clipped?&previous_clip:NULL);
+        }
         /* the information panel above the composited frame (GPU map, 3D terrain, water, AO, soft shadows,
            particles, bloom): drawn into the scale target before, the GL passes covered it */
         if(visual && visual->info.width && visual->info.height) {
@@ -20015,11 +20082,12 @@ static uint8_t lbinkey_scan_code(SDL_Keycode key) {
     if(key==SDLK_F12) return 0x58u;
     return 0u;
 }
-static void interactive_mailbox_mouse(int x,int y,int event_type,uint8_t button) {
+static void interactive_mailbox_mouse_and_drag(int x,int y,int event_type,uint8_t button,const gw_drag_sample *drag) {
     if(!g_interactive_input_mutex) return;
     SDL_LockMutex(g_interactive_input_mutex);
     g_interactive_input_x=x; g_interactive_input_y=y; g_interactive_input_valid=1;
     g_interactive_input_event_counter=SDL_GetPerformanceCounter();
+    if(drag) g_drag_pending=*drag;
     if(event_type==SDL_MOUSEBUTTONDOWN && button==SDL_BUTTON_LEFT) {
         g_interactive_input_left_edge=1; g_interactive_input_left_held=1;
     } else if(event_type==SDL_MOUSEBUTTONUP && button==SDL_BUTTON_LEFT) {
@@ -20030,6 +20098,9 @@ static void interactive_mailbox_mouse(int x,int y,int event_type,uint8_t button)
         g_interactive_input_right_edge=0; g_interactive_input_right_held=0;
     }
     SDL_UnlockMutex(g_interactive_input_mutex);
+}
+static void interactive_mailbox_mouse(int x,int y,int event_type,uint8_t button) {
+    interactive_mailbox_mouse_and_drag(x,y,event_type,button,NULL);
 }
 static void interactive_mailbox_key(uint8_t scan,int down,uint8_t index) {
     if(!g_interactive_input_mutex || !scan) return;
@@ -20103,6 +20174,14 @@ static unsigned interactive_mailbox_apply(uint8_t *memory) {
     if(!memory || !g_interactive_input_mutex) return 0u;
     SDL_LockMutex(g_interactive_input_mutex);
     valid=g_interactive_input_valid; x=g_interactive_input_x; y=g_interactive_input_y;
+    g_drag_game.threshold=g_drag_pending.threshold;
+    g_drag_game.released=g_drag_pending.released;
+    if(g_drag_game.released) {
+        g_drag_game.count=g_drag_pending.count;
+        memcpy(g_drag_game.entities,g_drag_pending.entities,g_drag_game.count*sizeof g_drag_game.entities[0]);
+        g_drag_pending.released=0;
+        g_drag_pending.threshold=0;
+    }
     left_edge=g_interactive_input_left_edge; right_edge=g_interactive_input_right_edge;
     left_held=g_interactive_input_left_held; right_held=g_interactive_input_right_held;
     key_count=g_interactive_key_count;
@@ -20182,11 +20261,13 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
             } else if(g_interactive_input_mutex) {
                 SDL_LockMutex(g_interactive_input_mutex);
                 g_interactive_input_focus_lost=1;
+                g_drag_pending.threshold=g_drag_pending.released=0;
                 g_interactive_input_left_edge=g_interactive_input_right_edge=0;
                 g_interactive_input_left_held=g_interactive_input_right_held=0;
                 g_interactive_key_head=g_interactive_key_count=0u;
                 SDL_UnlockMutex(g_interactive_input_mutex);
             }
+            g_selection_pointer_held=g_selection_pointer_freecam=0;
             fprintf(stderr,"TRACE interactive_focus_lost guest_keys_released=1 guest_mouse_released=1\n");
             n++;
             continue;
@@ -20201,6 +20282,8 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
         if(ev.type==SDL_MOUSEMOTION || ev.type==SDL_MOUSEBUTTONDOWN || ev.type==SDL_MOUSEBUTTONUP) {
             const unsigned seq=++trace_mouse_seq;
             if(trace_mouse) fprintf(stderr,"TRACE sdl_mouse_event seq=%u turn=%u type=%u window=%08x button=%u state=%u raw_before=edge:%02x held:%02x mousebyte:%02x\n",seq,trace_turn,ev.type,ev.type==SDL_MOUSEMOTION?ev.motion.windowID:ev.button.windowID,ev.type==SDL_MOUSEMOTION?0u:(unsigned)ev.button.button,ev.type==SDL_MOUSEMOTION?0u:(unsigned)ev.button.state,memory[0x00376ABFu],memory[0x00376AC2u],memory[0x002F146Du]);
+            gw_drag_sample drag;
+            const gw_drag_sample *drag_event=NULL;
             int hx=ev.type==SDL_MOUSEMOTION?ev.motion.x:ev.button.x;
             int hy=ev.type==SDL_MOUSEMOTION?ev.motion.y:ev.button.y;
             int x=g_ifclevel_demo_mode?hx:hx/2;
@@ -20215,7 +20298,39 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
                    pillarbox swallowed the scripted planet-screen click) */
                 const uint32_t ev_window=ev.type==SDL_MOUSEMOTION?ev.motion.windowID:ev.button.windowID;
                 if(g_ifclevel_demo_window && ev_window!=UINT32_MAX) {
+                    const int left_down=ev.type==SDL_MOUSEBUTTONDOWN && ev.button.button==SDL_BUTTON_LEFT;
+                    const int left_up=ev.type==SDL_MOUSEBUTTONUP && ev.button.button==SDL_BUTTON_LEFT;
+                    const int was_held=g_selection_pointer_held;
+                    if(left_up) g_selection_pointer_held=0;
                     const int mapped=map_interactive_window_to_game(hx,hy,&x,&y);
+                    if(left_down && mapped==1 && !g_info_up &&
+                       InterlockedCompareExchange(&g_live_ifc_map,0,0) &&
+                       host_window_logical(hx,hy,&g_selection_x0,&g_selection_y0,NULL) &&
+                       g_selection_x0>=128.0) {
+                        g_selection_pointer_held=1;
+                        g_selection_pointer_freecam=freecam_active() && g_fc.has_cam;
+                        g_selection_x1=g_selection_x0;
+                        g_selection_y1=g_selection_y0;
+                        if(!memory) { drag=freecam_drag_sample(0); drag_event=&drag; }
+                    } else if(was_held && (ev.type==SDL_MOUSEMOTION || left_up)) {
+                        host_window_logical(hx,hy,&g_selection_x1,&g_selection_y1,NULL);
+                        if(!memory) { drag=freecam_drag_sample(left_up); drag_event=&drag; }
+                        if(left_up) g_selection_pointer_freecam=0;
+                    }
+                    if(!mapped && left_up && was_held) {
+                        /* Release in the margins at the last guest position
+                           instead of silently dropping the SDL button-up. */
+                        if(memory) {
+                            memory[0x00376ABFu]=0;
+                            memory[0x00376AC2u]=0;
+                        } else if(g_interactive_input_mutex) {
+                            SDL_LockMutex(g_interactive_input_mutex);
+                            if(drag_event) g_drag_pending=*drag_event;
+                            g_interactive_input_left_held=0;
+                            SDL_UnlockMutex(g_interactive_input_mutex);
+                        }
+                        continue;
+                    }
                     if(mapped==2) {
                         if(ev.type==SDL_MOUSEBUTTONDOWN || ev.type==SDL_MOUSEBUTTONUP) {
                             if(memory) {
@@ -20250,7 +20365,7 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
                     memory[0x00376AC0u]=0; memory[0x00376AC3u]=0;
                 }
                 if(trace_mouse) fprintf(stderr,"TRACE sdl_mouse_adapter seq=%u turn=%u logical=%d,%d raw_after_event=edge:%02x held:%02x mousebyte:%02x\n",seq,trace_turn,x,y,memory[0x00376ABFu],memory[0x00376AC2u],memory[0x002F146Du]);
-            } else interactive_mailbox_mouse(x,y,ev.type,ev.button.button);
+            } else interactive_mailbox_mouse_and_drag(x,y,ev.type,ev.button.button,drag_event);
             n++;
         } else if((ev.type==SDL_KEYDOWN || ev.type==SDL_KEYUP) && !ev.key.repeat) {
             if(g_interactive_demo_mode && ev.type==SDL_KEYDOWN &&
@@ -20313,7 +20428,8 @@ static unsigned poll_sdl_into_lbdisplay(uint8_t *memory) {
                 } else {
                     SDL_LockMutex(g_interactive_input_mutex);
                     g_interactive_input_x=x; g_interactive_input_y=y; g_interactive_input_valid=1;
-                    g_interactive_input_left_held=(buttons&SDL_BUTTON(SDL_BUTTON_LEFT))?1:0;
+                    g_interactive_input_left_held=g_interactive_input_left_edge ||
+                        (buttons&SDL_BUTTON(SDL_BUTTON_LEFT));
                     g_interactive_input_right_held=(buttons&SDL_BUTTON(SDL_BUTTON_RIGHT))?1:0;
                     SDL_UnlockMutex(g_interactive_input_mutex);
                 }
@@ -21456,6 +21572,11 @@ static void publish_interactive_visual_snapshot(uint8_t *memory,uint32_t wscreen
         const int in_ifc_main=*(const uint32_t *)(memory+0x002EF7E8u)==0x0035FE9Au && !*(const uint32_t *)(memory+0x002EF7ECu) &&
             *(const uint16_t *)(memory+map_guest+0x1Du)==128u;
         g_interactive_published_snapshot.in_mission=in_ifc_main;
+        /* Original box drawer 0x1E000 tests bit 0 at selector+0x267
+           and loads the outline palette index from 0x360A4D. */
+        g_interactive_published_snapshot.selection_box_active=in_ifc_main &&
+            (memory[0x0035FBB6u+0x267u]&1u);
+        g_interactive_published_snapshot.selection_box_color=memory[0x00360A4Du];
         if(canvas && in_ifc_main && ring && ring<=GUEST_LIMIT-GW_CANVAS_W*GW_CANVAS_H)
             terrain_gpu_publish(memory,ring);
         g_interactive_published_snapshot.terrain_mesh.count=0;

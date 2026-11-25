@@ -3349,6 +3349,15 @@ if partial:
             "/* 0x00079E9B: right-edge scroll column (639 at 640) */\n    _flag_a = (uint32_t)(eax); _flag_b = (uint32_t)(GW_WS_VIEW_W - 1u);")
     # IFCMain draw (0x22F40): MapDisplay::Draw returns at 0x22F58, everything after it in the same frame is drawn
     # over the map (the HUD pass); the zoom-out canvas records the HUD's pixels on the map's left edge from there
+    # Camera-free selection only changes the size gate and the two spatial
+    # predicates. The original selector keeps ownership of group mutation.
+    for site, code in (
+        (0x1DFA7, "int box = gw_freecam_drag_threshold(); if (box >= 0) { if (box) goto L_0001DFC3; goto L_0001DFDE; }"),
+        (0x1E393, "int hit = gw_freecam_entity_in_drag_rect(esi); if (hit >= 0) { if (hit) goto L_0001E400; goto L_0001E41D; }"),
+        (0x1E4BA, "int hit = gw_freecam_entity_in_drag_rect(esi); if (hit >= 0) { if (hit) goto L_0001E527; goto L_0001E554; }"),
+    ):
+        insn = f"    if (!gw_recomp_guest_instruction(0x{site:08X}u)) return;"
+        ws_rule(insn, insn + "\n    { " + code + " }")
     ws_rule("    if (!gw_recomp_guest_instruction(0x00022F40u)) return;",
             "    if (!gw_recomp_guest_instruction(0x00022F40u)) return;\n"
             "    gw_entity_coverage_begin_frame();")
@@ -3585,6 +3594,8 @@ if partial:
             "#define GW_WS_POOL_CAP(md) ((g_gw_ws_drawpool && (uint32_t)(md) == 0x00346D70u) ? GW_WS_DRAWPOOL_ENTRIES : 0x100u)\n"
             "void (*g_gw_ws_band_copy)(void) = 0;\n"
             "void gw_entity_coverage_begin_frame(void);\n"
+            "int gw_freecam_drag_threshold(void);\n"
+            "int gw_freecam_entity_in_drag_rect(uint32_t);\n"
             "void (*g_gw_ws_after_map)(void) = 0;\n"
             "void (*g_gw_ws_info_begin)(uint32_t) = 0;\n"
             "void (*g_gw_ws_info_end)(void) = 0;\n"
