@@ -3,12 +3,12 @@
 
 /* Included by the host compositor after the terrain and atlas definitions. */
 typedef struct gw_native_vertex {
-    float x,y,z,u,v,owner;
+    float x,y,z,u,v,owner,wx,wy,wz,effect;
 } gw_native_vertex;
 
 static struct {
     GLuint shader,mask,layers[3];
-    GLint sprites,ownership,ring,offset;
+    GLint sprites,ownership,ring,offset,light_on,sun,sunc,sky,plpos,plcol,plcount,reflect;
     int failed,valid[3];
 } g_native_gl;
 
@@ -17,15 +17,20 @@ static int native_gl_init(void) {
     if(g_native_gl.shader) return 1;
     static const char *vs=
         "#version 120\n"
-        "attribute vec3 a_pos; attribute vec2 a_uv; attribute float a_suv;\n"
-        "varying vec2 uv; varying float owner;\n"
-        "void main(){ gl_Position=vec4(a_pos.xy*2.0/vec2(1152.0,640.0)-1.0,a_pos.z,1.0);"
-        " uv=a_uv; owner=a_suv; }\n";
+        "attribute vec3 a_pos; attribute vec2 a_uv; attribute float a_suv; attribute vec4 a_world;\n"
+        "uniform float u_reflect;\n"
+        "varying vec2 uv,canvas; varying float owner,effect; varying vec3 world;\n"
+        "void main(){ vec3 p=a_pos; canvas=p.xy; world=a_world.xyz; effect=a_world.w;\n"
+        "  if(u_reflect>0.5){ float h=world.z*39.19-22.0; p.y+=2.0*h; p.x=(p.x-128.0)*1.125; p.z+=0.0005*h; }\n"
+        "  gl_Position=vec4(p.xy*2.0/vec2(1152.0,640.0)-1.0,p.z,1.0); uv=a_uv; owner=a_suv; }\n";
     static const char *fs=
         "#version 120\n"
         "uniform sampler2D u_sprites,u_ownership,u_ring; uniform vec2 u_offset;\n"
-        "varying vec2 uv; varying float owner;\n"
-        "void main(){ vec2 p=floor(gl_FragCoord.xy), sz=vec2(1152.0,640.0);"
+        "uniform float u_light_on,u_reflect; uniform vec3 u_sun,u_sunc,u_sky;"
+        "uniform vec4 u_plpos[16],u_plcol[16]; uniform int u_plcount;\n"
+        "varying vec2 uv,canvas; varying float owner,effect; varying vec3 world;\n"
+        "void main(){ vec2 p=floor(u_reflect>0.5?canvas:gl_FragCoord.xy), sz=vec2(1152.0,640.0);"
+        " if(u_reflect>0.5 && world.z<22.0/39.19) discard;"
         " if(p.x<128.0) discard;"
         " vec2 r=vec2(128.0+mod(p.x-256.0+u_offset.x,1024.0),mod(p.y+u_offset.y,640.0));"
         " if(texture2D(u_ring,(r+0.5)/sz).r<0.002) discard;"
@@ -39,14 +44,36 @@ static int native_gl_init(void) {
         "   float f=1.0-smoothstep(0.05,1.0,r2);"
         "   gl_FragColor=vec4(0.0,0.0,0.0,(-owner)*pow(f,1.35));"
         " } else {"
-        "   vec4 c=texture2D(u_sprites,uv); if(c.a<=0.0) discard; gl_FragColor=c;"
+        "   vec4 c=texture2D(u_sprites,uv); if(c.a<=0.0) discard;"
+        "   if(u_light_on>0.5 && effect<0.5){"
+        "     float mx=max(c.r,max(c.g,c.b)), mn=min(c.r,min(c.g,c.b));"
+        "     float emissive=smoothstep(0.72,0.96,mx)*smoothstep(0.52,0.85,mx-mn);"
+        "     vec2 edge=vec2(u_sun.x-u_sun.y,-max(0.2,u_sun.z));"
+        "     float rim=1.0-texture2D(u_sprites,uv+normalize(edge)/1024.0).a;"
+        "     vec3 point=vec3(0.0);"
+        "     for(int i=0;i<16;i++){ if(i>=u_plcount) break;"
+        "       vec3 d=u_plpos[i].xyz-world; d.xy=mod(d.xy+64.0,128.0)-64.0;"
+        "       float a=max(0.0,1.0-length(d)/max(0.01,u_plpos[i].w));"
+        "       point+=u_plcol[i].rgb*(u_plcol[i].w*a*a); }"
+        "     vec3 tint=vec3(0.83)+0.12*u_sky+0.10*u_sunc;"
+        "     vec3 lit=c.rgb*tint+(vec3(1.0)-c.rgb)*(0.09*rim*u_sunc+0.26*point/(vec3(1.0)+point));"
+        "     c.rgb=mix(lit,c.rgb,emissive);"
+        "   } gl_FragColor=c;"
         " } }\n";
-    g_native_gl.shader=bloom_link_program(vs,fs);
+    g_native_gl.shader=tl_link(vs,fs);
     if(!g_native_gl.shader) { g_native_gl.failed=1; return 0; }
     g_native_gl.sprites=g_bloom.GetUniformLocation(g_native_gl.shader,"u_sprites");
     g_native_gl.ownership=g_bloom.GetUniformLocation(g_native_gl.shader,"u_ownership");
     g_native_gl.ring=g_bloom.GetUniformLocation(g_native_gl.shader,"u_ring");
     g_native_gl.offset=g_bloom.GetUniformLocation(g_native_gl.shader,"u_offset");
+    g_native_gl.light_on=g_bloom.GetUniformLocation(g_native_gl.shader,"u_light_on");
+    g_native_gl.sun=g_bloom.GetUniformLocation(g_native_gl.shader,"u_sun");
+    g_native_gl.sunc=g_bloom.GetUniformLocation(g_native_gl.shader,"u_sunc");
+    g_native_gl.sky=g_bloom.GetUniformLocation(g_native_gl.shader,"u_sky");
+    g_native_gl.plpos=g_bloom.GetUniformLocation(g_native_gl.shader,"u_plpos");
+    g_native_gl.plcol=g_bloom.GetUniformLocation(g_native_gl.shader,"u_plcol");
+    g_native_gl.plcount=g_bloom.GetUniformLocation(g_native_gl.shader,"u_plcount");
+    g_native_gl.reflect=g_bloom.GetUniformLocation(g_native_gl.shader,"u_reflect");
     g_native_gl.mask=gm_tex(1152,640,GL_R8,GL_RED);
     for(unsigned i=0;i<3;i++) g_native_gl.layers[i]=gm_tex(1152,640,GL_RGBA8,GL_RGBA);
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_gl_mesh.fbo);
@@ -119,15 +146,20 @@ static float native_slope_sink_px(const gw_terrain_mesh_draw *mesh,const gw_enti
 }
 
 static void native_billboard(gw_native_vertex **out,const gw_native_draw *draw,
-        gw_sprite_atlas_rect rect,unsigned owner,float depth,float sink_px) {
+        gw_sprite_atlas_rect rect,unsigned owner,float depth,float sink_px,float wx,float wy) {
     const float x0=(float)draw->x,y0=(float)draw->y+sink_px,x1=x0+rect.w,y1=y0+rect.h;
     const float z1=depth-0.0010f;
     const float z0=z1-(float)rect.h*0.00025f;
     const float scale=1.0f/GW_SPRITE_ATLAS_SIZE;
     const float u0=rect.x*scale,v0=rect.y*scale,u1=(rect.x+rect.w)*scale,v1=(rect.y+rect.h)*scale;
     const float n=(float)owner;
-    native_quad(out,(gw_native_vertex){x0,y0,z0,u0,v0,n},(gw_native_vertex){x1,y0,z0,u1,v0,n},
-        (gw_native_vertex){x0,y1,z1,u0,v1,n},(gw_native_vertex){x1,y1,z1,u1,v1,n});
+    const float bottom=(draw->entity.world_z_q6/64.0f-sink_px)*TL_ZS;
+    const float top=bottom+(float)rect.h*TL_ZS;
+    const float effect=draw->entity.type==GW_ENTITY_EFFECT?1.0f:0.0f;
+    native_quad(out,(gw_native_vertex){x0,y0,z0,u0,v0,n,wx,wy,top,effect},
+        (gw_native_vertex){x1,y0,z0,u1,v0,n,wx,wy,top,effect},
+        (gw_native_vertex){x0,y1,z1,u0,v1,n,wx,wy,bottom,effect},
+        (gw_native_vertex){x1,y1,z1,u1,v1,n,wx,wy,bottom,effect});
 }
 
 static gw_native_vertex native_shadow_vertex(const gw_terrain_mesh_draw *mesh,
@@ -306,7 +338,7 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
             translucent[j]=i;
         } else {
             const float sink=native_slope_sink_px(mesh,&d->entity,g_native_rects[slot].w,rx,ry);
-            native_billboard(&end,d,g_native_rects[slot],i+1u,depth[i],sink);
+            native_billboard(&end,d,g_native_rects[slot],i+1u,depth[i],sink,rx,ry);
         }
     }
     const GLsizei opaque=(GLsizei)(end-vertices);
@@ -317,7 +349,7 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
         const float rx=native_relative(d->entity.world_x_q8,mesh->view_col);
         const float ry=native_relative(d->entity.world_y_q8,mesh->view_row);
         const float sink=native_slope_sink_px(mesh,&d->entity,g_native_rects[slot].w,rx,ry);
-        native_billboard(&end,d,g_native_rects[slot],i+1u,depth[i],sink);
+        native_billboard(&end,d,g_native_rects[slot],i+1u,depth[i],sink,rx,ry);
     }
 
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_gl_mesh.fbo);
@@ -333,6 +365,20 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
     /* Store premultiplied colour and remaining background in alpha. */
     g_bloom.BlendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ZERO,GL_ONE_MINUS_SRC_ALPHA);
     g_bloom.UseProgram(g_native_gl.shader);
+    g_bloom.Uniform1f(g_native_gl.reflect,0.0f);
+    g_bloom.Uniform1f(g_native_gl.light_on,g_t3.ready && g_ini_terrain_3d_entity_lighting?1.0f:0.0f);
+    int lights=0;
+    if(g_t3.ready) {
+        g_t3.Uniform3f(g_native_gl.sun,g_t3.sun[0],g_t3.sun[1],g_t3.sun[2]);
+        g_t3.Uniform3f(g_native_gl.sunc,g_t3.sunc[0],g_t3.sunc[1],g_t3.sunc[2]);
+        g_t3.Uniform3f(g_native_gl.sky,g_t3.sky[0],g_t3.sky[1],g_t3.sky[2]);
+        if(g_pl_on && g_ini_terrain_3d_lights && g_ini_terrain_3d_entity_lighting) lights=g_t3.pl_n;
+        if(lights) {
+            g_t3.Uniform4fv(g_native_gl.plpos,lights,&g_t3.pl_pos[0][0]);
+            g_t3.Uniform4fv(g_native_gl.plcol,lights,&g_t3.pl_col[0][0]);
+        }
+    }
+    g_bloom.Uniform1i(g_native_gl.plcount,lights);
     native_bind(0,g_atlas_probe_gl.texture,g_native_gl.sprites);
     native_bind(1,g_native_gl.mask,g_native_gl.ownership);
     native_bind(2,g_gm.t_ring,g_native_gl.ring);
@@ -342,6 +388,8 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
     g_bloom.VertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof *vertices,(const void *)0);
     g_bloom.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,sizeof *vertices,(const void *)offsetof(gw_native_vertex,u));
     g_bloom.VertexAttribPointer(2,1,GL_FLOAT,GL_FALSE,sizeof *vertices,(const void *)offsetof(gw_native_vertex,owner));
+    g_bloom.EnableVertexAttribArray(3);
+    g_bloom.VertexAttribPointer(3,4,GL_FLOAT,GL_FALSE,sizeof *vertices,(const void *)offsetof(gw_native_vertex,wx));
     g_gl_mesh.DepthMask(GL_FALSE);
     g_bloom.Enable(GL_POLYGON_OFFSET_FILL);
     g_gl_mesh.PolygonOffset(-2.0f,-2.0f);
@@ -351,6 +399,17 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
     g_bloom.DrawArrays(GL_TRIANGLES,shadows,opaque-shadows);
     g_gl_mesh.DepthMask(GL_FALSE);
     g_bloom.DrawArrays(GL_TRIANGLES,opaque,(GLsizei)(end-vertices)-opaque);
+    if(g_t3.reflected[1]) {
+        g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.reflect_fbo);
+        g_bloom.Viewport(0,0,TL_REFLECT_W,TL_REFLECT_H);
+        g_bloom.Uniform1f(g_native_gl.reflect,1.0f);
+        g_gl_mesh.DepthMask(GL_TRUE);
+        g_bloom.DrawArrays(GL_TRIANGLES,shadows,opaque-shadows);
+        g_gl_mesh.DepthMask(GL_FALSE);
+        g_bloom.DrawArrays(GL_TRIANGLES,opaque,(GLsizei)(end-vertices)-opaque);
+        g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_gl_mesh.fbo);
+    }
+    g_bloom.DisableVertexAttribArray(3);
     g_bloom.VertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(const void *)0);
     g_bloom.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(const void *)(2*sizeof(float)));
     g_bloom.VertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(const void *)(4*sizeof(float)));

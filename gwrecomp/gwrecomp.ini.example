@@ -64,11 +64,18 @@ terrain_3d_hd_tiles = 1
 terrain_3d_biome_presets = 1
 ; 1 = the mouse wheel zoom of the map eases smoothly (Home = back to 1x); 0 = each wheel notch applies at once
 terrain_3d_smooth_zoom = 1
-; 1 = 360-degree Populous-style free camera over the 3D terrain (Middle drag or Alt+Left drag to orbit/tilt,
-;     Q/E to yaw, R/F to pitch, Home to reset to classic isometric view); 0 = lock classic camera angle
-terrain_3d_freecam = 1
-; 1 = gentle curved planetary horizon with pure black starry sky when tilting low in freecam; 0 = flat horizon
-terrain_3d_planet_curve = 1
+; v3.1 fixes the original isometric camera. The following two settings
+; document its mode and are reserved for compatibility with other branches.
+terrain_3d_freecam = 0
+terrain_3d_planet_curve = 0
+; Biome tint, sprite rim and the nearby 3D lights on native billboards.
+terrain_3d_entity_lighting = 1
+; Planar water reflections, shallow refraction and wet coastline.
+terrain_3d_water_reflections = 1
+; Quarter resolution selective bloom when emissive_bloom is also enabled.
+terrain_3d_bloom = 1
+; Biome atmosphere when hd2d_particles is also enabled.
+terrain_3d_particles = 1
 ; 1 = the pointer follows the mouse every presented frame (120 Hz); 0 = it moves once per game tick, like the original
 cursor_120hz = 1
 ; 1 = remove the 1-pixel slivers the original terrain drawing leaves on the planet's horizon (shown frame only)

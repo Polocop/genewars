@@ -8536,7 +8536,10 @@ static int g_ini_terrain_3d_hd_tiles=1;  /* terrain_3d_hd_tiles: optional HD B32
 static char g_ini_terrain_3d_hd_dir[600];/* terrain_3d_hd_dir: folder holding <BANK>/atlas.png or tile_NNN.png (default: hd_textures next to the exe) */
 static int g_ini_terrain_3d_biome_presets=1; /* terrain_3d_biome_presets: light / particle preset from the level's B32 bank */
 static int g_ini_terrain_3d_smooth_zoom=1;   /* terrain_3d_smooth_zoom: eased wheel zoom (0 = immediate steps) */
-static int g_ini_terrain_3d_freecam=1,g_ini_terrain_3d_planet_curve=1;
+/* Isometric presentation keeps the original input and camera projection. */
+static const int g_ini_terrain_3d_freecam=0,g_ini_terrain_3d_planet_curve=0;
+static int g_ini_terrain_3d_entity_lighting=1,g_ini_terrain_3d_water_reflections=1;
+static int g_ini_terrain_3d_bloom=1,g_ini_terrain_3d_particles=1;
 static int g_ini_cursor_120hz=1;
 static int g_ini_music_volume=100,g_ini_sfx_volume=100;   /* music_volume / sfx_volume: host output gain 0..100 */             /* cursor_120hz: pointer at the host mouse every presented frame (0 = per game tick) */
 static int g_pl_on=1,g_hd_on=1;          /* live toggles: Ctrl+F11 point lights, Ctrl+F12 HD tiles (host presentation thread) */
@@ -8647,8 +8650,10 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"terrain_3d_lights")) g_ini_terrain_3d_lights=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_biome_presets")) g_ini_terrain_3d_biome_presets=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_smooth_zoom")) g_ini_terrain_3d_smooth_zoom=atoi(val)!=0;
-        else if(!strcmp(key,"terrain_3d_freecam")) g_ini_terrain_3d_freecam=atoi(val)!=0;
-        else if(!strcmp(key,"terrain_3d_planet_curve")) g_ini_terrain_3d_planet_curve=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_entity_lighting")) g_ini_terrain_3d_entity_lighting=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_water_reflections")) g_ini_terrain_3d_water_reflections=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_bloom")) g_ini_terrain_3d_bloom=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_particles")) g_ini_terrain_3d_particles=atoi(val)!=0;
         else if(!strcmp(key,"cursor_120hz")) g_ini_cursor_120hz=atoi(val)!=0;
         else if(!strcmp(key,"music_volume")) { const int v=atoi(val); g_ini_music_volume=v<0?0:v>100?100:v; }
         else if(!strcmp(key,"sfx_volume")) { const int v=atoi(val); g_ini_sfx_volume=v<0?0:v>100?100:v; }
@@ -9884,7 +9889,7 @@ static struct {
     GLuint fbo_eig,tex_eig;
     GLuint vbo;
     GLuint prog_extract,prog_down,prog_up,prog_comp;
-    GLint u_ext_idx,u_ext_lut,u_ext_hud,u_ext_texel;
+    GLint u_ext_idx,u_ext_lut,u_ext_hud,u_ext_texel,u_ext_scene,u_ext_native,u_ext_lit,u_ext_entities;
     GLint u_down_tex,u_down_hp;
     GLint u_up_tex,u_up_prev,u_up_hp;
     GLint u_comp_base,u_comp_bloom,u_comp_hud,u_comp_int;
@@ -10065,6 +10070,7 @@ static int bloom_ensure_init(int logical_w) {
             "uniform vec2 u_texel;\n"
             "varying vec2 v_uv;\n"
             "varying vec2 v_suv;\n"
+            "uniform sampler2D u_ext_lit,u_ext_entities; uniform float u_ext_scene,u_ext_native;\n"
             "vec3 sample_emissive(vec2 uv){\n"
             "  vec2 rg=texture2D(u_idx_tex,uv).rg;\n"
             "  float idx_u=(floor(rg.r*255.0+0.5)+0.5)/256.0;\n"
@@ -10075,12 +10081,25 @@ static int bloom_ensure_init(int logical_w) {
             "  vec3 col=texture2D(u_lut,vec2(idx_u,0.25)).rgb;\n"
             "  vec3 meta=texture2D(u_lut,vec2(idx_u,0.75)).rgb;\n"
             "  float w=is_gnd!=0?meta.g:meta.r;\n"
-            "  if(w<=0.001) return vec3(0.0);\n"
+            "  vec3 seed=vec3(0.0);\n"
+            "  if(u_ext_scene>0.5 && is_gnd!=0 && rg.r>0.0){\n"
+            "    vec4 surface=texture2D(u_ext_lit,uv);\n"
+            "    float peak=max(surface.r,max(surface.g,surface.b));\n"
+            "    float low=min(surface.r,min(surface.g,surface.b));\n"
+            "    seed=surface.rgb*smoothstep(0.82,1.0,peak)*smoothstep(0.14,0.5,peak-low);\n"
+            "    if(u_ext_native>0.5){\n"
+            "      vec4 entity=texture2D(u_ext_entities,vec2((128.0+uv.x*1024.0)/1152.0,uv.y));\n"
+            "      vec3 e=entity.rgb/max(0.01,1.0-entity.a);\n"
+            "      float hi=max(e.r,max(e.g,e.b)), lo=min(e.r,min(e.g,e.b));\n"
+            "      seed=seed*entity.a+entity.rgb*smoothstep(0.76,0.95,hi)*smoothstep(0.42,0.75,hi-lo);\n"
+            "    }\n"
+            "  }\n"
+            "  if(w<=0.001) return seed;\n"
             "  float boost=meta.b*(255.0/64.0);\n"
             "  vec3 lin=pow(col,vec3(2.2));\n"
             "  float lum=dot(lin,vec3(0.2126,0.7152,0.0722));\n"
             "  float soft=smoothstep(0.04,0.22,lum*w+w*0.15);\n"
-            "  return lin*(w*soft*boost);\n"
+            "  return max(seed,lin*(w*soft*boost));\n"
             "}\n"
             "void main(){\n"
             "  if(texture2D(u_hud_mask,v_suv).r>0.5){ gl_FragColor=vec4(0.0,0.0,0.0,1.0); return; }\n"
@@ -10150,6 +10169,7 @@ static int bloom_ensure_init(int logical_w) {
             "  if(u_wt_on>0.5){ vec4 w=texture2D(u_wt,v_suv); base=mix(base,w.rgb,w.a); }\n"
             "  if(u_ao_on>0.5) base*=texture2D(u_ao,v_suv).r;\n"
             "  vec3 b=texture2D(u_bloom,v_suv).rgb*u_intensity;\n"
+            "  if(v_suv.x<u_hud_x || max(base.r,max(base.g,base.b))<0.002) b=vec3(0.0);\n"
             "  if(dot(b,vec3(1.0))<1e-5){ gl_FragColor=vec4(base,1.0); return; }\n"
             "  vec3 base_lin=pow(max(base,0.0),vec3(2.2));\n"
             "  vec3 b_soft=b/(vec3(1.0)+b*0.65);\n"
@@ -10196,6 +10216,10 @@ static int bloom_ensure_init(int logical_w) {
         g_bloom.u_ext_lut=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_lut");
         g_bloom.u_ext_hud=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_hud_mask");
         g_bloom.u_ext_texel=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_texel");
+        g_bloom.u_ext_scene=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_ext_scene");
+        g_bloom.u_ext_native=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_ext_native");
+        g_bloom.u_ext_lit=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_ext_lit");
+        g_bloom.u_ext_entities=g_bloom.GetUniformLocation(g_bloom.prog_extract,"u_ext_entities");
         g_bloom.u_down_tex=g_bloom.GetUniformLocation(g_bloom.prog_down,"u_tex");
         g_bloom.u_down_hp=g_bloom.GetUniformLocation(g_bloom.prog_down,"u_halfpixel");
         g_bloom.u_up_tex=g_bloom.GetUniformLocation(g_bloom.prog_up,"u_tex");
@@ -10344,7 +10368,7 @@ static void bloom_classify(const uint8_t *pal) {
 
 static int bloom_active(const gw_interactive_visual_snapshot *v) {
     if(g_bloom_env_disable<0) { const char *e=getenv("GW_BLOOM_DISABLE"); g_bloom_env_disable=e && e[0]=='1'; }
-    return g_cli_play_mode && g_ini_emissive_bloom && g_ini_bloom_intensity>0.001f && !g_bloom_env_disable &&
+    return g_cli_play_mode && (!g_terrain_3d || g_ini_terrain_3d_bloom) && g_ini_emissive_bloom && g_ini_bloom_intensity>0.001f && !g_bloom_env_disable &&
            !g_bloom.failed && v && v->valid && v->in_mission && v->fx_ring_valid && !g_terrain_modern_backend &&
            v->ring_left==128;
 }
@@ -10457,7 +10481,7 @@ static struct {
     GLuint t_idx,t_ring,t_hgt,t_msk,t_shade,t_kind,tmp1,tmp2,fbo,map_fbo,map_tex;
     GLuint aux[3];
     int native_selected;
-    GLint pk_owned,pk_native,cd_owned,cd_native,mp_entity,mp_native;
+    GLint pk_owned,pk_native,cd_owned,cd_native,mp_entity,mp_native,mp_reflect,mp_reflect_on;
     int map_w,map_h,ring_x,ring_y,kind_ok;
     GLuint p_pack,p_cand,p_blurh,p_blurv,p_map,p_hud;
     GLint hu_idx,hu_lut;
@@ -10643,7 +10667,7 @@ static int gm_init(void) {
         "#version 120\n"
         "uniform sampler2D u_pk; uniform sampler2D u_aux; uniform sampler2D u_lut; uniform sampler2D u_lit; uniform sampler2D u_kind;\n"
         "uniform vec3 u_view; uniform vec2 u_lsz; uniform float u_time; uniform vec3 u_sun,u_sunc,u_sky;\n"
-        "uniform sampler2D u_entity; uniform float u_native;\n"
+        "uniform sampler2D u_entity,u_reflect; uniform float u_native,u_reflect_on;\n"
         "varying vec2 v_uv;\n"
         "vec3 lut(float k){ return texture2D(u_lut,vec2((k+0.5)/256.0,0.25)).rgb; }\n"
         "float hh(vec2 q){ vec3 p3=fract(vec3(q.xyx)*0.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }\n"
@@ -10698,8 +10722,21 @@ static int gm_init(void) {
         "          float c1=sin(q.x*301.0+2.2*sin(q.y*173.0+t*1.1)+t*1.2), c2=sin(q.y*287.0+2.2*sin(q.x*191.0-t*0.9)-t*1.0);\n"
         "          float cs=pow(1.0-abs(c1*c2),6.0);\n"
         "          w+=vec3(0.10,0.17,0.16)*cs*(1.0-smoothstep(0.0,0.55,dep))*lum;\n"
+        "          if(u_reflect_on>0.5 && dep<0.60){\n"
+        "            vec2 probe=sb+vec2(N.x-N.y,(N.x+N.y)*0.5)*vec2(3.2/1024.0,3.2/640.0);\n"
+        "            vec4 bed=texture2D(u_lit,probe);\n"
+        "            if(all(greaterThan(probe,vec2(0.0))) && all(lessThan(probe,vec2(1.0))) && bed.a>0.05 && bed.a<0.625){\n"
+        "              float shallow=(1.0-smoothstep(0.10,0.60,dep))*lum;\n"
+        "              w=mix(w,bed.rgb*(1.0+cs*0.13),exp(-vec3(3.6,1.9,1.3)*dep)*0.55*shallow);\n"
+        "            }\n"
+        "          }\n"
         "          col=mix(w,u_sky*(0.55+0.35*R.z)*lum,clamp(F*2.0,0.0,0.4))+u_sunc*sp*lum*(1.0-0.4*dep);\n"
 
+        "          if(u_reflect_on>0.5 && a.a>0.02 && c>0.0){\n"
+        "            vec2 ruv=v_uv+N.xy*vec2(3.5/1024.0,3.0/640.0);\n"
+        "            vec4 mirror=texture2D(u_reflect,ruv);\n"
+        "            col=mix(col,mirror.rgb*vec3(0.72,0.85,0.92),clamp(F*3.0,0.13,0.50)*(0.2+0.8*smoothstep(0.04,0.7,dep))*smoothstep(0.01,0.08,max(mirror.r,max(mirror.g,mirror.b))));\n"
+        "          }\n"
         "          /* foam: hugging the real (texel) coastline, broken by animated noise; nothing triangular */\n"
         "          float n=vn(W*9.0+vec2(t*0.35,-t*0.27),1152.0)*0.6+vn(W*23.0-vec2(t*0.6,t*0.5),2944.0)*0.4;\n"
         "          float land=0.0;\n"
@@ -10742,6 +10779,7 @@ static int gm_init(void) {
     g_gm.pk_owned=GMU(p_pack,"u_owned"); g_gm.pk_native=GMU(p_pack,"u_native");
     g_gm.cd_owned=GMU(p_cand,"u_owned"); g_gm.cd_native=GMU(p_cand,"u_native");
     g_gm.mp_entity=GMU(p_map,"u_entity"); g_gm.mp_native=GMU(p_map,"u_native");
+    g_gm.mp_reflect=GMU(p_map,"u_reflect"); g_gm.mp_reflect_on=GMU(p_map,"u_reflect_on");
     g_gm.mp_pk=GMU(p_map,"u_pk"); g_gm.mp_aux=GMU(p_map,"u_aux"); g_gm.mp_lut=GMU(p_map,"u_lut");
     g_gm.mp_lit=GMU(p_map,"u_lit"); g_gm.mp_view=GMU(p_map,"u_view"); g_gm.mp_lsz=GMU(p_map,"u_lsz"); g_gm.mp_time=GMU(p_map,"u_time");
     g_gm.mp_sun=GMU(p_map,"u_sun"); g_gm.mp_sunc=GMU(p_map,"u_sunc"); g_gm.mp_sky=GMU(p_map,"u_sky"); g_gm.mp_kind=GMU(p_map,"u_kind");
@@ -11102,12 +11140,12 @@ static double g_pt_ax,g_pt_ay;                     /* unwrapped ring scroll of t
 static int g_pt_lrx,g_pt_lry,g_pt_have;
 static uint64_t g_pt_t;                            /* last update (performance counter) */
 static uint32_t g_pt_rng=0x9E3779B9u;
-static GLuint g_pt_prog,g_pt_vbo; static GLint g_pt_u_hud,g_pt_u_kind;
+static GLuint g_pt_prog,g_pt_vbo; static GLint g_pt_u_hud,g_pt_u_kind,g_pt_u_scene,g_pt_u_layer,g_pt_u_clip,g_pt_u_inv;
 static float *g_pt_verts;
 static double g_pt_cpu_ms; static uint32_t g_pt_cpu_n,g_pt_drawn;
 static float pt_rand(void) { g_pt_rng^=g_pt_rng<<13; g_pt_rng^=g_pt_rng>>17; g_pt_rng^=g_pt_rng<<5; return (float)(g_pt_rng&0xFFFFFFu)/16777216.0f; }
 static int part_active(const gw_interactive_visual_snapshot *v) {
-    return g_cli_play_mode && g_ini_hd2d_particles && g_ini_particle_density>0.001f && !g_bloom.failed &&
+    return g_cli_play_mode && (!g_terrain_3d || g_ini_terrain_3d_particles) && g_ini_hd2d_particles && g_ini_particle_density>0.001f && !g_bloom.failed &&
            v && v->valid && v->in_mission && v->fx_ring_valid && !g_terrain_modern_backend && g_tex_scale==1 && v->ring_left==128;
 }
 /* the source frame the map layers show: the zoom-out canvas or the frame at its pitch, and its map rectangle */
@@ -11280,10 +11318,16 @@ static int pt_init_gl(void) {
         "void main(){ v_uv=a_uv; v_suv=a_suv; v_col=a_col; gl_Position=vec4(a_pos,0.0,1.0); }\n";
     static const char *fs=
         "#version 120\n"
-        "uniform sampler2D u_hud_mask;\n uniform float u_kind;\n"
+        "uniform sampler2D u_hud_mask,u_scene,u_layer;\n uniform float u_kind,u_clip; uniform vec4 u_inv;\n"
         "varying vec2 v_uv;\n varying vec2 v_suv;\n varying vec4 v_col;\n"
         "void main(){\n"
         "  if(texture2D(u_hud_mask,v_suv).r>0.5) discard;\n"
+        "  if(u_clip>0.5){\n"
+        "    vec3 scene=texture2D(u_scene,v_suv).rgb;\n"
+        "    if(max(scene.r,max(scene.g,scene.b))<0.002) discard;\n"
+        "    if(u_clip>1.5){ vec2 q=(v_suv-u_inv.xy)*u_inv.zw;\n"
+        "      if(texture2D(u_layer,q).a<0.55) discard; }\n"
+        "  }\n"
         "  float d2=dot(v_uv,v_uv); if(d2>=1.0) discard;\n"
         "  float a;\n"
         "  if(u_kind>0.5){ a=exp(-d2*14.0)+0.35*exp(-d2*3.5); a*=1.0-smoothstep(0.7,1.0,d2); }\n"
@@ -11300,6 +11344,8 @@ static int pt_init_gl(void) {
     GLint ok=0; g_bloom.GetProgramiv(p,GL_LINK_STATUS,&ok);
     if(!ok) { g_bloom.DeleteProgram(p); g_ini_hd2d_particles=0; gw_flag_trace("TRACE hd2d_particles link failed%c",10); return 0; }
     g_pt_prog=p; g_pt_u_hud=g_bloom.GetUniformLocation(p,"u_hud_mask"); g_pt_u_kind=g_bloom.GetUniformLocation(p,"u_kind");
+    g_pt_u_scene=g_bloom.GetUniformLocation(p,"u_scene"); g_pt_u_layer=g_bloom.GetUniformLocation(p,"u_layer");
+    g_pt_u_clip=g_bloom.GetUniformLocation(p,"u_clip"); g_pt_u_inv=g_bloom.GetUniformLocation(p,"u_inv");
     g_bloom.GenBuffers(1,&g_pt_vbo);
     g_pt_verts=(float *)malloc((size_t)PT_MAX*6u*10u*sizeof(float));
     if(!g_pt_verts) { g_ini_hd2d_particles=0; return 0; }
@@ -11308,7 +11354,7 @@ static int pt_init_gl(void) {
 }
 /* draws the particles into the bound framebuffer (FBO 0, viewport = the presented map frame), after the composite:
    additive glow pass, then the soft (alpha) pass; the HUD mask texture is on unit 2 */
-static void pt_draw(const gw_interactive_visual_snapshot *v,double interp_a) {
+static void pt_draw(const gw_interactive_visual_snapshot *v,double interp_a,int map_on) {
     if(!pt_init_gl()) return;
     const uint8_t *src; int pitch,rows,sx0,sx1; pt_source(v,&src,&pitch,&rows,&sx0,&sx1);
     const int vw=g_present_w; const double z=pt_zoom();
@@ -11349,6 +11395,17 @@ static void pt_draw(const gw_interactive_visual_snapshot *v,double interp_a) {
     g_pt_drawn=(uint32_t)((nv[0]+nv[1])/6);
     if(!nv[0] && !nv[1]) return;
     g_bloom.UseProgram(g_pt_prog);
+    if(map_on) {
+        const int native=g_native_gl.valid[1] && g_gm.native_selected;
+        native_bind(6,g_gm.map_tex,g_pt_u_scene);
+        native_bind(7,native?g_native_gl.layers[1]:0u,g_pt_u_layer);
+        if(native) {
+            double x,y; pt_project(0.0,0.0,interp_a,&x,&y);
+            g_t3.Uniform4f(g_pt_u_inv,(float)(x/vw),(float)(y/480.0),
+                (float)(vw/(1152.0*z)),(float)(480.0/(640.0*z)));
+        }
+        g_bloom.Uniform1f(g_pt_u_clip,native?2.0f:1.0f);
+    } else g_bloom.Uniform1f(g_pt_u_clip,0.0f);
     g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.hud_tex); g_bloom.Uniform1i(g_pt_u_hud,2);
     g_bloom.ActiveTexture(GL_TEXTURE0);
     g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_pt_vbo);
@@ -11396,6 +11453,7 @@ static void bloom_draw_map_rect(float lx0,float ly0,float lw,float lh,
 /* draws the map layers (zoom-out canvas, interpolated view pair, zoomed or plain view) into the bound FBO with the
    bound program; texture unit 0 gets the index/flags/height textures, texel_loc the source texel size */
 static int g_layers_cur_only;   /* 1: bloom_draw_map_layers draws only the current snapshot's layer (water pass) */
+static int g_layers_emission;
 static GLint g_layers_view_loc=-1;   /* map pass: per layer, its lit 3D texture on unit 7 and (origin col, row, present) */
 static void gm_layer_lit(int k) {
     if(g_layers_view_loc<0) return;
@@ -11403,8 +11461,20 @@ static void gm_layer_lit(int k) {
     native_bind(6,native?g_native_gl.layers[k]:g_gm.t_kind,g_gm.mp_entity);
     g_bloom.Uniform1f(g_gm.mp_native,native?1.0f:0.0f);
     const int on=g_t3.ready && g_gm.lit_applied && g_t3.lhave[k] && g_t3.lit[k];
-    g_bloom.ActiveTexture(GL_TEXTURE7); g_bloom.BindTexture(GL_TEXTURE_2D,on?g_t3.lit[k]:0u); g_bloom.ActiveTexture(GL_TEXTURE0);
+    g_bloom.ActiveTexture(GL_TEXTURE7); g_bloom.BindTexture(GL_TEXTURE_2D,on?g_t3.lit[k]:0u);
+    native_bind(8,on && g_t3.reflected[k]?g_t3.reflection[k]:0u,g_gm.mp_reflect);
+    g_bloom.Uniform1f(g_gm.mp_reflect_on,on && g_t3.reflected[k]?1.0f:0.0f);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
     if(g_t3.Uniform3f) g_t3.Uniform3f(g_layers_view_loc,(float)g_t3.lview[k][0],(float)g_t3.lview[k][1],on?1.0f:0.0f);
+}
+static void gm_layer_emission(int k) {
+    const int lit=g_t3.lhave[k] && g_t3.lit[k];
+    const int native=g_gm.native_selected && g_native_gl.valid[k];
+    native_bind(6,native?g_native_gl.layers[k]:0u,g_bloom.u_ext_entities);
+    native_bind(7,lit?g_t3.lit[k]:0u,g_bloom.u_ext_lit);
+    g_bloom.Uniform1f(g_bloom.u_ext_scene,lit?1.0f:0.0f);
+    g_bloom.Uniform1f(g_bloom.u_ext_native,native?1.0f:0.0f);
+    g_bloom.ActiveTexture(GL_TEXTURE0);
 }
 static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
     const int vw=g_present_w;
@@ -11416,11 +11486,13 @@ static void bloom_draw_map_layers(double interp_a,GLint texel_loc) {
         g_bloom.Uniform2f(texel_loc,1.0f/(float)GW_CANVAS_TEX_W,1.0f/(float)GW_CANVAS_H);
         if(interp_a<1.0 && (idx||idy) && !g_layers_cur_only) {
             if(g_layers_aux) { g_bloom.ActiveTexture(GL_TEXTURE5); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.aux[0]); g_bloom.ActiveTexture(GL_TEXTURE0); gm_layer_lit(0); }
+            if(g_layers_emission) gm_layer_emission(0);
             g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[0]);
             bloom_draw_map_rect((float)(128.0+(GW_CANVAS_MAPX0+interp_a*idx-ux)*z),(float)((interp_a*idy-uy)*z),
                                 tw,th,0.0f,0.0f,1.0f,1.0f,vw);
         }
         if(g_layers_aux) { g_bloom.ActiveTexture(GL_TEXTURE5); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.aux[1]); g_bloom.ActiveTexture(GL_TEXTURE0); gm_layer_lit(1); }
+        if(g_layers_emission) gm_layer_emission(1);
         g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.canvas_tex[1]);
         bloom_draw_map_rect((float)(128.0+(GW_CANVAS_MAPX0-(1.0-interp_a)*idx-ux)*z),
                             (float)((-(1.0-interp_a)*idy-uy)*z),tw,th,0.0f,0.0f,1.0f,1.0f,vw);
@@ -11552,8 +11624,8 @@ static void gm_passes(const gw_interactive_visual_snapshot *v) {
     g_gm.mesh_applied=desired && terrain_gl_render(g_gm.mesh,native && v->atlas_active &&
         v->atlas_probe.draw_count && v->entity_coverage_bytes);
     g_native_gl.valid[1]=0;
-    const int entities=g_gm.mesh_applied && native && native_gl_render(v,g_gm.mesh);
     g_gm.lit_applied=g_gm.mesh_applied && tl_render(g_gm.mesh,g_tl_scale);
+    const int entities=g_gm.mesh_applied && native && native_gl_render(v,g_gm.mesh);
     if(toggled) g_bloom.canvas_ready=1; /* previous layer used the other renderer */
     const float ox=(float)g_gm.ring_x,oy=(float)g_gm.ring_y;
     gm_target(g_bloom.canvas_tex[1]);
@@ -11691,7 +11763,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
                 g_bloom.GetIntegerv(GL_FRAMEBUFFER_BINDING,&pf); g_bloom.GetIntegerv(GL_CURRENT_PROGRAM,&pp);
                 g_bloom.GetIntegerv(GL_ACTIVE_TEXTURE,&pa); g_bloom.GetIntegerv(GL_ARRAY_BUFFER_BINDING,&pv);
                 g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.GetIntegerv(GL_TEXTURE_BINDING_2D,&pt);
-                const int ok=bloom_ensure_init(854) && gm_init() && terrain_gl_init() && tl_init() && (freecam_init_gl() || 1);
+                const int ok=bloom_ensure_init(854) && gm_init() && terrain_gl_init() && tl_init() && (!g_ini_terrain_3d_freecam || freecam_init_gl() || 1);
                 g_bloom.BindFramebuffer(GL_FRAMEBUFFER,(GLuint)pf); g_bloom.UseProgram((GLuint)pp);
                 g_bloom.BindBuffer(GL_ARRAY_BUFFER,(GLuint)pv); g_bloom.BindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
                 g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,(GLuint)pt); g_bloom.ActiveTexture((GLenum)pa);
@@ -11763,11 +11835,14 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     }
     gm_passes(v);   /* GPU map composition: packing and soft shadows of a new game frame */
 
+    const int scene_bloom=bloom_on && g_gm_frame && g_gm.lit_applied;
     if(bloom_on) {
-    /* Pass 1: Emissive Extraction -> fbo_half_a */
+    /* The native scene extracts at quarter resolution; keep the old 2D path. */
     const int vw=g_present_w;
-    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_half_a);
-    g_bloom.Viewport(0,0,g_bloom.half_w,g_bloom.half_h);
+    const int bw=scene_bloom?g_bloom.qtr_w:g_bloom.half_w;
+    const int bh=scene_bloom?g_bloom.qtr_h:g_bloom.half_h;
+    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,scene_bloom?g_bloom.fbo_qtr_a:g_bloom.fbo_half_a);
+    g_bloom.Viewport(0,0,bw,bh);
     g_bloom.Disable(GL_SCISSOR_TEST);
     g_bloom.ClearColor(0.0f,0.0f,0.0f,1.0f);
     g_bloom.Clear(GL_COLOR_BUFFER_BIT);
@@ -11779,21 +11854,25 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.ActiveTexture(GL_TEXTURE0);
     g_bloom.Uniform1i(g_bloom.u_ext_idx,0);
 
-    const int sc_x=(int)(128.0*g_bloom.half_w/(double)vw);
+    const int sc_x=(int)(128.0*bw/(double)vw);
     g_bloom.Enable(GL_SCISSOR_TEST);
-    g_bloom.Scissor(sc_x,0,g_bloom.half_w-sc_x,g_bloom.half_h);
-
+    g_bloom.Scissor(sc_x,0,bw-sc_x,bh);
+    g_bloom.Uniform1f(g_bloom.u_ext_scene,0.0f);
+    g_layers_emission=scene_bloom;
     bloom_draw_map_layers(interp_a,g_bloom.u_ext_texel);
+    g_layers_emission=0;
     g_bloom.Disable(GL_SCISSOR_TEST);
 
     /* Pass 2: Dual Kawase Downsample & Upsample Pyramid */
     g_bloom.UseProgram(g_bloom.prog_down);
     g_bloom.Uniform1i(g_bloom.u_down_tex,0);
-    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_qtr_a);
-    g_bloom.Viewport(0,0,g_bloom.qtr_w,g_bloom.qtr_h);
-    g_bloom.Uniform2f(g_bloom.u_down_hp,0.5f/(float)g_bloom.qtr_w,0.5f/(float)g_bloom.qtr_h);
-    g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_half_a);
-    bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+    if(!scene_bloom) {
+        g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_qtr_a);
+        g_bloom.Viewport(0,0,g_bloom.qtr_w,g_bloom.qtr_h);
+        g_bloom.Uniform2f(g_bloom.u_down_hp,0.5f/(float)g_bloom.qtr_w,0.5f/(float)g_bloom.qtr_h);
+        g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_half_a);
+        bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+    }
 
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_eig);
     g_bloom.Viewport(0,0,g_bloom.eig_w,g_bloom.eig_h);
@@ -11811,6 +11890,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_qtr_a);
     bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
 
+    if(!scene_bloom) {
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_half_b);
     g_bloom.Viewport(0,0,g_bloom.half_w,g_bloom.half_h);
     g_bloom.Uniform2f(g_bloom.u_up_hp,0.5f/(float)g_bloom.qtr_w,0.5f/(float)g_bloom.qtr_h);
@@ -11818,6 +11898,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_half_a);
     bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
 
+    }
     } else {
         g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_bloom.fbo_half_b);
         g_bloom.Viewport(0,0,g_bloom.half_w,g_bloom.half_h);
@@ -11877,7 +11958,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,geo->nearest?GL_NEAREST:GL_LINEAR);
     g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,geo->nearest?GL_NEAREST:GL_LINEAR);
     g_bloom.Uniform1i(g_bloom.u_comp_base,0);
-    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.tex_half_b);
+    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,scene_bloom?g_bloom.tex_qtr_b:g_bloom.tex_half_b);
     g_bloom.Uniform1i(g_bloom.u_comp_bloom,1);
     g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.hud_tex);
     g_bloom.Uniform1i(g_bloom.u_comp_hud,2);
@@ -11911,7 +11992,7 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
     g_bloom.DrawArrays(GL_TRIANGLE_STRIP,0,4);
     (void)SDL_GL_UnbindTexture(scale_target);
     /* hd2d_particles: native-resolution particles over the composed map, same viewport (logical view = this frame) */
-    if(part_on) { pt_update(v); pt_draw(v,interp_a); }
+    if(part_on) { pt_update(v); pt_draw(v,interp_a,map_on); }
 
     /* Restore all GL state for SDL2 */
     g_bloom.DisableVertexAttribArray(2);
