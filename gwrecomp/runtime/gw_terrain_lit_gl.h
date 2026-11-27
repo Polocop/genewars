@@ -31,6 +31,9 @@ static struct {
     GLuint lit[3],fbo,depth_rb;
     GLuint reflection[3],reflect_fbo,reflect_depth;
     int reflected[3],reflect_failed;
+    double last_reflect_ms;
+    int sh_vc,sh_vr,sh_hs,sh_valid;
+    uint32_t bump_tiles_n,bump_tile_addr[259]; int bump_valid;
     GLint l_reflect,l_ring,l_ring_off,l_wet;
     GLuint ao_tex,sh_tex,sh_fbo,sh_rb,nrm_tex,bump_tex,bump_fbo,grid_vbo,grid_ibo;
     int lview[3][2],lhave[3];            /* per canvas layer: display origin (mod 128) and whether it holds a lit frame */
@@ -202,6 +205,12 @@ static int tl_init(void) {
         "  if(u_reflect>0.5){\n"
         "    vec2 rp=vec2(128.0+mod(v_canvas.x-256.0+u_ring_off.x,1024.0),mod(v_canvas.y+u_ring_off.y,640.0));\n"
         "    if(kind==1.0 || v_world.z<22.0*u_zs || v_canvas.x<128.0 || texture2D(u_reflect_ring,rp/vec2(1152.0,640.0)).r<0.002) discard;\n"
+        "    vec3 refl_alb=lut(u_lut,idx);\n"
+        "    float ndl_r=max(dot(N,u_sun),0.0);\n"
+        "    vec3 hemi_r=mix(u_gnd,u_sky,N.z*0.5+0.5);\n"
+        "    vec3 rcol=refl_alb*(hemi_r*(0.42*ao)+u_sunc*(ndl_r*1.15))*u_expo;\n"
+        "    gl_FragColor=vec4(clamp(rcol,0.0,1.0),1.0);\n"
+        "    return;\n"
         "  }\n"
         "  /* 4K micro-detail in world coordinates (periodic over the 128-cell planet): albedo +-10 %, normal relief */\n"
         "  float dn=det(W), dx=det(W+vec2(0.004,0.0))-dn, dy=det(W+vec2(0.0,0.004))-dn;\n"
@@ -229,6 +238,7 @@ static int tl_init(void) {
         /* dynamic point lights: real 3D normal, (1 - d/r)^2 falloff to exactly 0 at the radius, soft knee so they
            lift the scene without burning it to white; only where the mesh draws terrain (never the undrawn black) */
         "  vec3 pl=vec3(0.0), pls=vec3(0.0);\n"
+        "  if(u_pt_light_count>0){\n"
         "  for(int i=0;i<16;i++){\n"
         "    if(i>=u_pt_light_count) break;\n"
         "    vec4 pr=u_pt_light_pos_rad[i]; vec3 Lv=pr.xyz-v_world; Lv.xy=mod(Lv.xy+64.0,128.0)-64.0;\n"
@@ -237,6 +247,7 @@ static int tl_init(void) {
         "    vec3 lc=u_pt_light_col_int[i].rgb*(u_pt_light_col_int[i].w*at);\n"
         "    pl+=lc*(max(dot(Nm,Ld),0.0)*0.85+0.15);\n"
         "    pls+=lc*pow(max(dot(Nm,normalize(Ld+V)),0.0),24.0);\n"
+        "  }\n"
         "  }\n"
         "  pl=pl/(1.0+0.45*pl);\n"
         "  lit+=alb*pl*1.15*mix(0.7,1.0,ao)+pls*0.30*rock;\n"
@@ -248,19 +259,20 @@ static int tl_init(void) {
         "  float a=1.0;\n"
         "  if(water>0.5){\n"
         "    float hpx=v_world.z/u_zs;\n"
-        "    float dep=clamp(1.0-hpx/22.0,0.0,1.0)*0.55+0.45*nt.a;\n"
-        "    dep=clamp(dep+(vn(W*2.5,320.0)-0.5)*0.30+(vn(W*7.0,896.0)-0.5)*0.12,0.0,1.0);\n"
-        "    vec3 shallow=alb*vec3(0.90,1.08,1.04)+vec3(0.00,0.045,0.045);\n"
-        "    vec3 deep=alb*vec3(0.30,0.40,0.60);\n"
-        "    col=mix(shallow,deep,smoothstep(0.0,1.0,dep))*mix(0.55,1.0,sh)*u_wtint;\n"
+        "    float dep_h=clamp((22.0-hpx)/22.0,0.0,1.0);\n"
+        "    float dep=clamp(dep_h*0.55+nt.a*0.45+(vn(W*2.2,281.0)-0.5)*0.12,0.0,1.0);\n"
+        "    vec3 absorb=exp(-vec3(2.8,1.15,0.55)*(dep*1.85));\n"
+        "    vec3 seabed=alb*vec3(0.86,0.95,0.92);\n"
+        "    vec3 deep_ocean=vec3(0.04,0.13,0.27);\n"
+        "    col=mix(deep_ocean,seabed,absorb)*mix(0.62,1.0,sh)*u_wtint;\n"
         "    a=0.1+0.4*dep;\n"
-        "    col+=(alb*0.55+vec3(0.06,0.08,0.09))*pl+pls*0.45;\n"
+        "    col+=(alb*0.45+vec3(0.04,0.06,0.08))*pl+pls*0.35;\n"
         "  } else if(u_wton>0.5 && kind==2.0) a=0.75;\n"
         "  else if(u_wet>0.5){\n"
         "    float h=v_world.z/u_zs-22.0;\n"
-        "    float wet=step(0.0,h)*(1.0-smoothstep(0.5,8.0,h))*smoothstep(0.08,0.42,nt.a);\n"
+        "    float wet=step(0.0,h)*(1.0-smoothstep(0.5,7.5,h))*smoothstep(0.06,0.40,nt.a);\n"
         "    vec3 hh=normalize(u_sun+vec3(0.6124,0.6124,0.5));\n"
-        "    col=col*(1.0-0.14*wet)+0.10*u_sunc*wet*pow(max(dot(Nm,hh),0.0),36.0);\n"
+        "    col=col*(1.0-0.18*wet)+0.09*u_sunc*wet*pow(max(dot(Nm,hh),0.0),32.0);\n"
         "  }\n"
         "  gl_FragColor=vec4(clamp(col,0.0,1.0),a);\n"
         "}\n";
@@ -449,7 +461,7 @@ static void tl_planet(const gw_terrain_mesh_draw *d) {
     }
     g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.ao_tex);
     g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,128,128,GL_RGBA,GL_UNSIGNED_BYTE,aopx);
-    g_t3.nrm_ok=1;
+    g_t3.nrm_ok=1; g_t3.sh_valid=0;
 }
 
 /* the shadow casters around the view and the light's orthographic projection fitted to them */
@@ -665,20 +677,28 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_gl_mesh.DepthFunc(GL_LESS); g_gl_mesh.DepthMask(GL_TRUE); g_gl_mesh.ClearDepth(1.0);
     tl_planet(d);
     const int shadows=g_ini_terrain_3d_shadows!=0;
-    if(shadows) tl_shadow(d);
-    /* bump atlas from the tile atlas just uploaded */
-    g_bloom.Disable(GL_DEPTH_TEST);
-    g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.bump_fbo);
-    g_bloom.Viewport(0,0,512,544);
-    g_bloom.UseProgram(g_t3.prog_bump);
-    g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_t3.b_lut,1);
-    g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,g_gl_mesh.tiles); g_bloom.Uniform1i(g_t3.b_tiles,0);
-    g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_bloom.vbo);
-    g_bloom.VertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(const void *)0);
-    g_bloom.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(const void *)(2*sizeof(float)));
-    g_bloom.VertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(const void *)(4*sizeof(float)));
-    bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
-    g_bloom.Enable(GL_DEPTH_TEST);
+    const int vc0=d->view_col&127,vr0=d->view_row&127;
+    if(shadows && (!g_t3.sh_valid || g_t3.sh_vc!=vc0 || g_t3.sh_vr!=vr0 || g_t3.sh_hs!=d->height_scale)) {
+        tl_shadow(d);
+        g_t3.sh_vc=vc0; g_t3.sh_vr=vr0; g_t3.sh_hs=d->height_scale; g_t3.sh_valid=1;
+    }
+    /* bump atlas from the tile atlas: only re-render when the tile slots actually change */
+    const unsigned tn=d->tiles<259u?d->tiles:259u;
+    if(!g_t3.bump_valid || g_t3.bump_tiles_n!=tn || memcmp(g_t3.bump_tile_addr,d->tile_addr,tn*sizeof(uint32_t))) {
+        g_bloom.Disable(GL_DEPTH_TEST);
+        g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.bump_fbo);
+        g_bloom.Viewport(0,0,512,544);
+        g_bloom.UseProgram(g_t3.prog_bump);
+        g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_t3.b_lut,1);
+        g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,g_gl_mesh.tiles); g_bloom.Uniform1i(g_t3.b_tiles,0);
+        g_bloom.BindBuffer(GL_ARRAY_BUFFER,g_bloom.vbo);
+        g_bloom.VertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(const void *)0);
+        g_bloom.VertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(const void *)(2*sizeof(float)));
+        g_bloom.VertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,6*sizeof(float),(const void *)(4*sizeof(float)));
+        bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
+        g_bloom.Enable(GL_DEPTH_TEST);
+        g_t3.bump_tiles_n=tn; memcpy(g_t3.bump_tile_addr,d->tile_addr,tn*sizeof(uint32_t)); g_t3.bump_valid=1;
+    }
     /* the lit mesh into the current layer */
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.fbo);
     g_bloom.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,g_t3.lit[1],0);
@@ -738,8 +758,17 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_bloom.EnableVertexAttribArray(3);
     g_bloom.VertexAttribPointer(3,3,GL_FLOAT,GL_FALSE,stride,(const void *)offsetof(gw_terrain_mesh_vertex,wx));
     g_gl_mesh.DrawElements(GL_TRIANGLES,(GLsizei)d->count,GL_UNSIGNED_SHORT,0);
-    g_t3.reflected[1]=0;
-    if(g_ini_terrain_3d_water && g_ini_terrain_3d_water_reflections && g_gm.t_ring && tl_reflection_init()) {
+    g_t3.reflected[1]=0; g_t3.last_reflect_ms=0.0;
+    int has_water=0;
+    if(g_ini_terrain_3d_water && g_ini_terrain_3d_water_reflections) {
+        for(unsigned vi=0;vi<d->count;vi+=3u) {
+            if(d->vertex[vi].wz<=TL_SEA_PX || d->vertex[vi+1u].wz<=TL_SEA_PX || d->vertex[vi+2u].wz<=TL_SEA_PX) {
+                has_water=1; break;
+            }
+        }
+    }
+    if(has_water && g_gm.t_ring && tl_reflection_init()) {
+        const uint64_t rt0=SDL_GetPerformanceCounter();
         g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.reflect_fbo);
         g_bloom.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,g_t3.reflection[1],0);
         g_bloom.Viewport(0,0,TL_REFLECT_W,TL_REFLECT_H);
@@ -753,6 +782,7 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
         g_gl_mesh.DrawElements(GL_TRIANGLES,(GLsizei)d->count,GL_UNSIGNED_SHORT,0);
         g_bloom.Uniform1f(g_t3.l_reflect,0.0f);
         g_t3.reflected[1]=1;
+        g_t3.last_reflect_ms=(double)(SDL_GetPerformanceCounter()-rt0)*1000.0/(double)SDL_GetPerformanceFrequency();
     }
     g_bloom.DisableVertexAttribArray(3);
     g_bloom.BindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);

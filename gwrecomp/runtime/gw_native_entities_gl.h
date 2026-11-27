@@ -35,28 +35,24 @@ static int native_gl_init(void) {
         " vec2 r=vec2(128.0+mod(p.x-256.0+u_offset.x,1024.0),mod(p.y+u_offset.y,640.0));"
         " if(texture2D(u_ring,(r+0.5)/sz).r<0.002) discard;"
         " if(owner<0.0){"
-        "   float eL=texture2D(u_ring,(vec2(128.0+mod(p.x-258.0+u_offset.x,1024.0),mod(p.y+u_offset.y,640.0))+0.5)/sz).r;"
-        "   float eR=texture2D(u_ring,(vec2(128.0+mod(p.x-254.0+u_offset.x,1024.0),mod(p.y+u_offset.y,640.0))+0.5)/sz).r;"
-        "   float eU=texture2D(u_ring,(vec2(128.0+mod(p.x-256.0+u_offset.x,1024.0),mod(p.y-2.0+u_offset.y,640.0))+0.5)/sz).r;"
-        "   float eD=texture2D(u_ring,(vec2(128.0+mod(p.x-256.0+u_offset.x,1024.0),mod(p.y+2.0+u_offset.y,640.0))+0.5)/sz).r;"
-        "   if(min(min(eL,eR),min(eU,eD))<0.002) discard;"
         "   float r2=dot(uv,uv); if(r2>=1.0) discard;"
-        "   float f=1.0-smoothstep(0.05,1.0,r2);"
-        "   gl_FragColor=vec4(0.0,0.0,0.0,(-owner)*pow(f,1.35));"
+        "   float f=1.0-smoothstep(0.04,1.0,r2);"
+        "   float grad=mix(1.0,0.62,smoothstep(-0.45,0.85,uv.x));"
+        "   gl_FragColor=vec4(0.0,0.0,0.0,(-owner)*pow(f,1.35)*grad);"
         " } else {"
         "   vec4 c=texture2D(u_sprites,uv); if(c.a<=0.0) discard;"
         "   if(u_light_on>0.5 && effect<0.5){"
         "     float mx=max(c.r,max(c.g,c.b)), mn=min(c.r,min(c.g,c.b));"
-        "     float emissive=smoothstep(0.72,0.96,mx)*smoothstep(0.52,0.85,mx-mn);"
-        "     vec2 edge=vec2(u_sun.x-u_sun.y,-max(0.2,u_sun.z));"
-        "     float rim=1.0-texture2D(u_sprites,uv+normalize(edge)/1024.0).a;"
+        "     float emissive=smoothstep(0.80,0.96,mx)*smoothstep(0.54,0.82,mx-mn)*(1.0-smoothstep(0.28,0.44,mn));"
         "     vec3 point=vec3(0.0);"
-        "     for(int i=0;i<16;i++){ if(i>=u_plcount) break;"
-        "       vec3 d=u_plpos[i].xyz-world; d.xy=mod(d.xy+64.0,128.0)-64.0;"
-        "       float a=max(0.0,1.0-length(d)/max(0.01,u_plpos[i].w));"
-        "       point+=u_plcol[i].rgb*(u_plcol[i].w*a*a); }"
-        "     vec3 tint=vec3(0.83)+0.12*u_sky+0.10*u_sunc;"
-        "     vec3 lit=c.rgb*tint+(vec3(1.0)-c.rgb)*(0.09*rim*u_sunc+0.26*point/(vec3(1.0)+point));"
+        "     if(u_plcount>0){"
+        "       for(int i=0;i<16;i++){ if(i>=u_plcount) break;"
+        "         vec3 d=u_plpos[i].xyz-world; d.xy=mod(d.xy+64.0,128.0)-64.0;"
+        "         float a=max(0.0,1.0-length(d)/max(0.01,u_plpos[i].w));"
+        "         point+=u_plcol[i].rgb*(u_plcol[i].w*a*a); }"
+        "     }"
+        "     vec3 tint=vec3(0.84)+0.11*u_sky+0.11*u_sunc;"
+        "     vec3 lit=c.rgb*tint+(vec3(1.0)-c.rgb)*(0.26*point/(vec3(1.0)+point));"
         "     c.rgb=mix(lit,c.rgb,emissive);"
         "   } gl_FragColor=c;"
         " } }\n";
@@ -126,29 +122,23 @@ static float native_ground_hpx(const gw_terrain_mesh_draw *mesh,float rx,float r
 
 static float native_slope_sink_px(const gw_terrain_mesh_draw *mesh,const gw_entity_3d_t *ent,
         unsigned w,float x,float y) {
-    if(!mesh || !ent || ent->type==GW_ENTITY_EFFECT) return 0.0f;
-    const float alt_px=fmaxf(0.0f,(float)(ent->world_z_q6-ent->ground_q6*mesh->height_scale)/64.0f);
-    if(alt_px>=4.0f) return 0.0f;
-    float r=0.35f;
-    if(ent->type==GW_ENTITY_PLANT) r=fminf(0.85f,fmaxf(0.28f,(float)w/68.0f));
-    else if(ent->type==GW_ENTITY_BUILDING) r=fminf(1.25f,fmaxf(0.45f,(float)w/60.0f));
-    else r=fminf(0.45f,fmaxf(0.22f,(float)w/56.0f));
-    const float hc=native_ground_hpx(mesh,x,y);
-    const float hxp=native_ground_hpx(mesh,x+r,y),hxm=native_ground_hpx(mesh,x-r,y);
-    const float hyp=native_ground_hpx(mesh,x,y+r),hym=native_ground_hpx(mesh,x,y-r);
-    const float hmin=fminf(fminf(hxp,hxm),fminf(hyp,hym));
-    const float drop=fmaxf(0.0f,hc-hmin);
-    const float gx=(hxp-hxm)/(2.0f*r),gy=(hyp-hym)/(2.0f*r);
-    const float slope=sqrtf(gx*gx+gy*gy);
-    if(ent->type==GW_ENTITY_PLANT) return fminf(3.5f,fmaxf(1.5f,0.50f*drop+0.22f*slope*r));
-    if(ent->type==GW_ENTITY_BUILDING) return fminf(5.0f,0.65f*drop+0.25f*slope*r);
-    return fminf(3.0f,0.45f*drop+0.15f*slope*r);
+    (void)mesh; (void)ent; (void)w; (void)x; (void)y;
+    /* Anchor entities exactly at MapHeight without burying them into slopes. */
+    return 0.0f;
 }
 
 static void native_billboard(gw_native_vertex **out,const gw_native_draw *draw,
         gw_sprite_atlas_rect rect,unsigned owner,float depth,float sink_px,float wx,float wy) {
     const float x0=(float)draw->x,y0=(float)draw->y+sink_px,x1=x0+rect.w,y1=y0+rect.h;
-    const float z1=depth-0.0010f;
+    float r_cells=0.45f;
+    if(draw->entity.type==GW_ENTITY_PLANT) r_cells=fminf(0.95f,fmaxf(0.45f,(float)rect.w/52.0f));
+    else if(draw->entity.type==GW_ENTITY_BUILDING) r_cells=fminf(1.60f,fmaxf(0.75f,(float)rect.w/44.0f));
+    else if(draw->entity.type==GW_ENTITY_EFFECT) r_cells=1.20f;
+    else r_cells=fminf(0.65f,fmaxf(0.42f,(float)rect.w/48.0f));
+    /* Controlled camera-facing depth bias proportional to base radius so slopes
+       never slice through a standing entity while foreground hills still occlude it. */
+    const float bias=0.004f*(r_cells*1.35f)+0.0022f+(float)owner*0.000002f;
+    const float z1=depth-bias;
     const float z0=z1-(float)rect.h*0.00025f;
     const float scale=1.0f/GW_SPRITE_ATLAS_SIZE;
     const float u0=rect.x*scale,v0=rect.y*scale,u1=(rect.x+rect.w)*scale,v1=(rect.y+rect.h)*scale;
@@ -197,11 +187,16 @@ static void native_bind(int unit,GLuint tex,GLint loc) {
 }
 
 /* The original observer supplies the exact last writer. Confirm direct
-   RGBA conversions on those pixels before discarding their legacy colour. */
+   RGBA conversions on those pixels before discarding their legacy colour.
+   Tolerates isolated 2D overlays (cursor, selection arrows, drag box, horizon
+   clean-up) by leaving mismatched pixels in 2D instead of rejecting the whole
+   entity and causing flicker/jumps. */
 static unsigned native_validate(const gw_interactive_visual_snapshot *v,uint8_t *owned,
                                 uint8_t *accepted) {
     const gw_atlas_probe_frame *f=&v->atlas_probe;
     uint32_t hits[GW_NATIVE_DRAWS]={0};
+    uint32_t misses[GW_NATIVE_DRAWS]={0};
+    memset(owned,0,v->entity_coverage_bytes);
     for(unsigned i=0;i<f->draw_count;i++) accepted[i]=(uint8_t)(!f->draws[i].extra && g_native_uploaded[f->draws[i].slot-1u]);
     for(size_t p=0;p<v->entity_coverage_bytes;p++) {
         const unsigned ref=v->entity_coverage[p];
@@ -211,54 +206,30 @@ static unsigned native_validate(const gw_interactive_visual_snapshot *v,uint8_t 
         const gw_sprite_atlas_key *k=&f->items[slot].key;
         const int x=(int)(p%GW_CANVAS_W)-d->x,y=(int)(p/GW_CANVAS_W)-d->y;
         if(x<0 || y<0 || x>=k->width || y>=k->height) {
-            accepted[ref-1u]=0;
+            misses[ref-1u]++;
             continue;
         }
         const uint8_t *rgba=f->pixels+f->items[slot].offset+4u*((unsigned)y*k->width+(unsigned)x);
         const uint8_t *pal=v->palette+3u*v->canvas[p];
         if(!rgba[3] || (rgba[3]==255u &&
            (rgba[0]!=pal[0]*255u/63u || rgba[1]!=pal[1]*255u/63u || rgba[2]!=pal[2]*255u/63u))) {
-            accepted[ref-1u]=0;
+            misses[ref-1u]++;
             continue;
         }
         hits[ref-1u]++;
+        owned[p]=(uint8_t)ref;
     }
-    unsigned count=0;
+    unsigned count=0,rejected=0;
     for(unsigned i=0;i<f->draw_count;i++) {
-        accepted[i]=(uint8_t)(accepted[i] && hits[i]);
+        const int ok=accepted[i] && hits[i]>0u && hits[i]*3u>=misses[i];
+        if(accepted[i] && !ok) rejected=1;
+        accepted[i]=(uint8_t)ok;
         count+=accepted[i];
     }
-    if(count) {
-        int sbox[GW_NATIVE_DRAWS][4]; unsigned sbn=0;
-        for(unsigned i=0;i<f->draw_count;i++) {
-            if(!accepted[i]) continue;
-            const gw_native_draw *d=&f->draws[i];
-            if(d->entity.type==GW_ENTITY_EFFECT) continue;
-            const gw_sprite_atlas_key *k=&f->items[d->slot-1u].key;
-            sbox[sbn][0]=d->x-44;
-            sbox[sbn][1]=d->y+(int)k->height-20;
-            sbox[sbn][2]=d->x+(int)k->width+44;
-            sbox[sbn][3]=d->y+(int)k->height+38;
-            sbn++;
-        }
+    if(rejected) {
         for(size_t p=0;p<v->entity_coverage_bytes;p++) {
-            const unsigned ref=v->entity_coverage[p];
-            if(ref && ref<=f->draw_count && accepted[ref-1u]) {
-                owned[p]=(uint8_t)ref;
-            } else {
-                int sh=(ref>=242u && ref<=250u);
-                if(!sh && v->spr_valid && v->spr_mask[p]>=4u) sh=1;
-                if(sh && sbn) {
-                    const int px=(int)(p%GW_CANVAS_W),py=(int)(p/GW_CANVAS_W);
-                    int inside=0;
-                    for(unsigned b=0;b<sbn;b++) {
-                        if(px>=sbox[b][0] && px<=sbox[b][2] && py>=sbox[b][1] && py<=sbox[b][3]) { inside=1; break; }
-                    }
-                    owned[p]=(uint8_t)(inside?255u:0u);
-                } else {
-                    owned[p]=0u;
-                }
-            }
+            const unsigned o=owned[p];
+            if(o && o<=f->draw_count && !accepted[o-1u]) owned[p]=0u;
         }
     }
     return count;
@@ -308,16 +279,34 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
         const float h=fmaxf(0.0f,(d->entity.world_z_q6-d->entity.ground_q6*mesh->height_scale)/64.0f);
         const float cast=fminf(2.4f,fmaxf(0.28f,(h+key->height*0.42f)*sun_len/
                          (39.19f*fmaxf(0.30f,g_t3.sun[2]))));
-        if(h<6.0f) {
-            const float ao_base=(d->entity.type==GW_ENTITY_PLANT || d->entity.type==GW_ENTITY_BUILDING)?0.48f:0.42f;
-            const float ao_op=ao_base*(1.0f-h/6.0f);
-            native_shadow(&end,vertices+GW_NATIVE_SHADOW_VERTICES,mesh,
-                          x,y,dx,dy,r_ao,r_ao,ao_op);
-        }
-        const float air_shift=h>=6.0f?(h*sun_len/(39.19f*fmaxf(0.30f,g_t3.sun[2])))*0.55f:0.0f;
+        /* Single unified 3D shadow per entity (no overlapping AO + cast double-darkening):
+           anchored at feet when grounded, shifting smoothly along sun direction and softening with altitude. */
+        const float air_shift=h>=4.0f?(h*sun_len/(39.19f*fmaxf(0.30f,g_t3.sun[2])))*0.50f:0.0f;
+        const float alt_soft=1.0f/(1.0f+h*0.016f);
+        const float base_op=(d->entity.type==GW_ENTITY_BUILDING)?0.44f:(d->entity.type==GW_ENTITY_PLANT?0.40f:0.38f);
+        const float sh_len=r_ao*0.85f+cast*0.52f;
+        const float sh_wid=r_ao*(0.88f+0.14f*fminf(1.0f,h/36.0f));
         native_shadow(&end,vertices+GW_NATIVE_SHADOW_VERTICES,mesh,
-                      x+dx*(cast*0.42f+air_shift),y+dy*(cast*0.42f+air_shift),
-                      dx,dy,cast*0.58f+r_ao*0.70f,r_ao*0.80f,0.34f);
+                      x+dx*(cast*0.36f+air_shift),y+dy*(cast*0.36f+air_shift),
+                      dx,dy,sh_len,sh_wid,base_op*alt_soft);
+    }
+    /* Ethereal ship / landing rocket shadow (caller k=1, ev_ship): project a single clean 3D shadow
+       on MapHeight when its 2D shadow is suppressed and no entity shadow already covers it. */
+    if(v->ev_ship_n>30 && mesh->count) {
+        float sx_w=0.0f,sy_w=0.0f,sz_w=0.0f;
+        const float scx=v->ev_ship_x+v->ev_ship_w*0.5f,scy=v->ev_ship_y+v->ev_ship_h*0.5f;
+        /* Convert screen centre to local grid using the terrain mesh */
+        const float dd=scx/32.0f,ss=scy/16.0f;
+        float gx=(ss+dd)*0.5f,gy=(ss-dd)*0.5f;
+        /* Refine height once for isometric y = 16*(x+y) - h */
+        const float gh=native_ground_hpx(mesh,gx,gy);
+        const float ss2=(scy+gh)/16.0f;
+        sx_w=(ss2+dd)*0.5f; sy_w=(ss2-dd)*0.5f;
+        (void)sz_w;
+        const float rx_s=fminf(2.2f,fmaxf(0.55f,(float)v->ev_ship_w/58.0f));
+        const float ry_s=fminf(1.8f,fmaxf(0.45f,(float)v->ev_ship_h/38.0f));
+        native_shadow(&end,vertices+GW_NATIVE_SHADOW_VERTICES,mesh,
+                      sx_w,sy_w,dx,dy,rx_s,ry_s,0.38f);
     }
     const GLsizei shadows=(GLsizei)(end-vertices);
     float depth[GW_NATIVE_DRAWS];
