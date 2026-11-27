@@ -7,9 +7,9 @@ typedef struct gw_native_vertex {
 } gw_native_vertex;
 
 static struct {
-    GLuint shader,mask,layers[3];
+    GLuint shader,mask_buf[2],mask,layers[3];
     GLint sprites,ownership,ring,offset,light_on,sun,sunc,sky,plpos,plcol,plcount,reflect;
-    int failed,valid[3];
+    int failed,valid[3],mask_slot;
 } g_native_gl;
 
 static int native_gl_init(void) {
@@ -70,7 +70,9 @@ static int native_gl_init(void) {
     g_native_gl.plcol=g_bloom.GetUniformLocation(g_native_gl.shader,"u_plcol");
     g_native_gl.plcount=g_bloom.GetUniformLocation(g_native_gl.shader,"u_plcount");
     g_native_gl.reflect=g_bloom.GetUniformLocation(g_native_gl.shader,"u_reflect");
-    g_native_gl.mask=gm_tex(1152,640,GL_R8,GL_RED);
+    g_native_gl.mask_buf[0]=gm_tex(1152,640,GL_R8,GL_RED);
+    g_native_gl.mask_buf[1]=gm_tex(1152,640,GL_R8,GL_RED);
+    g_native_gl.mask=g_native_gl.mask_buf[0];
     for(unsigned i=0;i<3;i++) g_native_gl.layers[i]=gm_tex(1152,640,GL_RGBA8,GL_RGBA);
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_gl_mesh.fbo);
     for(unsigned i=0;i<3;i++) {
@@ -79,9 +81,9 @@ static int native_gl_init(void) {
             g_native_gl.failed=1;
     }
     g_bloom.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,g_gl_mesh.color,0);
-    if(!g_native_gl.mask) g_native_gl.failed=1;
+    if(!g_native_gl.mask_buf[0] || !g_native_gl.mask_buf[1]) g_native_gl.failed=1;
     if(g_native_gl.failed) {
-        g_bloom.DeleteTextures(1,&g_native_gl.mask);
+        g_bloom.DeleteTextures(2,g_native_gl.mask_buf);
         g_bloom.DeleteTextures(3,g_native_gl.layers);
         g_bloom.DeleteProgram(g_native_gl.shader);
         return 0;
@@ -269,6 +271,38 @@ static unsigned native_validate(const gw_interactive_visual_snapshot *v,uint8_t 
             if(o && o<=f->draw_count && !accepted[o-1u]) owned[p]=0u;
         }
     }
+    /* Strict 1:1 2D shadow suppression: ONLY suppress 2D cast shadows (242..250) inside
+       the ground shadow box of an ACCEPTED 3D entity, plus caller k=1 (241, landing rocket/ship).
+       Entities NOT in the 3D pass (e.g. static bulbous plants) keep 100% of their WScreen pixels! */
+    if(count) {
+        int sbox[GW_NATIVE_DRAWS][4]; unsigned sbn=0;
+        for(unsigned i=0;i<f->draw_count;i++) {
+            if(!accepted[i]) continue;
+            const gw_native_draw *d=&f->draws[i];
+            if(d->entity.type==GW_ENTITY_EFFECT) continue;
+            const gw_sprite_atlas_key *k=&f->items[d->slot-1u].key;
+            sbox[sbn][0]=d->x-40;
+            sbox[sbn][1]=d->y+(int)k->height-16;
+            sbox[sbn][2]=d->x+(int)k->width+40;
+            sbox[sbn][3]=d->y+(int)k->height+36;
+            sbn++;
+        }
+        for(size_t p=0;p<v->entity_coverage_bytes;p++) {
+            if(owned[p]) continue;
+            const unsigned ref=v->entity_coverage[p];
+            if(ref==241u) {
+                owned[p]=255u;
+            } else if(ref>=242u && ref<=250u && sbn) {
+                const int px=(int)(p%GW_CANVAS_W),py=(int)(p/GW_CANVAS_W);
+                for(unsigned b=0;b<sbn;b++) {
+                    if(px>=sbox[b][0] && px<=sbox[b][2] && py>=sbox[b][1] && py<=sbox[b][3]) {
+                        owned[p]=255u;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     return count;
 }
 
@@ -285,6 +319,8 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
         gw_flag_trace("TRACE native entities turn=%u stride=%u verified=%u/%u%c",
                       f->turn,GW_CANVAS_W,ready,f->draw_count,10);
     if(!ready || !native_gl_init()) return 0;
+    g_native_gl.mask_slot^=1;
+    g_native_gl.mask=g_native_gl.mask_buf[g_native_gl.mask_slot];
     g_bloom.ActiveTexture(GL_TEXTURE0);
     g_bloom.BindTexture(GL_TEXTURE_2D,g_native_gl.mask);
     g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
