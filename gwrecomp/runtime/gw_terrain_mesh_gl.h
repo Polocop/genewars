@@ -7,7 +7,8 @@ static struct {
     GLuint fbo,depth,color,tiles,fade,program,vbo,ibo;
     GLint u_tiles,u_fade,u_geometric;
     void (APIENTRYP ColorMask)(GLboolean,GLboolean,GLboolean,GLboolean);
-    int failed,fade_ready;
+    int failed,fade_ready,tiles_ready;
+    uint32_t last_tiles_n,last_tile_addr[259];
     uint8_t last_fade[64u*256u];
     void (APIENTRYP DrawElements)(GLenum,GLsizei,GLenum,const void *);
     void (APIENTRYP PushAttrib)(GLbitfield);
@@ -97,18 +98,28 @@ static int terrain_gl_render(const gw_terrain_mesh_draw *draw,int geometric_dept
     if(!draw || !draw->count || !terrain_gl_init()) return 0;
     enum { atlas_w=GW_MESH_ATLAS_W, atlas_cols=GW_MESH_ATLAS_COLS };
     static uint8_t atlas[atlas_w*544];
-    for(unsigned i=0;i<draw->tiles;i++) {
-        uint8_t *slot=atlas+32u*(i%atlas_cols)+32u*atlas_w*(i/atlas_cols);
-        for(unsigned row=0;row<32u;row++)
-            memcpy(slot+row*atlas_w,draw->texels[i]+row*32u,32u);
+    const unsigned tn=draw->tiles<259u?draw->tiles:259u;
+    int tiles_changed=!g_gl_mesh.tiles_ready || g_gl_mesh.last_tiles_n!=tn ||
+                      memcmp(g_gl_mesh.last_tile_addr,draw->tile_addr,tn*sizeof(uint32_t))!=0;
+    if(tiles_changed) {
+        for(unsigned i=0;i<draw->tiles;i++) {
+            uint8_t *slot=atlas+32u*(i%atlas_cols)+32u*atlas_w*(i/atlas_cols);
+            for(unsigned row=0;row<32u;row++)
+                memcpy(slot+row*atlas_w,draw->texels[i]+row*32u,32u);
+        }
+        g_gl_mesh.last_tiles_n=tn;
+        memcpy(g_gl_mesh.last_tile_addr,draw->tile_addr,tn*sizeof(uint32_t));
+        g_gl_mesh.tiles_ready=1;
     }
     g_bloom.UseProgram(g_gl_mesh.program);
     g_bloom.Uniform1f(g_gl_mesh.u_geometric,0.0f);
     g_bloom.ActiveTexture(GL_TEXTURE0);
     g_bloom.BindTexture(GL_TEXTURE_2D,g_gl_mesh.tiles);
     g_bloom.Uniform1i(g_gl_mesh.u_tiles,0);
-    g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,atlas_w,
-        (GLsizei)(32u*((draw->tiles+atlas_cols-1u)/atlas_cols)),GL_RED,GL_UNSIGNED_BYTE,atlas);
+    if(tiles_changed) {
+        g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,atlas_w,
+            (GLsizei)(32u*((draw->tiles+atlas_cols-1u)/atlas_cols)),GL_RED,GL_UNSIGNED_BYTE,atlas);
+    }
     g_bloom.ActiveTexture(GL_TEXTURE1);
     g_bloom.BindTexture(GL_TEXTURE_2D,g_gl_mesh.fade);
     g_bloom.Uniform1i(g_gl_mesh.u_fade,1);

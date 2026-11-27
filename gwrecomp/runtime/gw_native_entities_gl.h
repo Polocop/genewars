@@ -123,33 +123,70 @@ static float native_ground_hpx(const gw_terrain_mesh_draw *mesh,float rx,float r
 static float native_slope_sink_px(const gw_terrain_mesh_draw *mesh,const gw_entity_3d_t *ent,
         unsigned w,float x,float y) {
     (void)mesh; (void)ent; (void)w; (void)x; (void)y;
-    /* Anchor entities exactly at MapHeight without burying them into slopes. */
     return 0.0f;
 }
 
+/* Fixed isometric camera footprint depth: sample MapHeight across the entity's
+   base footprint (especially the camera-facing front edge +x, +y) and take the
+   closest-to-camera depth so the supporting slope can NEVER cut through the
+   plant's stem, base, or roots while foreground hills still occlude it. */
+static float native_footprint_depth(const gw_terrain_mesh_draw *mesh,const gw_entity_3d_t *ent,
+        unsigned w,float rx,float ry,float center_depth) {
+    if(!mesh || !ent) return center_depth;
+    const float alt_px=fmaxf(0.0f,(float)(ent->world_z_q6-ent->ground_q6*mesh->height_scale)/64.0f);
+    if(alt_px>=6.0f) return center_depth-0.0030f;
+    float r=0.55f;
+    if(ent->type==GW_ENTITY_PLANT) r=fminf(1.35f,fmaxf(0.68f,(float)w/34.0f));
+    else if(ent->type==GW_ENTITY_BUILDING) r=fminf(1.85f,fmaxf(0.90f,(float)w/32.0f));
+    else if(ent->type==GW_ENTITY_EFFECT) r=1.20f;
+    else r=fminf(0.85f,fmaxf(0.55f,(float)w/36.0f));
+    static const float off[9][2]={
+        {0.0f,0.0f},{1.0f,0.0f},{0.0f,1.0f},{0.75f,0.75f},{1.0f,1.0f},
+        {-0.6f,0.6f},{0.6f,-0.6f},{-0.7f,0.0f},{0.0f,-0.7f}
+    };
+    float zmin=center_depth;
+    for(int k=0;k<9;k++) {
+        const float sx=rx+off[k][0]*r,sy=ry+off[k][1]*r;
+        const float h=native_ground_hpx(mesh,sx,sy);
+        const float z=native_depth(sx,sy,h);
+        if(z<zmin) zmin=z;
+    }
+    return zmin-0.0032f;
+}
+
 static void native_billboard(gw_native_vertex **out,const gw_native_draw *draw,
-        gw_sprite_atlas_rect rect,unsigned owner,float depth,float sink_px,float wx,float wy) {
-    const float x0=(float)draw->x,y0=(float)draw->y+sink_px,x1=x0+rect.w,y1=y0+rect.h;
-    float r_cells=0.45f;
-    if(draw->entity.type==GW_ENTITY_PLANT) r_cells=fminf(0.95f,fmaxf(0.45f,(float)rect.w/52.0f));
-    else if(draw->entity.type==GW_ENTITY_BUILDING) r_cells=fminf(1.60f,fmaxf(0.75f,(float)rect.w/44.0f));
-    else if(draw->entity.type==GW_ENTITY_EFFECT) r_cells=1.20f;
-    else r_cells=fminf(0.65f,fmaxf(0.42f,(float)rect.w/48.0f));
-    /* Controlled camera-facing depth bias proportional to base radius so slopes
-       never slice through a standing entity while foreground hills still occlude it. */
-    const float bias=0.004f*(r_cells*1.35f)+0.0022f+(float)owner*0.000002f;
-    const float z1=depth-bias;
+        gw_sprite_atlas_rect rect,unsigned owner,float front_depth,float wx,float wy) {
+    const float x0=(float)draw->x,y0=(float)draw->y,x1=x0+rect.w,y1=y0+rect.h;
+    const float z1=front_depth-(float)owner*0.000002f;
     const float z0=z1-(float)rect.h*0.00025f;
     const float scale=1.0f/GW_SPRITE_ATLAS_SIZE;
     const float u0=rect.x*scale,v0=rect.y*scale,u1=(rect.x+rect.w)*scale,v1=(rect.y+rect.h)*scale;
     const float n=(float)owner;
-    const float bottom=(draw->entity.world_z_q6/64.0f-sink_px)*TL_ZS;
+    const float bottom=(draw->entity.world_z_q6/64.0f)*TL_ZS;
     const float top=bottom+(float)rect.h*TL_ZS;
     const float effect=draw->entity.type==GW_ENTITY_EFFECT?1.0f:0.0f;
     native_quad(out,(gw_native_vertex){x0,y0,z0,u0,v0,n,wx,wy,top,effect},
         (gw_native_vertex){x1,y0,z0,u1,v0,n,wx,wy,top,effect},
         (gw_native_vertex){x0,y1,z1,u0,v1,n,wx,wy,bottom,effect},
         (gw_native_vertex){x1,y1,z1,u1,v1,n,wx,wy,bottom,effect});
+}
+
+/* Detect a 2D cast-shadow silhouette drawn through 0x90F90 destination blend
+   (flags & 12) on non-effect/non-plant entities: dark translucent pixels only. */
+static int native_is_shadow_blit(const gw_atlas_probe_frame *f,const gw_native_draw *d) {
+    const unsigned slot=d->slot-1u;
+    if(f->items[slot].key.blend!=GW_SPRITE_BLIT_DESTINATION) return 0;
+    if(d->entity.type==GW_ENTITY_EFFECT || d->entity.type==GW_ENTITY_PLANT) return 0;
+    const gw_sprite_atlas_key *k=&f->items[slot].key;
+    const uint8_t *px=f->pixels+f->items[slot].offset;
+    const size_t n=(size_t)k->width*k->height;
+    unsigned opaque=0,lum_sum=0;
+    for(size_t i=0;i<n;i++) {
+        if(!px[i*4u+3u]) continue;
+        opaque++;
+        lum_sum+=(unsigned)px[i*4u]+(unsigned)px[i*4u+1u]+(unsigned)px[i*4u+2u];
+    }
+    return opaque>0u && (lum_sum/(opaque*3u))<56u;
 }
 
 static gw_native_vertex native_shadow_vertex(const gw_terrain_mesh_draw *mesh,
@@ -221,7 +258,7 @@ static unsigned native_validate(const gw_interactive_visual_snapshot *v,uint8_t 
     }
     unsigned count=0,rejected=0;
     for(unsigned i=0;i<f->draw_count;i++) {
-        const int ok=accepted[i] && hits[i]>0u && hits[i]*3u>=misses[i];
+        const int ok=accepted[i] && hits[i]>0u && hits[i]*4u>=misses[i];
         if(accepted[i] && !ok) rejected=1;
         accepted[i]=(uint8_t)ok;
         count+=accepted[i];
@@ -260,6 +297,7 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
     const float sun_len=sqrtf(g_t3.sun[0]*g_t3.sun[0]+g_t3.sun[1]*g_t3.sun[1]);
     const float dx=sun_len>0.01f?-g_t3.sun[0]/sun_len:1.0f;
     const float dy=sun_len>0.01f?-g_t3.sun[1]/sun_len:0.0f;
+    if(g_ini_terrain_3d_sprite_shadows) {
     for(unsigned i=0;i<f->draw_count;i++) {
         if(!accepted[i]) continue;
         const gw_native_draw *d=&f->draws[i];
@@ -293,20 +331,18 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
     /* Ethereal ship / landing rocket shadow (caller k=1, ev_ship): project a single clean 3D shadow
        on MapHeight when its 2D shadow is suppressed and no entity shadow already covers it. */
     if(v->ev_ship_n>30 && mesh->count) {
-        float sx_w=0.0f,sy_w=0.0f,sz_w=0.0f;
+        float sx_w=0.0f,sy_w=0.0f;
         const float scx=v->ev_ship_x+v->ev_ship_w*0.5f,scy=v->ev_ship_y+v->ev_ship_h*0.5f;
-        /* Convert screen centre to local grid using the terrain mesh */
         const float dd=scx/32.0f,ss=scy/16.0f;
         float gx=(ss+dd)*0.5f,gy=(ss-dd)*0.5f;
-        /* Refine height once for isometric y = 16*(x+y) - h */
         const float gh=native_ground_hpx(mesh,gx,gy);
         const float ss2=(scy+gh)/16.0f;
         sx_w=(ss2+dd)*0.5f; sy_w=(ss2-dd)*0.5f;
-        (void)sz_w;
         const float rx_s=fminf(2.2f,fmaxf(0.55f,(float)v->ev_ship_w/58.0f));
         const float ry_s=fminf(1.8f,fmaxf(0.45f,(float)v->ev_ship_h/38.0f));
         native_shadow(&end,vertices+GW_NATIVE_SHADOW_VERTICES,mesh,
                       sx_w,sy_w,dx,dy,rx_s,ry_s,0.38f);
+    }
     }
     const GLsizei shadows=(GLsizei)(end-vertices);
     float depth[GW_NATIVE_DRAWS];
@@ -317,8 +353,10 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
         const unsigned slot=d->slot-1u;
         const float rx=native_relative(d->entity.world_x_q8,mesh->view_col);
         const float ry=native_relative(d->entity.world_y_q8,mesh->view_row);
-        depth[i]=native_depth(rx,ry,d->entity.world_z_q6/64.0f);
+        const float cdepth=native_depth(rx,ry,d->entity.world_z_q6/64.0f);
+        depth[i]=native_footprint_depth(mesh,&d->entity,g_native_rects[slot].w,rx,ry,cdepth);
         if(f->items[slot].key.blend==GW_SPRITE_BLIT_DESTINATION) {
+            if(native_is_shadow_blit(f,d)) continue;
             unsigned j=nt++;
             while(j && depth[translucent[j-1u]]<depth[i]) {
                 translucent[j]=translucent[j-1u];
@@ -326,8 +364,7 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
             }
             translucent[j]=i;
         } else {
-            const float sink=native_slope_sink_px(mesh,&d->entity,g_native_rects[slot].w,rx,ry);
-            native_billboard(&end,d,g_native_rects[slot],i+1u,depth[i],sink,rx,ry);
+            native_billboard(&end,d,g_native_rects[slot],i+1u,depth[i],rx,ry);
         }
     }
     const GLsizei opaque=(GLsizei)(end-vertices);
@@ -337,8 +374,7 @@ static int native_gl_render(const gw_interactive_visual_snapshot *v,const gw_ter
         const unsigned slot=d->slot-1u;
         const float rx=native_relative(d->entity.world_x_q8,mesh->view_col);
         const float ry=native_relative(d->entity.world_y_q8,mesh->view_row);
-        const float sink=native_slope_sink_px(mesh,&d->entity,g_native_rects[slot].w,rx,ry);
-        native_billboard(&end,d,g_native_rects[slot],i+1u,depth[i],sink,rx,ry);
+        native_billboard(&end,d,g_native_rects[slot],i+1u,depth[i],rx,ry);
     }
 
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_gl_mesh.fbo);

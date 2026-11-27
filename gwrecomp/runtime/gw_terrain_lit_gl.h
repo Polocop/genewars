@@ -21,7 +21,7 @@
 #endif
 
 #include "gw_png.h"
-enum { TL_SHADOW=2048, TL_GRID=64, TL_LIGHTS=16 };
+enum { TL_SHADOW=1024, TL_GRID=64, TL_LIGHTS=16 };
 static void bloom_draw_quad(float x0,float y0,float x1,float y1,float u0,float v0,float u1,float v1,
                             float su0,float sv0,float su1,float sv1);
 
@@ -34,8 +34,8 @@ static struct {
     double last_reflect_ms;
     int sh_vc,sh_vr,sh_hs,sh_valid;
     uint32_t bump_tiles_n,bump_tile_addr[259]; int bump_valid;
-    GLint l_reflect,l_ring,l_ring_off,l_wet;
-    GLuint ao_tex,sh_tex,sh_fbo,sh_rb,nrm_tex,bump_tex,bump_fbo,grid_vbo,grid_ibo;
+    GLint l_reflect,l_ring,l_ring_off,l_wet,l_shoff;
+    GLuint ocean_tex,ao_tex,sh_tex,sh_fbo,sh_rb,nrm_tex,bump_tex,bump_fbo,grid_vbo,grid_ibo;
     int lview[3][2],lhave[3];            /* per canvas layer: display origin (mod 128) and whether it holds a lit frame */
     GLint l_ao,l_tiles,l_fade,l_lut,l_kind,l_nrm,l_sh,l_bump,l_view,l_lx,l_ly,l_lz,l_zs,l_sun,l_sunc,l_sky,l_gnd,l_shon,l_wton,l_mix;
     GLint s_lx,s_ly,s_lz,s_zs;
@@ -117,6 +117,73 @@ static GLuint tl_tex(int w,int h,GLenum filter,GLenum wrap) {
     return t;
 }
 
+/* 512 x 512 periodic ocean normal + foam map (from 65e7f87), built once on a worker thread (no assets):
+   RG = directional wind-wave + capillary-ripple normal (x, y), B = organic 5-octave foam fbm, A = 1. */
+#ifndef GL_GENERATE_MIPMAP
+#define GL_GENERATE_MIPMAP 0x8191
+#endif
+#ifndef GL_LINEAR_MIPMAP_LINEAR
+#define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#endif
+static float tl_hash2(int x,int y,int P) { x&=P-1; y&=P-1; uint32_t h=(uint32_t)x*374761393u+(uint32_t)y*668265263u; h=(h^(h>>13))*1274126177u; return (float)((h^(h>>16))&0xFFFFu)/65535.0f; }
+static float tl_vnoise(float x,float y,int P) {
+    const int ix=(int)floorf(x),iy=(int)floorf(y); float fx=x-(float)ix,fy=y-(float)iy;
+    fx=fx*fx*(3.0f-2.0f*fx); fy=fy*fy*(3.0f-2.0f*fy);
+    const float a=tl_hash2(ix,iy,P),b=tl_hash2(ix+1,iy,P),c=tl_hash2(ix,iy+1,P),d=tl_hash2(ix+1,iy+1,P);
+    return (a+(b-a)*fx)+((c+(d-c)*fx)-(a+(b-a)*fx))*fy;
+}
+static uint8_t *g_ocean_px; static SDL_atomic_t g_ocean_done;
+static int SDLCALL tl_ocean_build(void *unused) {
+    (void)unused;
+    enum { N=512 };
+    float *h=(float *)malloc(sizeof(float)*N*N); uint8_t *px=(uint8_t *)malloc(N*N*4u);
+    if(!h || !px) { free(h); free(px); SDL_AtomicSet(&g_ocean_done,-1); return 0; }
+    static const int kv[][2]={{6,2},{7,3},{9,2},{5,1},{11,4},{13,3},{8,-1},{15,5},{17,4},{19,6},{23,5},{27,8},{31,7},{37,10},{41,9},{47,13}};
+    float amp[16],ph[16];
+    for(int i=0;i<16;i++) { const float k=sqrtf((float)(kv[i][0]*kv[i][0]+kv[i][1]*kv[i][1])); amp[i]=1.0f/powf(k,1.25f); ph[i]=tl_hash2(i,7,64)*6.2831853f; }
+    for(int y=0;y<N;y++) for(int x=0;x<N;x++) {
+        float v=0.0f;
+        for(int i=0;i<16;i++) { const float a=6.2831853f*((float)(kv[i][0]*x+kv[i][1]*y)/(float)N)+ph[i]; const float s=sinf(a); v+=amp[i]*(s>0.0f?s*s*1.6f-0.4f:s*0.6f); }
+        v+=0.050f*tl_vnoise(x/16.0f,y/16.0f,32)+0.030f*tl_vnoise(x/8.0f,y/8.0f,64)+0.018f*tl_vnoise(x/4.0f,y/4.0f,128);
+        h[y*N+x]=v;
+    }
+    for(int y=0;y<N;y++) for(int x=0;x<N;x++) {
+        const float gx=(h[y*N+((x+1)&(N-1))]-h[y*N+((x-1)&(N-1))])*0.5f*22.0f;
+        const float gy=(h[((y+1)&(N-1))*N+x]-h[((y-1)&(N-1))*N+x])*0.5f*22.0f;
+        float nx=gx,ny=gy; if(nx>1.0f) nx=1.0f;
+        if(nx<-1.0f) nx=-1.0f;
+        if(ny>1.0f) ny=1.0f;
+        if(ny<-1.0f) ny=-1.0f;
+        float f=0.0f,am=0.5f; int P=16;
+        for(int o=0;o<5;o++) { f+=am*tl_vnoise(x*(float)P/(float)N,y*(float)P/(float)N,P); am*=0.5f; P*=2; }
+        uint8_t *o=px+((size_t)y*N+(size_t)x)*4u;
+        o[0]=(uint8_t)(nx*127.5f+127.5f); o[1]=(uint8_t)(ny*127.5f+127.5f); o[2]=(uint8_t)(f*255.0f/0.97f>255.0f?255:(int)(f*255.0f/0.97f)); o[3]=255;
+    }
+    free(h); g_ocean_px=px; SDL_AtomicSet(&g_ocean_done,1);
+    return 0;
+}
+static GLuint tl_ocean(void) {
+    static const uint8_t flat[4]={128,128,128,255};
+    GLuint t=0; g_bloom.GenTextures(1,&t); g_bloom.BindTexture(GL_TEXTURE_2D,t);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_REPEAT); g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_REPEAT);
+    g_bloom.TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1,1,0,GL_RGBA,GL_UNSIGNED_BYTE,flat);
+    SDL_Thread *th=SDL_CreateThread(tl_ocean_build,"gw_ocean",NULL);
+    if(th) SDL_DetachThread(th);
+    return t;
+}
+static void tl_ocean_poll(void) {
+    if(!g_ocean_px || SDL_AtomicGet(&g_ocean_done)!=1 || !g_t3.ocean_tex) return;
+    g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.ocean_tex);
+    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,4); g_bloom.PixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_LINEAR);
+    g_bloom.TexParameteri(GL_TEXTURE_2D,GL_GENERATE_MIPMAP,1);
+    g_bloom.TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,512,512,0,GL_RGBA,GL_UNSIGNED_BYTE,g_ocean_px);
+    g_bloom.PixelStorei(GL_UNPACK_ALIGNMENT,1);
+    free(g_ocean_px); g_ocean_px=NULL; SDL_AtomicSet(&g_ocean_done,2);
+    gw_flag_trace("TRACE terrain_3d ocean normal map 512x512 ready%c",10);
+}
+
 #define TL_GLSL_COMMON \
     "#version 120\n" \
     "float rd8(sampler2D t,vec2 p,vec2 sz){ return floor(texture2D(t,(p+0.5)/sz).r*255.0+0.5); }\n" \
@@ -149,7 +216,7 @@ static int tl_init(void) {
         "uniform vec4 u_pt_light_pos_rad[16]; uniform vec4 u_pt_light_col_int[16]; uniform int u_pt_light_count;\n"
         "uniform sampler2D u_hd,u_hdmap; uniform float u_hdon,u_hdm; uniform vec2 u_hdsz;\n"
         "uniform float u_aos,u_expo,u_shfloor,u_knorm; uniform vec3 u_wtint;\n"
-        "uniform float u_reflect,u_wet; uniform sampler2D u_reflect_ring; uniform vec2 u_ring_off;\n"
+        "uniform float u_reflect,u_wet; uniform sampler2D u_reflect_ring; uniform vec2 u_ring_off,u_sh_off;\n"
         "varying vec3 v_material; varying vec2 v_tile_mode; varying vec3 v_world; varying vec2 v_canvas;\n"
         "float shdec(vec2 uv){ vec4 t=texture2D(u_sh,uv); return t.r+t.g/255.0; }\n"
         "float hh(vec2 q){ vec3 p3=fract(vec3(q.xyx)*0.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }\n"
@@ -218,10 +285,10 @@ static int tl_init(void) {
         "  alb*=1.0+(1.0-water)*0.32*(1.0-0.6*hdon)*(dn-0.5);\n"
         "  float sh=1.0;\n"
         "  if(u_shon>0.5){\n"
-        "    vec4 P=vec4(v_world+N*0.06,1.0);\n"
+        "    vec4 P=vec4(v_world+vec3(u_sh_off,0.0)+N*0.06,1.0);\n"
         "    vec3 l=vec3(dot(u_lx,P),dot(u_ly,P),dot(u_lz,P))*0.5+0.5;\n"
-        "    float d=l.z-0.0018, s=0.0;\n"
-        "    for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++) s+=(shdec(l.xy+vec2(float(i),float(j))*(1.3/2048.0))<d)?0.0:1.0;\n"
+        "    float d=l.z-0.0022, s=0.0;\n"
+        "    for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++) s+=(shdec(l.xy+vec2(float(i),float(j))*(1.2/1024.0))<d)?0.0:1.0;\n"
         "    sh=(l.x>0.0 && l.x<1.0 && l.y>0.0 && l.y<1.0)?s/9.0:1.0;\n"
         "  }\n"
         "  float ndl=max(dot(Nm,u_sun),0.0);\n"
@@ -259,12 +326,13 @@ static int tl_init(void) {
         "  float a=1.0;\n"
         "  if(water>0.5){\n"
         "    float hpx=v_world.z/u_zs;\n"
-        "    float dep_h=clamp((22.0-hpx)/22.0,0.0,1.0);\n"
-        "    float dep=clamp(dep_h*0.55+nt.a*0.45+(vn(W*2.2,281.0)-0.5)*0.12,0.0,1.0);\n"
-        "    vec3 absorb=exp(-vec3(2.8,1.15,0.55)*(dep*1.85));\n"
-        "    vec3 seabed=alb*vec3(0.86,0.95,0.92);\n"
-        "    vec3 deep_ocean=vec3(0.04,0.13,0.27);\n"
-        "    col=mix(deep_ocean,seabed,absorb)*mix(0.62,1.0,sh)*u_wtint;\n"
+        "    float dep=clamp(1.0-hpx/22.0,0.0,1.0)*0.55+0.45*nt.a;\n"
+        "    dep=clamp(dep+(vn(W*2.5,320.0)-0.5)*0.24+(vn(W*7.0,896.0)-0.5)*0.10,0.0,1.0);\n"
+        "    /* Beer-Lambert inspired by 65e7f87: translucent turquoise-sand shallows to rich ocean blue */\n"
+        "    vec3 shallow=mix(vec3(0.20,0.56,0.52),alb*vec3(0.95,1.06,0.96),0.28);\n"
+        "    vec3 deep=vec3(0.055,0.195,0.295)+u_sky*0.055;\n"
+        "    float ab=1.0-exp(-dep*3.8);\n"
+        "    col=mix(shallow,deep,ab)*mix(0.60,1.0,sh)*u_wtint;\n"
         "    a=0.1+0.4*dep;\n"
         "    col+=(alb*0.45+vec3(0.04,0.06,0.08))*pl+pls*0.35;\n"
         "  } else if(u_wton>0.5 && kind==2.0) a=0.75;\n"
@@ -304,7 +372,7 @@ static int tl_init(void) {
     TLU(prog_lit,l_sun,"u_sun"); TLU(prog_lit,l_sunc,"u_sunc"); TLU(prog_lit,l_sky,"u_sky"); TLU(prog_lit,l_gnd,"u_gnd");
     TLU(prog_lit,l_shon,"u_shon"); TLU(prog_lit,l_wton,"u_wton"); TLU(prog_lit,l_mix,"u_mix"); TLU(prog_lit,l_ao,"u_ao");
     TLU(prog_lit,l_reflect,"u_reflect"); TLU(prog_lit,l_wet,"u_wet");
-    TLU(prog_lit,l_ring,"u_reflect_ring"); TLU(prog_lit,l_ring_off,"u_ring_off");
+    TLU(prog_lit,l_ring,"u_reflect_ring"); TLU(prog_lit,l_ring_off,"u_ring_off"); TLU(prog_lit,l_shoff,"u_sh_off");
     TLU(prog_lit,l_plp,"u_pt_light_pos_rad"); TLU(prog_lit,l_plc,"u_pt_light_col_int"); TLU(prog_lit,l_pln,"u_pt_light_count");
     TLU(prog_lit,l_hd,"u_hd"); TLU(prog_lit,l_hdmap,"u_hdmap"); TLU(prog_lit,l_hdon,"u_hdon"); TLU(prog_lit,l_hdsz,"u_hdsz"); TLU(prog_lit,l_hdm,"u_hdm");
     TLU(prog_lit,l_aos,"u_aos"); TLU(prog_lit,l_expo,"u_expo"); TLU(prog_lit,l_shfloor,"u_shfloor"); TLU(prog_lit,l_knorm,"u_knorm"); TLU(prog_lit,l_wtint,"u_wtint");
@@ -326,6 +394,7 @@ static int tl_init(void) {
     /* normals + sea depth of the planet grid, bilinear, wrapping */
     g_t3.nrm_tex=tl_tex(128,128,GL_LINEAR,GL_REPEAT);
     g_t3.ao_tex=tl_tex(128,128,GL_LINEAR,GL_REPEAT);
+    g_t3.ocean_tex=tl_ocean();
     /* bump atlas (same layout as the tile atlas), bilinear inside a tile */
     g_t3.bump_tex=tl_tex(512,544,GL_LINEAR,GL_CLAMP_TO_EDGE);
     g_bloom.GenFramebuffers(1,&g_t3.bump_fbo);
@@ -345,6 +414,23 @@ static int tl_init(void) {
         g_bloom.BindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
     }
     g_bloom.GenFramebuffers(1,&g_t3.fbo);
+    /* Pre-allocate reflection FBO once at init so entering lakes never stalls. */
+    if(!g_t3.reflect_fbo && !g_t3.reflect_failed) {
+        g_bloom.GenFramebuffers(1,&g_t3.reflect_fbo);
+        g_gl_mesh.GenRenderbuffers(1,&g_t3.reflect_depth);
+        g_gl_mesh.BindRenderbuffer(GL_RENDERBUFFER,g_t3.reflect_depth);
+        g_gl_mesh.RenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH_COMPONENT16,TL_REFLECT_W,TL_REFLECT_H);
+        g_gl_mesh.BindRenderbuffer(GL_RENDERBUFFER,0);
+        g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.reflect_fbo);
+        g_gl_mesh.FramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_RENDERBUFFER,g_t3.reflect_depth);
+        for(int i=0;i<3;i++) {
+            g_t3.reflection[i]=tl_tex(TL_REFLECT_W,TL_REFLECT_H,GL_LINEAR,GL_CLAMP_TO_EDGE);
+            g_bloom.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,g_t3.reflection[i],0);
+            if(!g_t3.reflection[i] || g_bloom.CheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE)
+                g_t3.reflect_failed=1;
+        }
+        gw_flag_trace("TRACE planar reflection fbo=%dx%d ready=%d%c",TL_REFLECT_W,TL_REFLECT_H,!g_t3.reflect_failed,10);
+    }
     g_bloom.BindFramebuffer(GL_FRAMEBUFFER,0);
     tl_biome(0);
     g_t3.hs_last=-1000; g_t3.ready=1;
@@ -464,10 +550,10 @@ static void tl_planet(const gw_terrain_mesh_draw *d) {
     g_t3.nrm_ok=1; g_t3.sh_valid=0;
 }
 
-/* the shadow casters around the view and the light's orthographic projection fitted to them */
-static void tl_shadow(const gw_terrain_mesh_draw *d) {
+/* the shadow casters around a coarse 16-cell snapped origin (never rebuilt by fog of war or small camera steps) */
+static void tl_shadow(const gw_terrain_mesh_draw *d,int base_col,int base_row) {
     static float vb[(TL_GRID+1)*(TL_GRID+1)*3];
-    const int c0=-12,r0=-30;
+    const int c0=-16,r0=-32;
     const float *L=g_t3.sun;
     float rl[3]={L[1],-L[0],0.0f};   /* right = cross(-L, up) normalised */
     { const float n=sqrtf(rl[0]*rl[0]+rl[1]*rl[1]); rl[0]/=n; rl[1]/=n; }
@@ -477,7 +563,7 @@ static void tl_shadow(const gw_terrain_mesh_draw *d) {
     float mn[3]={1e9f,1e9f,1e9f},mx[3]={-1e9f,-1e9f,-1e9f};
     unsigned n=0;
     for(int j=0;j<=TL_GRID;j++) for(int i=0;i<=TL_GRID;i++) {
-        const float x=(float)(c0+i),y=(float)(r0+j),hz=(float)tl_hpx(d,d->view_col+c0+i,d->view_row+r0+j);
+        const float x=(float)(c0+i),y=(float)(r0+j),hz=(float)tl_hpx(d,base_col+c0+i,base_row+r0+j);
         vb[n++]=x; vb[n++]=y; vb[n++]=hz;
         const float z=hz*TL_ZS;
         const float a=x*rl[0]+y*rl[1]+z*rl[2],b=x*up[0]+y*up[1]+z*up[2],c=-(x*L[0]+y*L[1]+z*L[2]);
@@ -676,18 +762,21 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_bloom.Enable(GL_DEPTH_TEST);
     g_gl_mesh.DepthFunc(GL_LESS); g_gl_mesh.DepthMask(GL_TRUE); g_gl_mesh.ClearDepth(1.0);
     tl_planet(d);
+    tl_ocean_poll();
     const int shadows=g_ini_terrain_3d_shadows!=0;
     const int vc0=d->view_col&127,vr0=d->view_row&127;
-    if(shadows && (!g_t3.sh_valid || g_t3.sh_vc!=vc0 || g_t3.sh_vr!=vr0 || g_t3.sh_hs!=d->height_scale)) {
-        tl_shadow(d);
-        g_t3.sh_vc=vc0; g_t3.sh_vr=vr0; g_t3.sh_hs=d->height_scale; g_t3.sh_valid=1;
+    const int svc=vc0&~15,svr=vr0&~15;
+    if(shadows && (!g_t3.sh_valid || g_t3.sh_vc!=svc || g_t3.sh_vr!=svr || g_t3.sh_hs!=d->height_scale)) {
+        tl_shadow(d,svc,svr);
+        g_t3.sh_vc=svc; g_t3.sh_vr=svr; g_t3.sh_hs=d->height_scale; g_t3.sh_valid=1;
     }
-    /* bump atlas from the tile atlas: only re-render when the tile slots actually change */
+    /* bump atlas from the tile atlas: only re-render used rows when tile slots actually change */
     const unsigned tn=d->tiles<259u?d->tiles:259u;
     if(!g_t3.bump_valid || g_t3.bump_tiles_n!=tn || memcmp(g_t3.bump_tile_addr,d->tile_addr,tn*sizeof(uint32_t))) {
+        const int used_h=(int)(32u*((tn+15u)/16u));
         g_bloom.Disable(GL_DEPTH_TEST);
         g_bloom.BindFramebuffer(GL_FRAMEBUFFER,g_t3.bump_fbo);
-        g_bloom.Viewport(0,0,512,544);
+        g_bloom.Viewport(0,0,512,used_h>0?used_h:32);
         g_bloom.UseProgram(g_t3.prog_bump);
         g_bloom.ActiveTexture(GL_TEXTURE1); g_bloom.BindTexture(GL_TEXTURE_2D,g_bloom.lut_tex); g_bloom.Uniform1i(g_t3.b_lut,1);
         g_bloom.ActiveTexture(GL_TEXTURE0); g_bloom.BindTexture(GL_TEXTURE_2D,g_gl_mesh.tiles); g_bloom.Uniform1i(g_t3.b_tiles,0);
@@ -718,6 +807,9 @@ static int tl_render(const gw_terrain_mesh_draw *d,int scale) {
     g_bloom.ActiveTexture(GL_TEXTURE0);
     const int vc=d->view_col&127,vr=d->view_row&127;
     g_bloom.Uniform2f(g_t3.l_view,(float)vc,(float)vr);
+    {   int dx_s=(vc-g_t3.sh_vc)&127; if(dx_s>=64) dx_s-=128;
+        int dy_s=(vr-g_t3.sh_vr)&127; if(dy_s>=64) dy_s-=128;
+        g_bloom.Uniform2f(g_t3.l_shoff,(float)dx_s,(float)dy_s); }
     g_t3.Uniform4f(g_t3.l_lx,g_t3.lx[0],g_t3.lx[1],g_t3.lx[2],g_t3.lx[3]);
     g_t3.Uniform4f(g_t3.l_ly,g_t3.ly[0],g_t3.ly[1],g_t3.ly[2],g_t3.ly[3]);
     g_t3.Uniform4f(g_t3.l_lz,g_t3.lz[0],g_t3.lz[1],g_t3.lz[2],g_t3.lz[3]);

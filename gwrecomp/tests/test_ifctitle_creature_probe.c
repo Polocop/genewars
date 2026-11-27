@@ -8538,7 +8538,7 @@ static int g_ini_terrain_3d_biome_presets=1; /* terrain_3d_biome_presets: light 
 static int g_ini_terrain_3d_smooth_zoom=1;   /* terrain_3d_smooth_zoom: eased wheel zoom (0 = immediate steps) */
 /* Isometric presentation keeps the original input and camera projection. */
 static const int g_ini_terrain_3d_freecam=0,g_ini_terrain_3d_planet_curve=0;
-static int g_ini_terrain_3d_entity_lighting=1,g_ini_terrain_3d_water_reflections=1;
+static int g_ini_terrain_3d_entity_lighting=1,g_ini_terrain_3d_water_reflections=1,g_ini_terrain_3d_sprite_shadows=1;
 static int g_ini_terrain_3d_bloom=1,g_ini_terrain_3d_particles=1;
 static int g_ini_cursor_120hz=1;
 static int g_ini_music_volume=100,g_ini_sfx_volume=100;   /* music_volume / sfx_volume: host output gain 0..100 */             /* cursor_120hz: pointer at the host mouse every presented frame (0 = per game tick) */
@@ -8645,6 +8645,7 @@ static void gwrecomp_ini_load(void) {
         else if(!strcmp(key,"cd_cue")) snprintf(g_ini_cd_cue,sizeof g_ini_cd_cue,"%s",val);
         else if(!strcmp(key,"terrain_3d")) g_terrain_3d=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_native_entities")) g_native_entities=atoi(val)!=0;
+        else if(!strcmp(key,"terrain_3d_sprite_shadows")) g_ini_terrain_3d_sprite_shadows=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_shadows")) g_ini_terrain_3d_shadows=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_water")) g_ini_terrain_3d_water=atoi(val)!=0;
         else if(!strcmp(key,"terrain_3d_lights")) g_ini_terrain_3d_lights=atoi(val)!=0;
@@ -10080,6 +10081,9 @@ static int bloom_ensure_init(int logical_w) {
             "  int is_gnd=(flags/2)-((flags/4)*2);\n"
             "  int is_dk=(flags/8)-((flags/16)*2);\n"
             "  if(is_dk!=0) return vec3(0.0);\n"
+            "  /* With native 3D entities active, any remaining is_gnd==0 pixel is a 2D Pass-4 UI overlay (38% status,\n"
+            "     drag box, selection arrows, cursor): never feed bloom. */\n"
+            "  if(u_ext_scene>0.5 && u_ext_native>0.5 && is_gnd==0) return vec3(0.0);\n"
             "  vec3 col=texture2D(u_lut,vec2(idx_u,0.25)).rgb;\n"
             "  vec3 meta=texture2D(u_lut,vec2(idx_u,0.75)).rgb;\n"
             "  float w=is_gnd!=0?meta.g:meta.r;\n"
@@ -10477,10 +10481,10 @@ static struct {
     int map_w,map_h,ring_x,ring_y,kind_ok;
     GLuint p_pack,p_cand,p_blurh,p_blurv,p_map,p_hud;
     GLint hu_idx,hu_lut;
-    GLint pk_idx,pk_ring,pk_hgt,pk_kind,pk_off,pk_th,pk_mesh,pk_mesh_on,pk_mask,pk_lit_on,pk_plut;
+    GLint pk_idx,pk_ring,pk_hgt,pk_kind,pk_off,pk_th,pk_mesh,pk_mesh_on,pk_mask,pk_lit_on,pk_plut,pk_shade;
     GLint cd_idx,cd_ring,cd_msk,cd_shade,cd_lut,cd_kind,cd_off;
     GLint bh_src,bv_src,bv_cand,bv_ring,bv_off,bv_on,bv_mesh,bv_mesh_on;
-    GLint mp_pk,mp_aux,mp_lut,mp_lit,mp_view,mp_lsz,mp_time,mp_sun,mp_sunc,mp_sky,mp_kind;
+    GLint mp_pk,mp_aux,mp_lut,mp_lit,mp_view,mp_lsz,mp_time,mp_sun,mp_sunc,mp_sky,mp_kind,mp_ocean;
     uint8_t kind_pal[768];
     uint8_t *ring_last; int16_t *hgt_last; int last_valid;
 } g_gm;
@@ -10549,6 +10553,23 @@ static void atlas_probe_present(int active) {
             frame->pixels+offset,size,&g_native_rects[i]);
         accepted+=g_native_uploaded[i];
     }
+    /* If the 1024x1024 atlas filled up during long exploration, recycle it cleanly so
+       newly discovered plants/creatures never permanently miss the 3D pass. */
+    if(accepted<frame->count && g_atlas_probe_gl.slots.count>=GW_SPRITE_ATLAS_MAX/2u) {
+        g_atlas_probe_generation++;
+        gw_sprite_atlas_gl_begin(&g_atlas_probe_gl,g_atlas_probe_generation,GW_ATLAS_PROBE_BYTES);
+        accepted=0;
+        memset(g_native_uploaded,0,sizeof g_native_uploaded);
+        for(unsigned i=0;i<frame->count;i++) {
+            const gw_sprite_atlas_key key=frame->items[i].key;
+            const size_t size=(size_t)key.width*key.height*4u;
+            const unsigned offset=frame->items[i].offset;
+            if(offset>frame->bytes || size>frame->bytes-offset) continue;
+            g_native_uploaded[i]=(uint8_t)gw_sprite_atlas_gl_get(&g_atlas_probe_gl,key,
+                frame->pixels+offset,size,&g_native_rects[i]);
+            accepted+=g_native_uploaded[i];
+        }
+    }
     static unsigned samples;
     if(samples++<12u)
         gw_flag_trace("TRACE native sprite atlas turn=%u mission=%u accepted=%u/%u uploaded_bytes=%u%c",
@@ -10571,7 +10592,7 @@ static int gm_init(void) {
     /* packing: one texel per canvas pixel at canvas x = 128 + texel x (the layer texture's own layout) */
     static const char *fs_pack= GM_GLSL_COMMON
         "uniform sampler2D u_idx; uniform sampler2D u_ring; uniform sampler2D u_hgt; uniform sampler2D u_kind;\n"
-        "uniform vec2 u_off; uniform float u_th; uniform sampler2D u_mesh, u_mask, u_plut, u_owned; uniform float u_mesh_on, u_lit_on, u_native;\n"
+        "uniform vec2 u_off; uniform float u_th; uniform sampler2D u_mesh, u_mask, u_plut, u_owned, u_shade; uniform float u_mesh_on, u_lit_on, u_native;\n"
         "void main(){\n"
         "  vec2 S=vec2(1152.0,640.0); vec2 tp=floor(gl_FragCoord.xy); float cx=tp.x+128.0, y=tp.y;\n"
         "  float c=rd(u_idx,vec2(cx,y),S);\n"
@@ -10598,7 +10619,13 @@ static int gm_init(void) {
         "  float mU=floor(texture2D(u_mesh,(vec2(cx,y-1.0)+0.5)/S).r*255.0+0.5), mD=floor(texture2D(u_mesh,(vec2(cx,y+1.0)+0.5)/S).r*255.0+0.5);\n"
         "  bool tmatch=m.g>0.5 && (c==mi || c==mL || c==mR || c==mU || c==mD);\n"
         "  bool ui=u_mesh_on>0.5 && m.g>0.5 && msk>0.5 && msk<1.5 && !tmatch;\n"
-        "  if(u_native>0.5 && (rd(u_owned,vec2(cx,y),S)>0.5 || msk>=2.0)){ c=g; gnd=1.0; ui=false; }\n"
+        "  if(u_native>0.5){\n"
+        "    if(rd(u_owned,vec2(cx,y),S)>0.5 || msk>=2.0){ c=g; gnd=1.0; ui=false; }\n"
+        "    else if(ui && c!=g){\n"
+        "      float s1=k256(u_shade,g), s2=k256(u_shade,s1), s3=k256(u_shade,s2);\n"
+        "      if(c==s1 || c==s2 || c==s3){ c=g; gnd=1.0; ui=false; }\n"
+        "    }\n"
+        "  }\n"
         "  if(u_mesh_on>0.5 && gnd>0.5 && drawn>0.5 && m.g>0.5 && !ui){ c=mi; lt=u_lit_on; }\n"
         "  else if(ui){\n"
         "    gnd=0.0;\n"
@@ -10657,7 +10684,7 @@ static int gm_init(void) {
        crossed wave layers, caustics, Fresnel, glints, foam on the texel coastline); a soft fade into the undrawn black */
     static const char *fs_map=
         "#version 120\n"
-        "uniform sampler2D u_pk; uniform sampler2D u_aux; uniform sampler2D u_lut; uniform sampler2D u_lit; uniform sampler2D u_kind;\n"
+        "uniform sampler2D u_pk; uniform sampler2D u_aux; uniform sampler2D u_lut; uniform sampler2D u_lit; uniform sampler2D u_kind; uniform sampler2D u_ocean;\n"
         "uniform vec3 u_view; uniform vec2 u_lsz; uniform float u_time; uniform vec3 u_sun,u_sunc,u_sky;\n"
         "uniform sampler2D u_entity,u_reflect; uniform float u_native,u_reflect_on;\n"
         "varying vec2 v_uv;\n"
@@ -10697,56 +10724,44 @@ static int gm_init(void) {
         "          col=L.rgb*(1.0+0.20*pu)+vec3(0.10,0.04,0.17)*pu;\n"
         "        } else {\n"
         "          float dep=clamp((Ln.a-0.1)/0.4,0.0,1.0);\n"
-        "          /* two rotated non-multiple wave/noise layers (organic swells, zero square grid, zero bowtie glints) */\n"
-        "          vec2 wA=vec2(W.x*0.80-W.y*0.60,W.x*0.60+W.y*0.80);\n"
-        "          vec2 wB=vec2(W.x*0.36+W.y*0.93,-W.x*0.93+W.y*0.36);\n"
-        "          float h1=vn(wA*2.7+vec2(t*0.32,-t*0.21),512.0);\n"
-        "          float h1x=vn(wA*2.7+vec2(0.08+t*0.32,-t*0.21),512.0)-h1;\n"
-        "          float h1y=vn(wA*2.7+vec2(t*0.32,0.08-t*0.21),512.0)-h1;\n"
-        "          float h2=vn(wB*5.9+vec2(-t*0.41,t*0.29),1024.0);\n"
-        "          float h2x=vn(wB*5.9+vec2(0.08-t*0.41,t*0.29),1024.0)-h2;\n"
-        "          float h2y=vn(wB*5.9+vec2(-t*0.41,0.08+t*0.29),1024.0)-h2;\n"
-        "          vec2 gr=vec2(h1x*0.80+h1y*0.60, -h1x*0.60+h1y*0.80)*1.15 + vec2(h2x*0.36-h2y*0.93, h2x*0.93+h2y*0.36)*0.75;\n"
-        "          vec3 N=normalize(vec3(-gr*1.35,1.0));\n"
+        "          /* Living ocean based on 65e7f87: 512x512 periodic ocean normal map sampled at 3 sheared scales */\n"
+        "          mat2 M2=mat2(2.0,-1.0,1.0,2.0), M2T=mat2(2.0,1.0,-1.0,2.0);\n"
+        "          mat2 M3=mat2(3.0,-2.0,2.0,3.0), M3T=mat2(3.0,2.0,-2.0,3.0);\n"
+        "          vec2 o1=texture2D(u_ocean,W/8.0+t*vec2(0.017,0.006)).rg*2.0-1.0;\n"
+        "          vec2 o2=texture2D(u_ocean,(M2*W)/8.0+t*vec2(-0.011,0.021)).rg*2.0-1.0;\n"
+        "          vec2 o3=texture2D(u_ocean,(M3*W)/4.0+t*vec2(0.031,-0.024)).rg*2.0-1.0;\n"
+        "          vec2 gs=o1*0.60+(M2T*o2)*(0.36/2.236)+(M3T*o3)*(0.24/3.606);\n"
+        "          vec3 N=normalize(vec3(-gs*1.15,1.0));\n"
         "          vec3 V=vec3(0.6124,0.6124,0.5);\n"
-        "          float F=0.05+0.95*pow(1.0-max(dot(N,V),0.0),4.0);\n"
-        "          vec3 H=normalize(u_sun+V);\n"
-        "          float ndh=max(dot(N,H),0.0);\n"
-        "          /* smooth Blinn-Phong specular on continuous multi-scale normals (no aliased white cross/bowtie) */\n"
-        "          float sp=pow(ndh,48.0)*0.26+pow(ndh,12.0)*0.04;\n"
-        "          float lb=dot(L.rgb,vec3(0.3,0.59,0.11));\n"
-        "          float lum=clamp(lb*3.0,0.0,1.0);\n"
-        "          vec3 w=L.rgb*(1.0+0.05*(h1+h2-1.0));\n"
-        "          /* subtle organic shallow-only caustics (no grid pattern) */\n"
-        "          float cA=vn(wA*6.5+N.xy*1.4+vec2(t*0.28,t*0.17),1024.0);\n"
-        "          float cB=vn(wB*8.3-N.xy*1.2+vec2(-t*0.24,t*0.31),1024.0);\n"
-        "          float cs=smoothstep(0.60,0.94,1.0-abs(cA-cB)*2.4);\n"
-        "          float shallow_mask=(1.0-smoothstep(0.05,0.42,dep))*lum;\n"
-        "          w+=vec3(0.05,0.09,0.08)*cs*shallow_mask;\n"
-        "          if(u_reflect_on>0.5 && dep<0.55){\n"
-        "            vec2 probe=sb+vec2(N.x-N.y,(N.x+N.y)*0.5)*vec2(2.8/1024.0,2.8/640.0);\n"
-        "            vec4 bed=texture2D(u_lit,probe);\n"
-        "            if(all(greaterThan(probe,vec2(0.0))) && all(lessThan(probe,vec2(1.0))) && bed.a>0.05 && bed.a<0.625){\n"
-        "              w=mix(w,bed.rgb*(1.0+cs*0.08),exp(-vec3(3.2,1.6,1.1)*dep)*0.48*shallow_mask);\n"
-        "            }\n"
-        "          }\n"
+        "          float NdV=max(dot(N,V),0.0);\n"
+        "          float F=0.02+0.98*pow(1.0-NdV,5.0);\n"
         "          vec3 R=reflect(-V,N);\n"
-        "          col=mix(w,u_sky*(0.52+0.32*max(R.z,0.0))*lum,clamp(F*1.6,0.0,0.36))+u_sunc*sp*lum*(1.0-0.35*dep);\n"
+        "          float lb=dot(L.rgb,vec3(0.3,0.59,0.11)), lum=clamp(lb*3.5,0.0,1.0);\n"
+        "          vec3 sky=mix(u_sky*0.42,u_sky*1.08,clamp(R.z*1.4,0.0,1.0));\n"
+        "          vec3 H=normalize(u_sun+V); float NdH=max(dot(N,H),0.0);\n"
+        "          /* crisp dancing sunlight sparkles on wave crests + soft broad sheen (zero bowtie/cross artifacts) */\n"
+        "          vec3 spec=u_sunc*vec3(1.0,0.96,0.88)*pow(NdH,130.0)*2.2+u_sunc*pow(NdH,22.0)*0.16;\n"
+        "          float nb=texture2D(u_ocean,W/2.0+t*vec2(0.006,-0.004)).b*0.6+texture2D(u_ocean,(M2*W)/2.0-t*vec2(0.009,0.005)).b*0.4;\n"
+        "          vec3 w=L.rgb*(0.82+0.36*NdV);\n"
+        "          /* subtle organic caustics strictly in shallow coastal water */\n"
+        "          float cs=smoothstep(0.58,0.88,nb)*(1.0-smoothstep(0.05,0.38,dep))*lum;\n"
+        "          w+=vec3(0.05,0.10,0.09)*cs;\n"
+        "          col=mix(w,sky*lum,clamp(F*1.5,0.0,0.52))+spec*lum*(1.0-0.25*dep);\n"
         "          if(u_reflect_on>0.5 && a.a>0.02 && c>0.0){\n"
-        "            vec2 ruv=v_uv+N.xy*vec2(4.0/1024.0,3.2/640.0);\n"
+        "            vec2 ruv=v_uv+N.xy*vec2(4.5/1024.0,3.6/640.0);\n"
         "            vec4 mirror=texture2D(u_reflect,ruv);\n"
         "            float mvis=smoothstep(0.01,0.06,max(mirror.r,max(mirror.g,mirror.b)));\n"
-        "            float rstr=clamp(0.24+F*0.58,0.24,0.62)*mvis;\n"
-        "            col=mix(col,mirror.rgb*vec3(0.76,0.88,0.95),rstr);\n"
+        "            float rstr=clamp(0.16+F*0.48,0.16,0.50)*mvis;\n"
+        "            col=mix(col,mirror.rgb*vec3(0.76,0.88,0.94),rstr);\n"
         "          }\n"
-        "          /* soft organic shoreline foam */\n"
-        "          float n=vn(wA*7.5+vec2(t*0.28,-t*0.22),1024.0)*0.6+vn(wB*17.0-vec2(t*0.45,t*0.38),2048.0)*0.4;\n"
+        "          /* crisp wave-swash shoreline foam (65e7f87 style, tight around lakes and coasts) */\n"
         "          float land=0.0;\n"
         "          land+=landat(vec2(1.5,0.0))+landat(vec2(-1.5,0.0))+landat(vec2(0.0,1.5))+landat(vec2(0.0,-1.5));\n"
-        "          land+=0.6*(landat(vec2(3.0,2.0))+landat(vec2(-3.0,2.0))+landat(vec2(3.0,-2.0))+landat(vec2(-3.0,-2.0)));\n"
-        "          land/=6.4;\n"
-        "          float foam=smoothstep(0.10,0.58,land+(n-0.5)*0.48)*(0.60+0.40*sin(t*1.4+n*7.5));\n"
-        "          col=mix(col,vec3(0.88,0.93,0.96)*clamp(lb*3.6,0.38,1.0),clamp(foam*0.62,0.0,0.62));\n"
+        "          land+=0.5*(landat(vec2(2.8,1.8))+landat(vec2(-2.8,1.8))+landat(vec2(2.8,-1.8))+landat(vec2(-2.8,-1.8)));\n"
+        "          land/=6.0;\n"
+        "          float sw=0.55+0.45*sin(t*1.6-dep*24.0+nb*6.0);\n"
+        "          float foam=smoothstep(0.18,0.65,land+(nb-0.5)*0.60)*sw*smoothstep(0.32,0.68,nb+0.25*land);\n"
+        "          col=mix(col,vec3(0.90,0.95,0.98)*clamp(lb*4.0,0.35,1.0),clamp(foam*0.72,0.0,0.72));\n"
         "        }\n"
         "      }\n"
         "      /* soft edge into the unexplored / undrawn black: coverage of drawn terrain around the pixel, world noise */\n"
@@ -10772,7 +10787,7 @@ static int gm_init(void) {
     g_gm.pk_idx=GMU(p_pack,"u_idx"); g_gm.pk_ring=GMU(p_pack,"u_ring"); g_gm.pk_hgt=GMU(p_pack,"u_hgt"); g_gm.pk_kind=GMU(p_pack,"u_kind");
     g_gm.pk_off=GMU(p_pack,"u_off"); g_gm.pk_th=GMU(p_pack,"u_th");
     g_gm.pk_mesh=GMU(p_pack,"u_mesh"); g_gm.pk_mesh_on=GMU(p_pack,"u_mesh_on"); g_gm.pk_mask=GMU(p_pack,"u_mask"); g_gm.pk_lit_on=GMU(p_pack,"u_lit_on");
-    g_gm.pk_plut=GMU(p_pack,"u_plut");
+    g_gm.pk_plut=GMU(p_pack,"u_plut"); g_gm.pk_shade=GMU(p_pack,"u_shade");
     g_gm.cd_idx=GMU(p_cand,"u_idx"); g_gm.cd_ring=GMU(p_cand,"u_ring"); g_gm.cd_msk=GMU(p_cand,"u_msk"); g_gm.cd_shade=GMU(p_cand,"u_shade");
     g_gm.cd_lut=GMU(p_cand,"u_lut"); g_gm.cd_kind=GMU(p_cand,"u_kind"); g_gm.cd_off=GMU(p_cand,"u_off");
     g_gm.bh_src=GMU(p_blurh,"u_src");
@@ -10784,7 +10799,7 @@ static int gm_init(void) {
     g_gm.mp_reflect=GMU(p_map,"u_reflect"); g_gm.mp_reflect_on=GMU(p_map,"u_reflect_on");
     g_gm.mp_pk=GMU(p_map,"u_pk"); g_gm.mp_aux=GMU(p_map,"u_aux"); g_gm.mp_lut=GMU(p_map,"u_lut");
     g_gm.mp_lit=GMU(p_map,"u_lit"); g_gm.mp_view=GMU(p_map,"u_view"); g_gm.mp_lsz=GMU(p_map,"u_lsz"); g_gm.mp_time=GMU(p_map,"u_time");
-    g_gm.mp_sun=GMU(p_map,"u_sun"); g_gm.mp_sunc=GMU(p_map,"u_sunc"); g_gm.mp_sky=GMU(p_map,"u_sky"); g_gm.mp_kind=GMU(p_map,"u_kind");
+    g_gm.mp_sun=GMU(p_map,"u_sun"); g_gm.mp_sunc=GMU(p_map,"u_sunc"); g_gm.mp_sky=GMU(p_map,"u_sky"); g_gm.mp_kind=GMU(p_map,"u_kind"); g_gm.mp_ocean=GMU(p_map,"u_ocean");
     g_gm.hu_idx=GMU(p_hud,"u_idx"); g_gm.hu_lut=GMU(p_hud,"u_lut");
     #undef GMU
     g_gm.t_idx=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_ring=gm_tex(1152,640,GL_R8,GL_RED); g_gm.t_hgt=gm_tex(1152,640,GL_RG8,GL_RG);
@@ -10898,7 +10913,12 @@ static void pl_extract(const gw_interactive_visual_snapshot *v,const gw_terrain_
                 const uint8_t sw=g_pl_sw[k],gw=g_pl_gw[k],goop=g_fx_kind[k]==FX_GOOP;
                 const int ground=k==rr[rx],b=brow+((x-128)>>5);
                 if(pl_on_line(v->canvas,x,y,k)) continue;   /* selection rectangle and other 1-px UI outlines*/
-                if(sw && !ground) { const float w=(float)sw; fw[b]+=w; fr[b]+=w*pal[k*3]; fg[b]+=w*pal[k*3+1]; fb[b]+=w*pal[k*3+2]; fx[b]+=w*x; fy[b]+=w*y; }
+                if(sw && !ground) {
+                    /* Ignore 2D floating UI status text (e.g. 38% over working specialists) so it never casts a green light on terrain */
+                    if(!g_native_entities || !v->entity_coverage_bytes || v->entity_coverage[(size_t)y*1152u+(size_t)x]>0u) {
+                        const float w=(float)sw; fw[b]+=w; fr[b]+=w*pal[k*3]; fg[b]+=w*pal[k*3+1]; fb[b]+=w*pal[k*3+2]; fx[b]+=w*x; fy[b]+=w*y;
+                    }
+                }
                 else if(goop && ground) { gc[b]+=1.0f; gx[b]+=(float)x; gy[b]+=(float)y; }
                 else if(gw && ground) { const float w=(float)gw; bw[b]+=w; bx[b]+=w*x; by[b]+=w*y; br[b]+=w*pal[k*3]; bgc[b]+=w*pal[k*3+1]; bbc[b]+=w*pal[k*3+2]; }
             }
@@ -11027,7 +11047,7 @@ static void gm_upload(const gw_interactive_visual_snapshot *v) {
         if(now!=last) { gw_flag_trace("TRACE terrain_3d mesh %s (triangles=%u spr_valid=%d th_valid=%d fx_ring_valid=%d turn=%u)%c",now?"on":"OFF",
             v->terrain_mesh.count/3u,v->spr_valid,v->th_valid,v->fx_ring_valid,v->turn,10); last=now; } }
     if(g_gm.shadows || g_gm.mesh) gm_rows(g_gm.t_msk,0,639,GL_RED,v->spr_mask,1u);
-    if(g_gm.shadows) {
+    if(g_gm.shadows || g_gm.mesh) {
         g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_shade); g_bloom.TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,1,GL_RED,GL_UNSIGNED_BYTE,v->shade_t); }
     if(!g_gm.kind_ok || memcmp(g_gm.kind_pal,v->palette,768)) {
         uint8_t k8[256]; for(int k=0;k<256;k++) k8[k]=g_fx_kind[k];
@@ -11654,6 +11674,7 @@ static void gm_passes(const gw_interactive_visual_snapshot *v) {
     g_bloom.Uniform1f(g_gm.pk_lit_on,g_gm.lit_applied?1.0f:0.0f);
     gm_bind(6,g_bloom.lut_tex,g_gm.pk_plut);
     gm_bind(7,entities?g_native_gl.mask:g_gm.t_msk,g_gm.pk_owned);
+    gm_bind(8,g_gm.t_shade,g_gm.pk_shade);
     g_bloom.Uniform1f(g_gm.pk_native,entities?1.0f:0.0f);
     g_bloom.Uniform2f(g_gm.pk_off,ox,oy); g_bloom.Uniform1f(g_gm.pk_th,g_gm.th?1.0f:0.0f);
     bloom_draw_quad(-1.0f,-1.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f, 0.0f,0.0f,1.0f,1.0f);
@@ -11751,6 +11772,7 @@ static int gm_map(const gw_interactive_visual_snapshot *v,const gw_present_geo *
     g_bloom.Uniform1i(g_gm.mp_aux,5);
     g_bloom.Uniform1i(g_gm.mp_lit,7);
     g_bloom.ActiveTexture(GL_TEXTURE3); g_bloom.BindTexture(GL_TEXTURE_2D,g_gm.t_kind); g_bloom.Uniform1i(g_gm.mp_kind,3);
+    g_bloom.ActiveTexture(GL_TEXTURE2); g_bloom.BindTexture(GL_TEXTURE_2D,g_t3.ready?g_t3.ocean_tex:0u); g_bloom.Uniform1i(g_gm.mp_ocean,2);
     if(g_t3.ready) {
         g_bloom.Uniform2f(g_gm.mp_lsz,(float)g_t3.w,(float)g_t3.h);
         const uint64_t f=SDL_GetPerformanceFrequency(),t=SDL_GetPerformanceCounter();
@@ -11841,6 +11863,8 @@ static int bloom_render_and_composite(const gw_interactive_visual_snapshot *v,SD
             bt=now; snprintf(bank,sizeof bank,"%s",v->terrain_mesh.b32_name); pt_biome(v); }
         if(g_t3.ready && g_pt_biome>=0 && g_pt_biome!=g_t3.biome) tl_biome(g_pt_biome);
     }
+    {   static int sh_env=-1;
+        if(sh_env<0) { const char *e=getenv("GW_TERRAIN_3D_SPRITE_SHADOWS"); sh_env=1; if(e && e[0]) g_ini_terrain_3d_sprite_shadows=atoi(e)!=0; } }
     gm_passes(v);   /* GPU map composition: packing and soft shadows of a new game frame */
     const uint64_t pt_b0=SDL_GetPerformanceCounter();
 
@@ -21358,7 +21382,7 @@ static void ev_add(int e,uint32_t off) { const int x=(int)(off%g_spr_w),y=(int)(
    only the callers that draw cast shadows count as shadow; the others (translucent sprites drawn through the same
    shade remap, e.g. a plant under the pointer) are sprites. g_shadow_callers: bit k = caller k is a shadow. */
 static volatile int g_shade_caller;
-static unsigned g_shadow_callers=0x3FEu;
+static unsigned g_shadow_callers=0x3FFu;
 static uint32_t g_shade_caller_n[10];
 void gw_shade_caller(int k) { g_shade_caller=k; }
 static void write_probe_observer(uint32_t va,recomp_segment_id seg,uint16_t sel,uint32_t base,uint32_t lin,uint32_t width,void *user) {
